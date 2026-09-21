@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/tg"
+	"github.com/gotd/td/tgerr"
 )
 
 // ErrNoMedia means the message carries nothing downloadable.
@@ -17,22 +19,22 @@ var ErrNoMedia = errors.New("message has no downloadable media")
 // ErrTooLarge means the file exceeds the caller's byte limit.
 var ErrTooLarge = errors.New("file exceeds the size limit")
 
-// forDC returns a TL client bound to the data centre a file lives on, plus
-// the closer for it.
+// dcConnectTimeout bounds opening a connection to another data centre.
 //
-// A file's own DC is declared in the photo or document that names it, and
-// it is often not the session's. Downloading from the wrong one fails with
-// FILE_MIGRATE, so the connection is chosen up front rather than after an
-// error.
-func (c *Client) forDC(ctx context.Context, dcID int) (*tg.Client, io.Closer, error) {
-	if dcID == 0 {
-		return c.api, io.NopCloser(nil), nil
-	}
+// Opening one is not just a dial: gotd has to run an authorization
+// transfer over it before the first request, and that whole sequence can
+// stall with no deadline of its own. A download is never so important
+// that it may hold a command open indefinitely, so the attempt is capped
+// here rather than left to the caller's context.
+const dcConnectTimeout = 20 * time.Second
+
+// mediaDC opens a media connection to another data centre.
+func (c *Client) mediaDC(ctx context.Context, dcID int) (*tg.Client, io.Closer, error) {
+	ctx, cancel := context.WithTimeout(ctx, dcConnectTimeout)
+	defer cancel()
 	invoker, err := c.tg.MediaOnly(ctx, dcID, 1)
 	if err != nil {
-		// A media-only connection is an optimisation, not a requirement;
-		// the main connection can serve the file too.
-		return c.api, io.NopCloser(nil), nil
+		return nil, nil, fmt.Errorf("connect to DC %d: %w", dcID, err)
 	}
 	return tg.NewClient(invoker), invoker, nil
 }
@@ -52,12 +54,39 @@ func (w *limitedWriter) Write(p []byte) (int, error) {
 }
 
 // DownloadFile reads a file location into memory, bounded by limit.
+//
+// The session's own connection is tried first, whatever data centre the
+// file claims to live on. Opening a second connection costs a handshake
+// and an authorization transfer, and Telegram says plainly when it is
+// needed: FILE_MIGRATE_N names the data centre to ask instead. Reaching
+// for that connection up front made every avatar pay for it, and one that
+// would not come up held the whole command until its deadline.
 func (c *Client) DownloadFile(ctx context.Context, location tg.InputFileLocationClass, dcID int, limit int64) ([]byte, error) {
-	api, closer, err := c.forDC(ctx, dcID)
-	if err != nil {
+	data, err := download(ctx, c.api, location, limit)
+	if err == nil {
+		return data, nil
+	}
+	migrate, isMigrate := tgerr.AsType(err, "FILE_MIGRATE")
+	if !isMigrate {
 		return nil, err
 	}
+	target := migrate.Argument
+	if target == 0 {
+		target = dcID
+	}
+	if target == 0 {
+		return nil, err
+	}
+	api, closer, dcErr := c.mediaDC(ctx, target)
+	if dcErr != nil {
+		return nil, dcErr
+	}
 	defer closer.Close()
+	return download(ctx, api, location, limit)
+}
+
+// download streams one location through the given client.
+func download(ctx context.Context, api *tg.Client, location tg.InputFileLocationClass, limit int64) ([]byte, error) {
 	sink := &limitedWriter{limit: limit}
 	if _, err := downloader.NewDownloader().Download(api, location).Stream(ctx, sink); err != nil {
 		return nil, err

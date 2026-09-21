@@ -727,9 +727,22 @@ func (s *yvluService) author(ctx context.Context, inv *command.Invocation, messa
 	return nil, fail("无法获取消息发送者信息")
 }
 
+// Budgets for the optional parts of a quote. None of these is the point
+// of the command: a quote renders without an avatar, without the admin
+// title and without the media embedded. So each is capped well below the
+// command's own deadline, and a miss degrades the picture instead of
+// holding the whole thing open.
+const (
+	avatarBudget = 20 * time.Second
+	mediaBudget  = 45 * time.Second
+	tagBudget    = 10 * time.Second
+)
+
 // avatar downloads the author's profile photo as a data URL, or nil when
 // there is none — an avatarless quote still renders.
 func (s *yvluService) avatar(ctx context.Context, inv *command.Invocation, message *bot.Message, options *yvluOptions) *quotePhot {
+	ctx, cancel := context.WithTimeout(ctx, avatarBudget)
+	defer cancel()
 	peer := options.FakeSender
 	if peer == nil {
 		resolved, ok := inv.Client.Peers().InputPeer(message.Sender)
@@ -764,6 +777,8 @@ func (s *yvluService) describeMedia(ctx context.Context, inv *command.Invocation
 	if message.Raw == nil {
 		return
 	}
+	ctx, cancel := context.WithTimeout(ctx, mediaBudget)
+	defer cancel()
 	media, ok := message.Raw.GetMedia()
 	if !ok {
 		return
@@ -1032,6 +1047,8 @@ func forwardLabel(inv *command.Invocation, message *bot.Message) *quoteFwd {
 // It is what distinguishes "群主" or a custom rank from an ordinary member
 // in the rendered quote, and it only exists for channels and supergroups.
 func (s *yvluService) senderTag(ctx context.Context, inv *command.Invocation, message *bot.Message, authorID int64) string {
+	ctx, cancel := context.WithTimeout(ctx, tagBudget)
+	defer cancel()
 	chat, err := inv.Client.InputPeer(message.Peer)
 	if err != nil {
 		return ""
