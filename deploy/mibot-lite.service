@@ -1,0 +1,57 @@
+# Installed as /etc/systemd/system/mibot-lite.service by
+# scripts/install-service.sh. Placeholders are substituted by that script.
+[Unit]
+Description=MiBot Lite
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+WorkingDirectory=@ROOT@
+ExecStart=@BINARY@ --serve --root @ROOT@
+
+# Hardening. A single static Go binary with no JIT can take the strictest
+# options, each enabled here for a reason worth recording:
+#   MemoryDenyWriteExecute - nothing in this process maps writable
+#                            executable memory. Node could not do this
+#                            because V8 needs W+X for its JIT.
+#   ProtectSystem=strict   - everything outside ReadWritePaths is read-only.
+#                            The deployment directory stays writable because
+#                            .update renames the new binary into it and the
+#                            command data lives there.
+#   PrivateTmp             - the process keeps nothing in /tmp; the instance
+#                            lock is an flock inside the deployment root.
+MemoryDenyWriteExecute=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=@ROOT@
+# The deployment directory holds config.json (the Telegram session) and the
+# command data, which includes API keys. Nothing here is world-readable.
+UMask=0077
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+
+# The memory ceiling this project exists for. The process is expected to sit
+# far below it; the limit is what turns a leak into a restart rather than a
+# machine that starts swapping.
+MemoryMax=192M
+MemoryHigh=128M
+
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGTERM
+TimeoutStopSec=30s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mibot-lite
+
+[Install]
+WantedBy=multi-user.target

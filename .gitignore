@@ -1,0 +1,13 @@
+# built binaries
+/mibot-lite
+/mibot-lite-*
+/dist/
+
+# deployment state (never commit an account)
+config.json
+gotd-session.json
+updates.json
+restart-receipt.json
+mibot-lite.lock
+/data/
+.env
