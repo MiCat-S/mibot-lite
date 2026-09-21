@@ -16,9 +16,12 @@ import (
 	_ "time/tzdata"
 
 	"github.com/MiCat-S/mibot-lite/internal/app"
+	"github.com/MiCat-S/mibot-lite/internal/bot"
 	"github.com/MiCat-S/mibot-lite/internal/commands"
+	"github.com/MiCat-S/mibot-lite/internal/config"
 	"github.com/MiCat-S/mibot-lite/internal/login"
 	"github.com/MiCat-S/mibot-lite/internal/sysinfo"
+	"github.com/MiCat-S/mibot-lite/internal/verify"
 )
 
 // version is injected at build time (scripts/build.sh).
@@ -34,6 +37,7 @@ func main() {
 		apiID       = flag.Int("api-id", 0, "with --login, the api_id from my.telegram.org")
 		apiHash     = flag.String("api-hash", "", "with --login, the api_hash from my.telegram.org")
 		importMibox = flag.String("import-mibox", "", "copy the plugin data files of a MiBox deployment directory into --root/data")
+		check2      = flag.Bool("verify", false, "connect and run every read-only command against the live account, in Saved Messages")
 		verbose     = flag.Bool("verbose", false, "log at debug level, including the protocol trace")
 		showVersion = flag.Bool("version", false, "print the version and exit")
 	)
@@ -51,7 +55,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "mibot-lite --import-mibox:", err)
 			os.Exit(1)
 		}
-		if !*serve && !*check {
+		if !*serve && !*check && !*check2 {
 			return
 		}
 	}
@@ -62,8 +66,8 @@ func main() {
 		}
 		return
 	}
-	if !*serve && !*check {
-		fmt.Fprintln(os.Stderr, "usage: mibot-lite --serve | --check | --login [--force] | --import-mibox DIR [--root DIR]")
+	if !*serve && !*check && !*check2 {
+		fmt.Fprintln(os.Stderr, "usage: mibot-lite --serve | --check | --verify | --login [--force] | --import-mibox DIR [--root DIR]")
 		os.Exit(2)
 	}
 
@@ -73,7 +77,16 @@ func main() {
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 
-	current, err := app.Prepare(ctx, app.Options{Root: *root, Version: version, Logger: logger, Debug: *verbose, Register: commands.RegisterAll})
+	options := app.Options{Root: *root, Version: version, Logger: logger, Debug: *verbose, Register: commands.RegisterAll}
+	failures := 0
+	if *check2 {
+		options.AfterReady = func(ctx context.Context, a *app.App, client *bot.Client) error {
+			count, err := verify.Run(ctx, client, prefixOf(options), os.Stdout, verify.Cases, a.DispatchMessage)
+			failures = count
+			return err
+		}
+	}
+	current, err := app.Prepare(ctx, options)
 	if err != nil {
 		logger.Error("startup.failed", slog.String("error", err.Error()))
 		os.Exit(1)
@@ -91,6 +104,15 @@ func main() {
 		current.Close()
 		os.Exit(1)
 	}
+	if failures > 0 {
+		current.Close()
+		os.Exit(1)
+	}
+}
+
+// prefixOf reads the command prefix a deployment uses, for --verify.
+func prefixOf(options app.Options) string {
+	return config.ReadEnv(options.Root, os.Environ()).Prefixes()[0]
 }
 
 func displayVersion() string {

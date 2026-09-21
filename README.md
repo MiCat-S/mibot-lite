@@ -69,6 +69,18 @@ go vet ./...
 bash scripts/build.sh  # 带版本号构建
 ```
 
+连上真账号验证（往收藏夹发命令、核对回复、删掉，只跑只读命令）：
+
+```sh
+./mibot-lite --verify --root /部署目录
+```
+
+用真实素材验证图像合成（默认跳过）：
+
+```sh
+MIBOT_EATGIF_ASSETS=/path/to/eatgif go test ./internal/imaging/ -run RealAnimation -v
+```
+
 - 入口：`cmd/mibot-lite/main.go`
 - 连接与更新分发：`internal/app`
 - Telegram 封装：`internal/bot`

@@ -69,6 +69,21 @@ cp /root/mibot/config.json /root/mibot-lite/config.json
 同一个 Telegram 账号不能同时跑两个实例。如果服务器上还跑着 MiBox，先
 `systemctl stop mibot`。
 
+### 自动验证
+
+想一次跑完全部只读命令，不用手动一条条发：
+
+```sh
+/tmp/mibot-lite --verify --root /root/mibot-lite
+```
+
+它会连上账号，往**收藏夹**依次发送 `.ping`、`.calc`、`.whois` 等命令，等每条
+被处理后回读结果、核对内容，然后把消息删掉——跑完收藏夹和跑之前一样。
+输出会区分三种结果：`pass` 是通过，`FAIL` 是程序自己的问题，`warn` 是第三方
+服务（汇率、WHOIS 等）当时不可用，不算缺陷。
+
+只列了只读命令。删消息、封禁、重启这些都不在里面。
+
 ## 6. 服务器：装成后台服务
 
 需要仓库里的 `deploy/` 和 `scripts/`，所以先把仓库克隆到服务器，或者把这

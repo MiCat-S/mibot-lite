@@ -40,6 +40,10 @@ type Options struct {
 	Debug   bool
 	// Register adds the commands once the registry exists.
 	Register func(app *App)
+	// AfterReady runs once the account is connected and the commands are
+	// serving. When it returns, Run stops. It is how --verify drives the
+	// live account without a second connection path.
+	AfterReady func(ctx context.Context, a *App, client *bot.Client) error
 }
 
 // App is one assembled process.
@@ -59,6 +63,21 @@ type App struct {
 	state  *tgstate.State
 	lock   *os.File
 	bot    atomic.Pointer[bot.Client]
+	// options is kept so Run can reach AfterReady.
+	options    Options
+	hookResult atomic.Pointer[error]
+}
+
+// sleepFor waits, or returns when ctx ends.
+func sleepFor(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // SessionFile is gotd's session file, shared with MiBox's Go host.
@@ -104,7 +123,7 @@ func Prepare(ctx context.Context, options Options) (*App, error) {
 
 	app := &App{Root: root, Version: options.Version, Logger: logger, Config: cfg, Env: env,
 		Registry: command.New(env.Prefixes(), logger), Started: time.Now(), BootID: strconv.FormatInt(time.Now().UnixNano(), 36),
-		peers: bot.NewPeerCache(), lock: lock}
+		peers: bot.NewPeerCache(), lock: lock, options: options}
 
 	state, err := tgstate.Open(filepath.Join(root, "updates.json"))
 	if err != nil {
@@ -228,6 +247,27 @@ func (a *App) handle(ctx context.Context, entities tg.Entities, message tg.Messa
 // Bot returns the connected client, or nil before authorization.
 func (a *App) Bot() *bot.Client { return a.bot.Load() }
 
+// DispatchMessage offers a protocol message to the command registry, the
+// same way the update path does.
+//
+// It exists for --verify, which cannot reach the dispatcher any other way.
+// A message this process sends is never pushed back to it — the server
+// reports it in the RPC result instead, and for plain text that result is
+// an updateShortSentMessage carrying only an id and a pts, with no peer
+// and no text. So the verifier reads the message back in full and hands it
+// here.
+func (a *App) DispatchMessage(ctx context.Context, message *tg.Message) bool {
+	client := a.bot.Load()
+	if client == nil {
+		return false
+	}
+	envelope, ok := bot.Envelope(message, client.SelfID(), false, a.peers)
+	if !ok {
+		return false
+	}
+	return a.Registry.Dispatch(ctx, client, envelope)
+}
+
 // Close releases the lock and flushes state.
 func (a *App) Close() error {
 	if a.state != nil {
@@ -261,6 +301,37 @@ func (a *App) Run(ctx context.Context) error {
 		a.Logger.Info("runtime.ready", slog.Int64("account", self.ID), slog.Int("commands", len(a.Registry.Commands())), slog.String("version", a.Version))
 		for _, job := range a.Registry.Jobs() {
 			go job(ctx, client)
+		}
+		if a.options.AfterReady != nil {
+			// The update engine has to be running for commands to be
+			// dispatched at all, so the hook runs beside it and stops it
+			// when it finishes.
+			serving, stop := context.WithCancel(ctx)
+			defer stop()
+			hookErr := make(chan error, 1)
+			go func() {
+				// Give the update engine a moment to load its state
+				// before the first message is sent.
+				if err := sleepFor(serving, 2*time.Second); err != nil {
+					hookErr <- nil
+					return
+				}
+				hookErr <- a.options.AfterReady(serving, a, client)
+			}()
+			go func() {
+				err := <-hookErr
+				a.hookResult.Store(&err)
+				stop()
+			}()
+			err = a.gaps.Run(serving, a.client.API(), self.ID, updates.AuthOptions{IsBot: self.Bot})
+			a.Registry.Wait(10 * time.Second)
+			if result := a.hookResult.Load(); result != nil {
+				return *result
+			}
+			if errors.Is(err, context.Canceled) {
+				return nil
+			}
+			return err
 		}
 		err = a.gaps.Run(ctx, a.client.API(), self.ID, updates.AuthOptions{IsBot: self.Bot})
 		a.Registry.Wait(10 * time.Second)

@@ -155,9 +155,23 @@ type SendOptions struct {
 
 // SendHTML sends a message and returns its id.
 func (c *Client) SendHTML(ctx context.Context, peer tg.InputPeerClass, text string, options SendOptions) (int, error) {
+	id, _, err := c.SendHTMLRaw(ctx, peer, text, options)
+	return id, err
+}
+
+// SendHTMLRaw sends a message and returns its id together with the raw
+// updates Telegram answered with.
+//
+// Those updates are not delivered to this process by the server: an action
+// taken on this connection is reported in its own RPC result, not pushed
+// back. Ordinary sending discards them, which is right — re-dispatching
+// one's own outgoing message would make a command that sends text starting
+// with the prefix invoke itself. --verify is the one caller that wants
+// them, because it has to drive the dispatcher from inside.
+func (c *Client) SendHTMLRaw(ctx context.Context, peer tg.InputPeerClass, text string, options SendOptions) (int, tg.UpdatesClass, error) {
 	plain, entities, err := ParseHTML(text)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	request := &tg.MessagesSendMessageRequest{Peer: peer, Message: plain, RandomID: rand.Int64(), NoWebpage: !options.LinkPreview, Silent: options.Silent}
 	if len(entities) > 0 {
@@ -166,7 +180,12 @@ func (c *Client) SendHTML(ctx context.Context, peer tg.InputPeerClass, text stri
 	if options.ReplyTo > 0 {
 		request.SetReplyTo(&tg.InputReplyToMessage{ReplyToMsgID: options.ReplyTo})
 	}
-	return unpack.MessageID(c.api.MessagesSendMessage(ctx, request))
+	updates, err := c.api.MessagesSendMessage(ctx, request)
+	if err != nil {
+		return 0, nil, err
+	}
+	id, err := unpack.MessageID(updates, nil)
+	return id, updates, err
 }
 
 // SendText sends literal text.
