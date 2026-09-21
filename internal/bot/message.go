@@ -35,7 +35,12 @@ type Message struct {
 	ReplyToID   int
 	ReplyToPeer tg.PeerClass
 	TopicID     int
-	Raw         *tg.Message
+	// QuoteText is the slice of the replied message the sender picked out,
+	// when they replied to part of it rather than the whole. .yvlu renders
+	// that selection instead of the full message.
+	QuoteText     string
+	QuoteEntities []tg.MessageEntityClass
+	Raw           *tg.Message
 }
 
 // PeerID renders a peer the way teleproto marks decimal ids.
@@ -146,6 +151,10 @@ func Envelope(message *tg.Message, selfID int64, edited bool, peers *PeerCache) 
 				result.TopicID = topID
 			} else if reply.ForumTopic {
 				result.TopicID = reply.ReplyToMsgID
+			}
+			if reply.Quote {
+				result.QuoteText = reply.QuoteText
+				result.QuoteEntities = reply.QuoteEntities
 			}
 		}
 	}

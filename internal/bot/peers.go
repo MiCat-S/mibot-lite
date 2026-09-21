@@ -23,6 +23,8 @@ type UserInfo struct {
 	// PhotoID and PhotoDC locate the profile photo, for .yvlu's avatars.
 	PhotoID int64
 	PhotoDC int
+	// EmojiStatus is the custom emoji the user wears beside their name.
+	EmojiStatus string
 }
 
 // DisplayName renders a user the way the MiBox plugins did.
@@ -165,6 +167,11 @@ func (c *PeerCache) rememberUser(user *tg.User) {
 	if photo, ok := user.GetPhoto(); ok {
 		if value, ok := photo.(*tg.UserProfilePhoto); ok {
 			info.PhotoID, info.PhotoDC = value.PhotoID, value.DCID
+		}
+	}
+	if status, ok := user.GetEmojiStatus(); ok {
+		if value, ok := status.(*tg.EmojiStatus); ok && value.DocumentID != 0 {
+			info.EmojiStatus = strconv.FormatInt(value.DocumentID, 10)
 		}
 	}
 	if user.AccessHash != 0 && !user.Min {

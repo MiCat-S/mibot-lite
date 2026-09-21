@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -273,6 +274,8 @@ type quoteFrom struct {
 	LastName  string     `json:"last_name,omitempty"`
 	Username  string     `json:"username,omitempty"`
 	Photo     *quotePhot `json:"photo,omitempty"`
+	// EmojiStatus is the custom emoji the author wears beside their name.
+	EmojiStatus string `json:"emoji_status,omitempty"`
 }
 
 type quotePhot struct {
@@ -298,6 +301,15 @@ type quoteMessage struct {
 	Voice         *quoteVoice   `json:"voice,omitempty"`
 	Document      *quoteDoc     `json:"document,omitempty"`
 	Forward       *quoteFwd     `json:"forward,omitempty"`
+	// SenderTag is the author's admin title in this group, if any.
+	SenderTag string      `json:"senderTag,omitempty"`
+	Audio     *quoteAudio `json:"audio,omitempty"`
+}
+
+type quoteAudio struct {
+	Title     string `json:"title"`
+	Performer string `json:"performer,omitempty"`
+	Duration  int    `json:"duration,omitempty"`
 }
 
 type quoteVoice struct {
@@ -590,15 +602,25 @@ func (s *yvluService) build(ctx context.Context, inv *command.Invocation, reply 
 				avatars[author.ID] = photo
 			}
 			author.Photo = photo
+			if info, known := inv.Client.Peers().User(author.ID); known && info.EmojiStatus != "" {
+				author.EmojiStatus = info.EmojiStatus
+			}
 		} else {
-			author.Name, author.FirstName, author.LastName, author.Username = "", "", "", ""
+			author.Name, author.FirstName, author.LastName, author.Username, author.EmojiStatus = "", "", "", "", ""
 		}
 
 		item := quoteMessage{From: *author, Avatar: show}
-		if index == 0 && options.FakeText != "" {
+		switch {
+		case index == 0 && options.FakeText != "":
 			item.Text = options.FakeText
 			item.Entities = convertEntities(options.FakeEnts, utf16Len(inv.Text)-utf16Len(options.FakeText))
-		} else {
+		case index == 0 && inv.Message.QuoteText != "":
+			// The operator replied to part of a message rather than all of
+			// it. Quoting the whole thing would be quoting something they
+			// deliberately narrowed, so the selection wins.
+			item.Text = inv.Message.QuoteText
+			item.Entities = convertEntities(inv.Message.QuoteEntities, 0)
+		default:
 			item.Text = message.Text
 			if message.Raw != nil {
 				if entities, ok := message.Raw.GetEntities(); ok {
@@ -606,6 +628,12 @@ func (s *yvluService) build(ctx context.Context, inv *command.Invocation, reply 
 				}
 			}
 			s.describeMedia(ctx, inv, message, &item)
+			if label := forwardLabel(inv, message); label != nil {
+				item.Forward = label
+			}
+			if tag := s.senderTag(ctx, inv, message, author.ID); tag != "" {
+				item.SenderTag = tag
+			}
 		}
 		if item.Entities == nil {
 			item.Entities = []quoteEntity{}
@@ -623,39 +651,53 @@ func (s *yvluService) build(ctx context.Context, inv *command.Invocation, reply 
 	return payload, nil
 }
 
-// following reads the messages from the replied one forward.
+// following reads the count messages starting at the replied one.
+//
+// Message ids are not contiguous in a real chat — other people's messages,
+// deletions and service messages all consume them — so stepping ids one by
+// one skips messages and asks for ones that do not exist. This walks the
+// history the way the plugin did, by position rather than by id:
+// getHistory positions at offset_id and a negative add_offset moves that
+// many places towards the newer end.
 func (s *yvluService) following(ctx context.Context, inv *command.Invocation, reply *bot.Message, count int) ([]*bot.Message, error) {
 	peer, err := inv.Client.InputPeer(reply.Peer)
 	if err != nil {
 		return nil, err
 	}
-	ids := make([]int, 0, count)
-	for offset := 0; offset < count; offset++ {
-		ids = append(ids, reply.ID+offset)
-	}
-	found, err := inv.Client.GetMessages(ctx, peer, ids)
+	result, err := inv.Client.API().MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{
+		Peer: peer, OffsetID: reply.ID - 1, AddOffset: -count, Limit: count,
+	})
 	if err != nil {
 		return nil, err
 	}
-	byID := map[int]*tg.Message{}
-	for _, message := range found {
-		byID[message.ID] = message
-	}
+	found, _ := inv.Client.Unpack(result)
 	var ordered []*bot.Message
-	for _, id := range ids {
-		raw, ok := byID[id]
-		if !ok {
+	for _, item := range found {
+		message, ok := item.(*tg.Message)
+		if !ok || message.ID < reply.ID {
 			continue
 		}
-		envelope, ok := bot.Envelope(raw, inv.Client.SelfID(), false, inv.Client.Peers())
-		if ok {
+		if envelope, ok := bot.Envelope(message, inv.Client.SelfID(), false, inv.Client.Peers()); ok {
 			ordered = append(ordered, envelope)
 		}
+	}
+	// getHistory answers newest first.
+	sort.Slice(ordered, func(a, b int) bool { return ordered[a].ID < ordered[b].ID })
+	if len(ordered) == 0 || ordered[0].ID != reply.ID {
+		// The replied message must lead, even if history did not return it.
+		ordered = append([]*bot.Message{reply}, ordered...)
+	}
+	if len(ordered) > count {
+		ordered = ordered[:count]
 	}
 	return ordered, nil
 }
 
 // author resolves who a quoted message is attributed to.
+//
+// A forwarded message is attributed to whoever wrote it, not to whoever
+// forwarded it: quoting a forward and seeing the forwarder's name on it
+// would put words in the wrong mouth.
 func (s *yvluService) author(ctx context.Context, inv *command.Invocation, message *bot.Message, options *yvluOptions) (*quoteFrom, error) {
 	if options.FakeSender != nil {
 		if user, ok := options.FakeSender.(*tg.InputPeerUser); ok {
@@ -663,6 +705,9 @@ func (s *yvluService) author(ctx context.Context, inv *command.Invocation, messa
 			return &quoteFrom{ID: info.ID, FirstName: info.FirstName, LastName: info.LastName, Username: info.Username,
 				Name: strings.TrimSpace(info.FirstName + " " + info.LastName)}, nil
 		}
+	}
+	if from := forwardAuthor(inv, message); from != nil {
+		return from, nil
 	}
 	switch sender := message.Sender.(type) {
 	case *tg.PeerUser:
@@ -693,7 +738,12 @@ func (s *yvluService) avatar(ctx context.Context, inv *command.Invocation, messa
 		}
 		peer = resolved
 	}
+	// Small first, then large: a peer whose small photo will not download
+	// often still has the big one.
 	data, err := inv.Client.DownloadProfilePhoto(ctx, peer, false, 2<<20)
+	if err != nil || len(data) == 0 {
+		data, err = inv.Client.DownloadProfilePhoto(ctx, peer, true, 2<<20)
+	}
 	if err != nil || len(data) == 0 {
 		return nil
 	}
@@ -757,6 +807,15 @@ func (s *yvluService) describeDocument(ctx context.Context, inv *command.Invocat
 		// A sticker is the quote's own output format; embedding one would
 		// nest a sticker inside a sticker.
 		return
+	case audio != nil && !audio.Voice:
+		title := audio.Title
+		if title == "" {
+			title = fileName
+		}
+		if title == "" || title == "file" {
+			title = "Audio"
+		}
+		item.Audio = &quoteAudio{Title: title, Performer: audio.Performer, Duration: audio.Duration}
 	case audio != nil && audio.Voice:
 		if len(audio.Waveform) == 0 {
 			return
@@ -833,15 +892,24 @@ func (s *yvluService) replyBlock(ctx context.Context, inv *command.Invocation, m
 		return nil
 	}
 	replied, err := inv.Client.GetReply(ctx, message)
-	if err != nil || replied == nil || strings.TrimSpace(replied.Text) == "" {
+	if err != nil || replied == nil {
 		return nil
 	}
-	block := &quoteReply{Text: replied.Text, Name: "unknown", Entities: []quoteEntity{}}
+	// When the replier selected part of the message, that selection is
+	// what they were answering.
+	text, entities := replied.Text, []tg.MessageEntityClass(nil)
 	if replied.Raw != nil {
-		if entities, ok := replied.Raw.GetEntities(); ok {
-			block.Entities = convertEntities(entities, 0)
+		if carried, ok := replied.Raw.GetEntities(); ok {
+			entities = carried
 		}
 	}
+	if message.QuoteText != "" {
+		text, entities = message.QuoteText, message.QuoteEntities
+	}
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	block := &quoteReply{Text: text, Name: "unknown", Entities: convertEntities(entities, 0)}
 	switch sender := replied.Sender.(type) {
 	case *tg.PeerUser:
 		info, _ := inv.Client.Peers().User(sender.UserID)
@@ -882,4 +950,110 @@ func isStickerDocument(message *tg.Message) bool {
 		}
 	}
 	return false
+}
+
+// forwardAuthor reads the original writer out of a forwarded message's
+// header, or nil when the message was not forwarded.
+//
+// The header may name a peer, or only a name: forwarding from someone who
+// hides their account leaves a string and nothing to resolve. Both are
+// worth attributing, so a nameless fallback keeps the quote honest rather
+// than silently crediting the forwarder.
+func forwardAuthor(inv *command.Invocation, message *bot.Message) *quoteFrom {
+	if message.Raw == nil {
+		return nil
+	}
+	header, ok := message.Raw.GetFwdFrom()
+	if !ok {
+		return nil
+	}
+	if peer, ok := header.GetFromID(); ok {
+		switch value := peer.(type) {
+		case *tg.PeerUser:
+			info, _ := inv.Client.Peers().User(value.UserID)
+			name := strings.TrimSpace(info.FirstName + " " + info.LastName)
+			if name == "" {
+				name = info.Username
+			}
+			if name != "" || info.ID != 0 {
+				return &quoteFrom{ID: value.UserID, FirstName: info.FirstName, LastName: info.LastName,
+					Username: info.Username, Name: name}
+			}
+		case *tg.PeerChannel:
+			info, _ := inv.Client.Peers().Channel(value.ChannelID)
+			return &quoteFrom{ID: value.ChannelID, FirstName: info.Title, Name: info.Title, Username: info.Username}
+		}
+	}
+	name := header.FromName
+	if name == "" {
+		name = header.SavedFromName
+	}
+	if name == "" {
+		name = header.PostAuthor
+	}
+	if name == "" {
+		name = "未知来源"
+	}
+	return &quoteFrom{ID: int64(nameHash(name)), FirstName: name, Name: name}
+}
+
+// nameHash gives a stable id to an author who has none, so the renderer
+// still colours them consistently across a run.
+func nameHash(text string) int32 {
+	var value int32
+	for _, r := range text {
+		value = value*31 + int32(r)
+	}
+	if value < 0 {
+		value = -value
+	}
+	return value
+}
+
+// forwardLabel names where a forwarded message came from, for the little
+// "forwarded from" line above the text.
+func forwardLabel(inv *command.Invocation, message *bot.Message) *quoteFwd {
+	from := forwardAuthor(inv, message)
+	if from == nil {
+		return nil
+	}
+	label := from.Name
+	if label == "" {
+		label = from.FirstName
+	}
+	if label == "" {
+		return nil
+	}
+	return &quoteFwd{Label: label}
+}
+
+// senderTag reads the author's admin title in this group.
+//
+// It is what distinguishes "群主" or a custom rank from an ordinary member
+// in the rendered quote, and it only exists for channels and supergroups.
+func (s *yvluService) senderTag(ctx context.Context, inv *command.Invocation, message *bot.Message, authorID int64) string {
+	chat, err := inv.Client.InputPeer(message.Peer)
+	if err != nil {
+		return ""
+	}
+	channel, ok := bot.InputChannel(chat)
+	if !ok {
+		return ""
+	}
+	participant, ok := inv.Client.Peers().InputPeer(&tg.PeerUser{UserID: authorID})
+	if !ok {
+		return ""
+	}
+	result, err := inv.Client.API().ChannelsGetParticipant(ctx, &tg.ChannelsGetParticipantRequest{Channel: channel, Participant: participant})
+	if err != nil {
+		return ""
+	}
+	inv.Client.Peers().RememberUsers(result.Users)
+	switch value := result.Participant.(type) {
+	case *tg.ChannelParticipantCreator:
+		return strings.TrimSpace(value.Rank)
+	case *tg.ChannelParticipantAdmin:
+		return strings.TrimSpace(value.Rank)
+	}
+	return ""
 }

@@ -146,3 +146,47 @@ func TestParseHTMLExpandableBlockquote(t *testing.T) {
 		t.Fatalf("expected a collapsed blockquote, got %#v", entities[0])
 	}
 }
+
+// Replying to part of a message must carry that selection through, or
+// .yvlu would quote the whole message the operator deliberately narrowed.
+func TestEnvelopeCarriesQuoteSelection(t *testing.T) {
+	peers := NewPeerCache()
+	peers.SetSelf(7)
+	message := &tg.Message{ID: 5, PeerID: &tg.PeerUser{UserID: 7}, Message: ".yvlu"}
+	header := &tg.MessageReplyHeader{ReplyToMsgID: 4}
+	header.Quote = true
+	header.QuoteText = "只要这一段"
+	header.QuoteEntities = []tg.MessageEntityClass{&tg.MessageEntityBold{Offset: 0, Length: 2}}
+	message.SetReplyTo(header)
+	envelope, ok := Envelope(message, 7, false, peers)
+	if !ok {
+		t.Fatal("envelope failed")
+	}
+	if envelope.QuoteText != "只要这一段" || len(envelope.QuoteEntities) != 1 {
+		t.Fatalf("quote selection lost: %q %d entities", envelope.QuoteText, len(envelope.QuoteEntities))
+	}
+}
+
+// A reply without a selection carries none, so the full message is used.
+func TestEnvelopeWithoutQuoteSelection(t *testing.T) {
+	peers := NewPeerCache()
+	peers.SetSelf(7)
+	message := &tg.Message{ID: 5, PeerID: &tg.PeerUser{UserID: 7}}
+	message.SetReplyTo(&tg.MessageReplyHeader{ReplyToMsgID: 4})
+	envelope, _ := Envelope(message, 7, false, peers)
+	if envelope.QuoteText != "" || envelope.QuoteEntities != nil {
+		t.Fatalf("unexpected selection: %q", envelope.QuoteText)
+	}
+}
+
+// The emoji status a user wears is what .yvlu draws beside their name.
+func TestPeerCacheKeepsEmojiStatus(t *testing.T) {
+	peers := NewPeerCache()
+	user := &tg.User{ID: 9, FirstName: "A"}
+	user.SetEmojiStatus(&tg.EmojiStatus{DocumentID: 12345})
+	peers.RememberUsers([]tg.UserClass{user})
+	info, known := peers.User(9)
+	if !known || info.EmojiStatus != "12345" {
+		t.Fatalf("emoji status is %q", info.EmojiStatus)
+	}
+}

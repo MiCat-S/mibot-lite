@@ -282,3 +282,16 @@ func TestSafeRelative(t *testing.T) {
 		}
 	}
 }
+
+func TestNameHashIsStableAndPositive(t *testing.T) {
+	first, second := nameHash("某个频道"), nameHash("某个频道")
+	if first != second {
+		t.Fatalf("the same name hashed to %d and %d", first, second)
+	}
+	if first < 0 {
+		t.Fatalf("hash must be positive to serve as an id, got %d", first)
+	}
+	if nameHash("a") == nameHash("b") {
+		t.Fatal("different names should not collide this easily")
+	}
+}
