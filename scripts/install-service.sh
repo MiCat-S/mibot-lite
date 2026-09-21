@@ -57,8 +57,12 @@ template=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../deploy" && pwd -P)/mibot-
 [[ -f "$template" ]] || { echo "Missing unit template: $template" >&2; exit 1; }
 
 install -m 755 "$binary" "$installed"
-rendered=$(mktemp)
-trap 'rm -f "$rendered"' EXIT
+# systemd-analyze reads the file name as the unit name, so the rendered
+# copy has to be called mibot-lite.service; a bare mktemp name is rejected
+# with "Failed to prepare filename".
+staging=$(mktemp -d)
+trap 'rm -rf "$staging"' EXIT
+rendered="$staging/mibot-lite.service"
 sed -e "s|@ROOT@|$root|g" -e "s|@BINARY@|$installed|g" "$template" > "$rendered"
 if grep -q '@[A-Z][A-Z]*@' "$rendered"; then
   echo "Unit template has unsubstituted placeholders" >&2; exit 1
