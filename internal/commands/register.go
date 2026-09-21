@@ -26,6 +26,8 @@ func RegisterAll(a *app.App) {
 	Da(a)
 	Aban(a)
 	Acn(a)
+	Yvlu(a)
+	Eatgif(a)
 }
 
 // miboxFiles maps MiBox plugin data files to their names under data/. The
@@ -38,6 +40,7 @@ var miboxFiles = map[string]string{
 	"assets/whois/data.json":                    "whois.json",
 	"assets/aban/aban_cache.json":               "aban.json",
 	"assets/autochangename/autochangename.json": "acn.json",
+	"assets/yvlu/config.json":                   "yvlu.json",
 }
 
 // ImportMiBox copies the plugin data files from a MiBox deployment.

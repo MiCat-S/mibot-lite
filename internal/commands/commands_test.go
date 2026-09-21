@@ -4,6 +4,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gotd/td/tg"
+
+	"github.com/MiCat-S/mibot-lite/internal/command"
 )
 
 func TestCalcEvaluates(t *testing.T) {
@@ -196,5 +200,103 @@ func TestNewerVersion(t *testing.T) {
 	}
 	if newer("v1.2.3", "1.2.3") {
 		t.Error("the same version with a different v prefix is not newer")
+	}
+}
+
+// The .yvlu argument grammar is positional and irregular; these are the
+// spellings its users already have in their fingers.
+func TestParseYvlu(t *testing.T) {
+	cases := []struct {
+		text     string
+		ok       bool
+		count    int
+		reply    bool
+		format   string
+		fakeText string
+	}{
+		{".yvlu", true, 1, false, "quote", ""},
+		{".yvlu 3", true, 3, false, "quote", ""},
+		{".yvlu r", true, 1, true, "quote", ""},
+		{".yvlu r 4", true, 4, true, "quote", ""},
+		{".yvlu r stories 2", true, 2, true, "stories", ""},
+		{".yvlu png", true, 1, false, "image", ""},
+		{".yvlu image 5", true, 5, false, "image", ""},
+		{".yvlu stories", true, 1, false, "stories", ""},
+		{".yvlu f 你好 世界", true, 1, false, "quote", "你好 世界"},
+		{".yvlu fr 测试", true, 1, true, "quote", "测试"},
+		{".yvlu u 12345 2", true, 2, false, "quote", ""},
+		{".yvlu ur @name", true, 1, true, "quote", ""},
+		{".yvlu nonsense", false, 0, false, "", ""},
+	}
+	for _, item := range cases {
+		fields := strings.Fields(item.text)
+		inv := &command.Invocation{Prefix: ".", Command: "yvlu", Args: fields[1:], Text: item.text}
+		options, ok := parseYvlu(inv)
+		if ok != item.ok {
+			t.Errorf("%q: parsed=%v, want %v", item.text, ok, item.ok)
+			continue
+		}
+		if !ok {
+			continue
+		}
+		if options.Count != item.count || options.IncludeReply != item.reply || options.Format != item.format {
+			t.Errorf("%q: count=%d reply=%v format=%q", item.text, options.Count, options.IncludeReply, options.Format)
+		}
+		if options.FakeText != item.fakeText {
+			t.Errorf("%q: fake text %q, want %q", item.text, options.FakeText, item.fakeText)
+		}
+	}
+}
+
+func TestConvertEntities(t *testing.T) {
+	entities := []tg.MessageEntityClass{
+		&tg.MessageEntityBold{Offset: 0, Length: 4},
+		&tg.MessageEntityTextURL{Offset: 5, Length: 3, URL: "https://example.com"},
+		&tg.MessageEntityCustomEmoji{Offset: 9, Length: 2, DocumentID: 77},
+		&tg.MessageEntityPre{Offset: 12, Length: 5, Language: "go"},
+		&tg.MessageEntityUnknown{Offset: 20, Length: 1},
+	}
+	converted := convertEntities(entities, 0)
+	if len(converted) != 4 {
+		t.Fatalf("converted %d entities, want 4 (the unknown one is dropped)", len(converted))
+	}
+	if converted[0].Type != "bold" || converted[1].Type != "text_link" || converted[1].URL != "https://example.com" {
+		t.Fatalf("unexpected conversion: %+v", converted)
+	}
+	if converted[2].CustomEmojiID != "77" || converted[3].Language != "go" {
+		t.Fatalf("unexpected conversion: %+v", converted)
+	}
+}
+
+// Faked text is cut out of the middle of the command, so the entities that
+// survive have to move with it and the ones that straddle the cut clip.
+func TestConvertEntitiesShift(t *testing.T) {
+	converted := convertEntities([]tg.MessageEntityClass{
+		&tg.MessageEntityBold{Offset: 10, Length: 4},
+		&tg.MessageEntityItalic{Offset: 6, Length: 6},
+		&tg.MessageEntityCode{Offset: 0, Length: 3},
+	}, 8)
+	if len(converted) != 2 {
+		t.Fatalf("converted %+v, want the two that reach past the cut", converted)
+	}
+	if converted[0].Offset != 2 || converted[0].Length != 4 {
+		t.Errorf("shifted entity is %+v", converted[0])
+	}
+	if converted[1].Offset != 0 || converted[1].Length != 4 {
+		t.Errorf("straddling entity should clip to 0..4, got %+v", converted[1])
+	}
+}
+
+// Every asset path comes out of a remote JSON document, so it is untrusted.
+func TestSafeRelative(t *testing.T) {
+	for _, good := range []string{"md/md1.png", "config.json", "a/b/c.png"} {
+		if _, err := safeRelative(good); err != nil {
+			t.Errorf("%q should be accepted: %v", good, err)
+		}
+	}
+	for _, bad := range []string{"", "../secrets", "a/../../b", "a//b", "C:\\x", "https://evil/x", "./x"} {
+		if _, err := safeRelative(bad); err == nil {
+			t.Errorf("%q should be refused", bad)
+		}
 	}
 }

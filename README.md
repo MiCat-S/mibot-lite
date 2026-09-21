@@ -19,7 +19,24 @@ Go 函数。代价是装新命令要重新编译；换来的是一个更小的�
 | 二进制 / 依赖 | node_modules 约 237 个包 | 57 MB 单文件 | **18 MB 单文件** |
 | 插件运行时 | V8 | goja | 无 |
 | 数据库 | better-sqlite3 | modernc sqlite | JSON 文件 |
+| 图像处理 | sharp（libvips） | sharp（libvips） | 标准库 + x/image |
 | 加命令 | `.tpm install` | `.tpm install` | 重新编译 |
+
+### 图像与视频
+
+`.yvlu` 和 `.eatgif` 要合成图片，MiBox 用的是 sharp，它绑定 libvips——一个共享库、
+一份图像缓存和一个线程池，为了一天用几次的功能常驻整个进程。
+
+这里换成标准库的 `image/draw` 加 `golang.org/x/image` 的缩放器，二进制只多 0.7 MB，
+闲置时不占内存。唯一的外部依赖是 **ffmpeg**：Telegram 的视频贴纸必须是 VP9，
+纯 Go 编码不现实，而 ffmpeg 是子进程，不跑的时候不占内存。
+
+两处和 MiBox 的取舍差异：
+
+- **eatgif 不再先编码 GIF**。原实现把帧编码成 GIF 再转 VP9，中间那步会把每帧压到
+  256 色。这里直接把 PNG 帧序列交给 ffmpeg 的 concat，省掉一次有损中转。
+- **yvlu 不支持 tgs 动画贴纸转换**。那条路要 python 的 `rlottie-python`，
+  生产机上本来就没装，移植它等于移植一个当前不工作的功能。
 
 ## 命令
 
@@ -27,7 +44,7 @@ Go 函数。代价是装新命令要重新编译；换来的是一个更小的�
 .ping .status .sysinfo .memory .version .ver .help .h .restart .update
 .calc .rate .whois .bgp .ai .gt .sum .re .dme .da
 .ban .unban .kick .mute .unmute .sb .unsb .refresh .aban
-.acn .autochangename
+.acn .autochangename .yvlu .eatgif
 ```
 
 每条命令的用法见 `.help 命令`。

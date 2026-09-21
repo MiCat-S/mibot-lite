@@ -381,3 +381,70 @@ func Bold(value string) string { return "<b>" + Escape(value) + "</b>" }
 
 // UserID renders a user id.
 func UserID(id int64) string { return strconv.FormatInt(id, 10) }
+
+// DocumentOptions describe an uploaded document beyond its bytes.
+type DocumentOptions struct {
+	// Name is the file name Telegram records.
+	Name string
+	// MimeType is the declared content type.
+	MimeType string
+	// Caption is HTML, and may be empty.
+	Caption string
+	// ReplyTo answers a message, when non-zero.
+	ReplyTo int
+	// Attributes beyond the file name — a sticker attribute and an image
+	// size, for the commands that send stickers.
+	Attributes []tg.DocumentAttributeClass
+	// ForceDocument sends the file as a plain document rather than letting
+	// Telegram interpret it.
+	ForceDocument bool
+}
+
+// SendDocumentWith uploads bytes and sends them with the given attributes.
+func (c *Client) SendDocumentWith(ctx context.Context, peer tg.InputPeerClass, data []byte, options DocumentOptions) error {
+	file, err := c.upload.FromBytes(ctx, options.Name, data)
+	if err != nil {
+		return err
+	}
+	plain, entities, err := ParseHTML(options.Caption)
+	if err != nil {
+		return err
+	}
+	attributes := append([]tg.DocumentAttributeClass{&tg.DocumentAttributeFilename{FileName: options.Name}}, options.Attributes...)
+	media := &tg.InputMediaUploadedDocument{File: file, MimeType: options.MimeType, Attributes: attributes, ForceFile: options.ForceDocument}
+	request := &tg.MessagesSendMediaRequest{Peer: peer, Media: media, Message: plain, RandomID: rand.Int64()}
+	if len(entities) > 0 {
+		request.SetEntities(entities)
+	}
+	if options.ReplyTo > 0 {
+		request.SetReplyTo(&tg.InputReplyToMessage{ReplyToMsgID: options.ReplyTo})
+	}
+	_, err = c.api.MessagesSendMedia(ctx, request)
+	return err
+}
+
+// UploadDocument uploads bytes and registers them as a document Telegram
+// will accept in a sticker RPC, which only takes an InputDocument.
+func (c *Client) UploadDocument(ctx context.Context, name, mimeType string, data []byte) (*tg.InputDocument, error) {
+	file, err := c.upload.FromBytes(ctx, name, data)
+	if err != nil {
+		return nil, err
+	}
+	result, err := c.api.MessagesUploadMedia(ctx, &tg.MessagesUploadMediaRequest{
+		Peer: &tg.InputPeerSelf{},
+		Media: &tg.InputMediaUploadedDocument{File: file, MimeType: mimeType,
+			Attributes: []tg.DocumentAttributeClass{&tg.DocumentAttributeFilename{FileName: name}}},
+	})
+	if err != nil {
+		return nil, err
+	}
+	media, ok := result.(*tg.MessageMediaDocument)
+	if !ok {
+		return nil, errors.New("upload did not produce a document")
+	}
+	document, ok := media.Document.(*tg.Document)
+	if !ok {
+		return nil, errors.New("upload did not produce a document")
+	}
+	return &tg.InputDocument{ID: document.ID, AccessHash: document.AccessHash, FileReference: document.FileReference}, nil
+}

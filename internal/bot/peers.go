@@ -20,6 +20,9 @@ type UserInfo struct {
 	LastName  string
 	Username  string
 	Bot       bool
+	// PhotoID and PhotoDC locate the profile photo, for .yvlu's avatars.
+	PhotoID int64
+	PhotoDC int
 }
 
 // DisplayName renders a user the way the MiBox plugins did.
@@ -47,6 +50,8 @@ type ChannelInfo struct {
 	Creator     bool
 	Left        bool
 	AdminRights tg.ChatAdminRights
+	PhotoID     int64
+	PhotoDC     int
 }
 
 // ChatInfo is what the cache keeps about a legacy group.
@@ -57,6 +62,8 @@ type ChatInfo struct {
 	Creator     bool
 	Left        bool
 	AdminRights tg.ChatAdminRights
+	PhotoID     int64
+	PhotoDC     int
 }
 
 // HashLookup is the read side of the persisted access-hash store.
@@ -155,6 +162,11 @@ func (c *PeerCache) rememberUser(user *tg.User) {
 		c.users[user.ID] = info
 	}
 	info.FirstName, info.LastName, info.Username, info.Bot = user.FirstName, user.LastName, user.Username, user.Bot
+	if photo, ok := user.GetPhoto(); ok {
+		if value, ok := photo.(*tg.UserProfilePhoto); ok {
+			info.PhotoID, info.PhotoDC = value.PhotoID, value.DCID
+		}
+	}
 	if user.AccessHash != 0 && !user.Min {
 		info.Hash, info.HasHash = user.AccessHash, true
 	}
@@ -167,6 +179,9 @@ func (c *PeerCache) rememberChannel(channel *tg.Channel) {
 		c.channels[channel.ID] = info
 	}
 	info.Title, info.Username = channel.Title, channel.Username
+	if photo, ok := channel.GetPhoto().(*tg.ChatPhoto); ok {
+		info.PhotoID, info.PhotoDC = photo.PhotoID, photo.DCID
+	}
 	info.Broadcast, info.Megagroup, info.Noforwards = channel.Broadcast, channel.Megagroup, channel.Noforwards
 	info.Left = channel.Left
 	if !channel.Min {
@@ -185,6 +200,9 @@ func (c *PeerCache) rememberChat(chat *tg.Chat) {
 		c.chats[chat.ID] = info
 	}
 	info.Title, info.Noforwards, info.Creator, info.Left, info.AdminRights = chat.Title, chat.Noforwards, chat.Creator, chat.Left, chat.AdminRights
+	if photo, ok := chat.GetPhoto().(*tg.ChatPhoto); ok {
+		info.PhotoID, info.PhotoDC = photo.PhotoID, photo.DCID
+	}
 }
 
 // User returns what is known about a user.

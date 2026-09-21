@@ -49,7 +49,7 @@ cp /root/mibot/config.json /root/mibot-lite/config.json
 
 ## 4. 服务器：迁移已有配置（可选）
 
-把 MiBox 里 ai、sum、whois、aban、acn、da、dme 的数据搬过来：
+把 MiBox 里 ai、sum、whois、aban、acn、da、dme、yvlu 的数据搬过来：
 
 ```sh
 /tmp/mibot-lite --import-mibox /root/mibot --root /root/mibot-lite
@@ -102,6 +102,14 @@ systemctl status mibot-lite     # 看状态
 | `MIBOT_PREFIX` | 命令前缀，空格分隔 | `. 。 $` |
 | `MIBOT_SERVICE` | `.restart` 要重启的 unit 名 | `mibot-lite.service` |
 | `MIBOT_UPDATE_REPO` | `.update` 读的 GitHub 仓库 | `MiCat-S/mibot-lite` |
+
+`.eatgif` 和 `.yvlu` 生成视频贴纸需要主机装有 ffmpeg（带 libvpx-vp9）：
+
+```sh
+apt install -y ffmpeg
+```
+
+没装的话这两条命令会明确报「ffmpeg 不可用」，其余命令不受影响。
 
 AI、汇率等命令的配置在 Telegram 里用命令完成，见 `.help ai`、`.help sum`。
 **涉及 API Key 的命令请在「收藏夹」里执行**，别在群里。
