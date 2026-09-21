@@ -28,11 +28,18 @@ var ErrTooLarge = errors.New("file exceeds the size limit")
 // here rather than left to the caller's context.
 const dcConnectTimeout = 20 * time.Second
 
-// mediaDC opens a media connection to another data centre.
+// mediaDC opens a connection to another data centre.
+//
+// It asks for an ordinary connection rather than a media-only one. Media
+// DCs live on their own address list, and a host that reaches Telegram
+// perfectly well may have no route to those: the first attempt at this
+// hung inside the pool waiting for a connection that never came up, with
+// the session itself healthy on DC 4 the whole time. The ordinary address
+// is the one already known to work.
 func (c *Client) mediaDC(ctx context.Context, dcID int) (*tg.Client, io.Closer, error) {
 	ctx, cancel := context.WithTimeout(ctx, dcConnectTimeout)
 	defer cancel()
-	invoker, err := c.tg.MediaOnly(ctx, dcID, 1)
+	invoker, err := c.tg.DC(ctx, dcID, 1)
 	if err != nil {
 		return nil, nil, fmt.Errorf("connect to DC %d: %w", dcID, err)
 	}
