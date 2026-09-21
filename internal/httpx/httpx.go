@@ -49,12 +49,17 @@ type Request struct {
 	Timeout time.Duration
 	// MaxBytes bounds the body. Zero means 2 MB.
 	MaxBytes int64
+	// NoRedirect returns the redirect itself instead of following it, so
+	// a caller can tell "moved" from "arrived".
+	NoRedirect bool
 }
 
 // Response is what came back.
 type Response struct {
 	Status int
 	Body   []byte
+	// Location is the redirect target, when NoRedirect held one back.
+	Location string
 }
 
 // OK reports a 2xx status.
@@ -89,7 +94,13 @@ func Do(ctx context.Context, request Request) (Response, error) {
 	for key, value := range request.Headers {
 		req.Header.Set(key, value)
 	}
-	resp, err := shared.Do(req)
+	client := shared
+	if request.NoRedirect {
+		withoutRedirects := *shared
+		withoutRedirects.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		client = &withoutRedirects
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return Response{}, err
 	}
@@ -101,7 +112,7 @@ func Do(ctx context.Context, request Request) (Response, error) {
 	if int64(len(data)) > limit {
 		return Response{Status: resp.StatusCode}, ErrTooLarge
 	}
-	return Response{Status: resp.StatusCode, Body: data}, nil
+	return Response{Status: resp.StatusCode, Body: data, Location: resp.Header.Get("Location")}, nil
 }
 
 // GetJSON fetches and decodes a JSON document.

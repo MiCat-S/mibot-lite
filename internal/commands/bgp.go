@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -64,13 +65,27 @@ func maskIP(text string) string {
 	})
 }
 
+// errLoginRequired means bgp.tools redirected to its sign-in page.
+//
+// It gates /prefix and /pathimg behind an account now. Following the
+// redirect would hand the parser a login page, which finds no rows and
+// reports "no records" — a plausible answer that is not the true one.
+var errLoginRequired = fail("bgp.tools 现在要求登录后才能查询，该数据源暂不可用")
+
 func bgpGet(ctx context.Context, url string) (string, bool, error) {
-	response, err := httpx.Do(ctx, httpx.Request{URL: url, Headers: map[string]string{"Accept": "text/html,application/xhtml+xml"}, Timeout: 15 * time.Second, MaxBytes: 2 << 20})
+	response, err := httpx.Do(ctx, httpx.Request{URL: url, Headers: map[string]string{"Accept": "text/html,application/xhtml+xml"},
+		Timeout: 15 * time.Second, MaxBytes: 2 << 20, NoRedirect: true})
 	if err != nil {
 		return "", false, err
 	}
 	if response.Status == 404 {
 		return "", false, nil
+	}
+	if response.Status >= 300 && response.Status < 400 {
+		if strings.Contains(response.Location, "login") {
+			return "", false, errLoginRequired
+		}
+		return "", false, fmt.Errorf("unexpected redirect to %s", response.Location)
 	}
 	if !response.OK() {
 		return "", false, &httpx.StatusError{Status: response.Status}
@@ -107,6 +122,9 @@ func Bgp(a *app.App) {
 				for _, prefix := range []string{ipPrefix(ip, 24), ipPrefix(ip, 23)} {
 					html, ok, err := bgpGet(ctx, "https://"+bgpHost+"/prefix/"+prefix+"#dns")
 					if err != nil {
+						if text, isUser := isUserError(err); isUser {
+							return inv.EditText(ctx, "❌ "+text)
+						}
 						return inv.EditText(ctx, "❌ BGP 查询失败，请稍后重试")
 					}
 					if !ok {
@@ -146,6 +164,9 @@ func Bgp(a *app.App) {
 			for _, prefix := range []string{ipPrefix(ip, 24), ipPrefix(ip, 23)} {
 				svg, ok, err := bgpGet(ctx, "https://"+bgpHost+"/pathimg/rt-"+strings.Replace(prefix, "/", "_", 1)+"?loggedin")
 				if err != nil {
+					if text, isUser := isUserError(err); isUser {
+						return inv.EditText(ctx, "❌ "+text)
+					}
 					return inv.EditText(ctx, "❌ BGP 查询失败，请稍后重试")
 				}
 				if !ok || (strings.Contains(svg, "Not_Visible") && strings.Contains(svg, "in_DFZ")) {

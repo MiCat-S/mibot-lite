@@ -66,7 +66,10 @@ var Cases = []Case{
 	{Command: "eatgif list", Expect: "头像动图", Network: true, Wait: 60 * time.Second},
 	{Command: "whois example.com", Expect: "example.com", Network: true, Wait: 60 * time.Second},
 	{Command: "rate BTC", Expect: "数据更新", Network: true, Wait: 90 * time.Second},
-	{Command: "bgp dns 1.1.1.1", Expect: "解析记录", Network: true, Wait: 90 * time.Second},
+	// bgp.tools gates its data behind a sign-in now, so the honest answer
+	// from this command is that the source is unavailable. Either outcome
+	// proves the command ran; only a silent hang would not.
+	{Command: "bgp dns 1.1.1.1", Expect: "bgp.tools", Network: true, Wait: 90 * time.Second},
 }
 
 // Result is what one case did.
