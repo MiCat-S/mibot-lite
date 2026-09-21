@@ -110,24 +110,6 @@ func TestWhoisReportExtractsFields(t *testing.T) {
 	}
 }
 
-func TestIPPrefixAndMask(t *testing.T) {
-	if got := ipPrefix("1.2.3.4", 24); got != "1.2.3.0/24" {
-		t.Fatalf("/24 prefix = %q", got)
-	}
-	if got := ipPrefix("1.2.3.4", 23); got != "1.2.2.0/23" {
-		t.Fatalf("/23 prefix = %q", got)
-	}
-	if got := maskIP("peer 203.0.113.9 and 198.51.100.7"); strings.Contains(got, "113.9") || strings.Contains(got, "100.7") {
-		t.Fatalf("addresses were not masked: %q", got)
-	}
-	if !validIPv4("255.255.255.255") || validIPv4("256.1.1.1") || validIPv4("1.2.3") || validIPv4("01.2.3.4") {
-		t.Fatal("IPv4 validation is wrong")
-	}
-	if got := extractIPv4("see 8.8.8.8/24 please"); got != "8.8.8.8" {
-		t.Fatalf("extract = %q", got)
-	}
-}
-
 func TestParseDuration(t *testing.T) {
 	for input, want := range map[string]time.Duration{
 		"60s": time.Minute, "5m": 5 * time.Minute, "1h": time.Hour, "2d": 48 * time.Hour,

@@ -17,7 +17,6 @@ func RegisterAll(a *app.App) {
 	Calc(a)
 	Rate(a)
 	Whois(a)
-	Bgp(a)
 	AI(a)
 	Gt(a)
 	Sum(a)

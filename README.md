@@ -42,18 +42,12 @@ Go 函数。代价是装新命令要重新编译；换来的是一个更小的�
 
 ```text
 .ping .status .sysinfo .memory .version .ver .help .h .restart .update
-.calc .rate .whois .bgp .ai .gt .sum .re .dme .da
+.calc .rate .whois .ai .gt .sum .re .dme .da
 .ban .unban .kick .mute .unmute .sb .unsb .refresh .aban
 .acn .autochangename .yvlu .eatgif
 ```
 
 每条命令的用法见 `.help 命令`。
-
-### 已知的外部依赖问题
-
-`.bgp` 依赖 bgp.tools，而它现在把 `/prefix` 和 `/pathimg` 都放到登录之后
-（返回 307 跳转到 `/login?must-login`）。命令会如实报告数据源不可用，
-不会把登录页当成"查无记录"。MiBox 的 bgp 插件用同一个域名，现状相同。
 
 ## 部署
 
