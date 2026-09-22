@@ -227,6 +227,11 @@ func (a *App) dispatcher() tg.UpdateDispatcher {
 // Only the account's own fresh messages are commands: an edit does not
 // prove who is at the keyboard, and it is also what the bot's own result
 // edits look like.
+//
+// Every path that drops a message says so. "I typed a command and nothing
+// happened" is otherwise indistinguishable from "the update never
+// arrived", and the two have completely different causes — most of the
+// time spent chasing one of these went into telling them apart.
 func (a *App) handle(ctx context.Context, entities tg.Entities, message tg.MessageClass, edited bool) {
 	plain, ok := message.(*tg.Message)
 	if !ok {
@@ -234,14 +239,54 @@ func (a *App) handle(ctx context.Context, entities tg.Entities, message tg.Messa
 	}
 	a.peers.Remember(entities)
 	client := a.bot.Load()
-	if client == nil || edited || !plain.Out {
+	if client == nil {
+		return
+	}
+	// Whether this parsed as a command decides how loudly a drop is
+	// reported: an ordinary message going past is debug noise, while a
+	// command the operator typed and never saw answered belongs at the
+	// level they are actually reading.
+	_, looksLikeCommand := a.Registry.Parse(plain.Message)
+	drop := func(reason string) {
+		if looksLikeCommand && plain.Out {
+			a.Logger.Info("dispatch.dropped", slog.String("reason", reason),
+				slog.Int("message", plain.ID), slog.String("text", truncate(plain.Message, 40)))
+			return
+		}
+		a.Logger.Debug("dispatch.skipped", slog.String("reason", reason), slog.Int("message", plain.ID))
+	}
+	switch {
+	case edited:
+		drop("edited")
+		return
+	case !plain.Out:
+		drop("incoming")
 		return
 	}
 	envelope, ok := bot.Envelope(plain, client.SelfID(), edited, a.peers)
-	if !ok || envelope.Edited || envelope.Forward {
+	switch {
+	case !ok:
+		drop("unaddressable peer")
+		return
+	case envelope.Edited:
+		drop("carries an edit date")
+		return
+	case envelope.Forward:
+		drop("forwarded")
 		return
 	}
-	a.Registry.Dispatch(context.WithoutCancel(ctx), client, envelope)
+	if !a.Registry.Dispatch(context.WithoutCancel(ctx), client, envelope) {
+		drop("no command matched")
+	}
+}
+
+// truncate shortens text for a log line.
+func truncate(text string, limit int) string {
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return text
+	}
+	return string(runes[:limit]) + "…"
 }
 
 // Bot returns the connected client, or nil before authorization.
