@@ -20,6 +20,7 @@ func RegisterAll(a *app.App) {
 	AI(a)
 	Gt(a)
 	Translate(a)
+	Speedtest(a)
 	Sum(a)
 	Re(a)
 	Dme(a)

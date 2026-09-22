@@ -49,7 +49,7 @@ Go 函数。代价是装新命令要重新编译；换来的是一个更小的�
 
 ```text
 .ping .status .sysinfo .memory .version .ver .help .h .restart .update
-.calc .rate .whois .tr .ai .gt .sum .re .dme .da
+.calc .rate .whois .tr .speedtest .ai .gt .sum .re .dme .da
 .ban .unban .kick .mute .unmute .sb .unsb .refresh .aban
 .acn .autochangename .yvlu .eatgif
 ```
