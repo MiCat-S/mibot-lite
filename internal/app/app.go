@@ -41,6 +41,13 @@ type Options struct {
 	Debug   bool
 	// Register adds the commands once the registry exists.
 	Register func(app *App)
+	// ReadOnly prepares everything except the single-instance lock.
+	//
+	// That lock means "only one process may serve this account", and a
+	// read-only check serves nothing. Taking it anyway made --check fail
+	// whenever the service was running — which is exactly when the
+	// self-updater runs it, so a good release was discarded as unreadable.
+	ReadOnly bool
 	// AfterReady runs once the account is connected and the commands are
 	// serving. When it returns, Run stops. It is how --verify drives the
 	// live account without a second connection path.
@@ -109,16 +116,21 @@ func Prepare(ctx context.Context, options Options) (*App, error) {
 		return nil, fmt.Errorf("convert session: %w", err)
 	}
 
-	lock, err := os.OpenFile(filepath.Join(root, "mibot-lite.lock"), os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return nil, err
-	}
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		lock.Close()
-		return nil, errors.New("another mibot-lite instance already runs on this directory")
+	var lock *os.File
+	if !options.ReadOnly {
+		lock, err = os.OpenFile(filepath.Join(root, "mibot-lite.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+		if err != nil {
+			return nil, err
+		}
+		if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+			lock.Close()
+			return nil, errors.New("another mibot-lite instance already runs on this directory")
+		}
 	}
 	if err := os.MkdirAll(filepath.Join(root, "data"), 0o700); err != nil {
-		lock.Close()
+		if lock != nil {
+			lock.Close()
+		}
 		return nil, err
 	}
 

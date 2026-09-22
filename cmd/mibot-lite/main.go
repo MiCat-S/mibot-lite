@@ -77,7 +77,11 @@ func main() {
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 
-	options := app.Options{Root: *root, Version: version, Logger: logger, Debug: *verbose, Register: commands.RegisterAll}
+	// A check reads; it does not serve. Asking for the single-instance
+	// lock would make it fail precisely when the service is up, which is
+	// when the self-updater runs it against a freshly downloaded build.
+	options := app.Options{Root: *root, Version: version, Logger: logger, Debug: *verbose,
+		Register: commands.RegisterAll, ReadOnly: *check}
 	failures := 0
 	if *check2 {
 		options.AfterReady = func(ctx context.Context, a *app.App, client *bot.Client) error {
