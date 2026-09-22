@@ -447,6 +447,29 @@ func (c *Client) SendDocumentWith(ctx context.Context, peer tg.InputPeerClass, d
 	return err
 }
 
+// SendPhoto uploads an image and sends it as a photo, so clients show it
+// inline rather than as a file to download.
+func (c *Client) SendPhoto(ctx context.Context, peer tg.InputPeerClass, name string, data []byte, caption string, replyTo int) error {
+	file, err := c.upload.FromBytes(ctx, name, data)
+	if err != nil {
+		return err
+	}
+	plain, entities, err := ParseHTML(caption)
+	if err != nil {
+		return err
+	}
+	request := &tg.MessagesSendMediaRequest{Peer: peer, Media: &tg.InputMediaUploadedPhoto{File: file},
+		Message: plain, RandomID: rand.Int64()}
+	if len(entities) > 0 {
+		request.SetEntities(entities)
+	}
+	if replyTo > 0 {
+		request.SetReplyTo(&tg.InputReplyToMessage{ReplyToMsgID: replyTo})
+	}
+	_, err = c.api.MessagesSendMedia(ctx, request)
+	return err
+}
+
 // UploadDocument uploads bytes and registers them as a document Telegram
 // will accept in a sticker RPC, which only takes an InputDocument.
 func (c *Client) UploadDocument(ctx context.Context, name, mimeType string, data []byte) (*tg.InputDocument, error) {

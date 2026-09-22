@@ -540,3 +540,14 @@ func TestExtractOoklaRejectsJunk(t *testing.T) {
 		t.Fatal("garbage should not extract")
 	}
 }
+
+// The result picture is fetched only from Speedtest's own result pages,
+// and only when what comes back is really a PNG.
+func TestResultImageRefusesOtherSources(t *testing.T) {
+	for _, link := range []string{"", "http://evil.example/x.png", "https://example.com/result/c/1",
+		"https://www.speedtest.net.evil.com/result/c/1"} {
+		if image := resultImage(context.Background(), link); image != nil {
+			t.Errorf("%q should not be fetched", link)
+		}
+	}
+}

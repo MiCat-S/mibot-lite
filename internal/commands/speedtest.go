@@ -473,6 +473,28 @@ func runExternal(ctx context.Context, path, kind string) (*reading, error) {
 	}, nil
 }
 
+// resultImage fetches the picture Speedtest publishes for a result, or
+// nil when there is none to be had. A missing image is not a failure: the
+// measurement is the point and the numbers are already in hand.
+func resultImage(ctx context.Context, link string) []byte {
+	if !strings.HasPrefix(link, "https://www.speedtest.net/result/") {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	response, err := httpx.Do(ctx, httpx.Request{URL: strings.TrimSuffix(link, ".png") + ".png",
+		Timeout: 25 * time.Second, MaxBytes: 8 << 20})
+	if err != nil || !response.OK() || len(response.Body) < 1024 {
+		return nil
+	}
+	// Only a real PNG is forwarded: an error page rendered as an image
+	// would be worse than no image.
+	if len(response.Body) < 8 || string(response.Body[1:4]) != "PNG" {
+		return nil
+	}
+	return response.Body
+}
+
 func durationFromMillis(value float64) time.Duration {
 	return time.Duration(value * float64(time.Millisecond))
 }
@@ -679,7 +701,20 @@ func Speedtest(a *app.App) {
 			}
 			result, err := runExternal(ctx, tool, kind)
 			if err == nil {
-				return inv.Edit(ctx, render(result, node, time.Since(started)))
+				text := render(result, node, time.Since(started))
+				// Speedtest publishes a picture of every result; sending it
+				// is what people expect to see, and the numbers ride along
+				// as the caption.
+				if image := resultImage(ctx, result.Link); image != nil {
+					peer, peerErr := inv.Client.InputPeer(inv.Message.Peer)
+					if peerErr == nil {
+						if sendErr := inv.Client.SendPhoto(ctx, peer, "speedtest.png", image, text, 0); sendErr == nil {
+							return inv.Client.DeleteMessage(ctx, inv.Message)
+						}
+						inv.Log.Info("speedtest.photo_failed")
+					}
+				}
+				return inv.Edit(ctx, text)
 			}
 			// An installed tool that fails is not a reason to report
 			// nothing: the built-in path still works.
