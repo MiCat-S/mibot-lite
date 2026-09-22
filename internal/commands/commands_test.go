@@ -2,7 +2,6 @@ package commands
 
 import (
 	"context"
-	"io"
 	"os"
 	"strings"
 	"testing"
@@ -398,102 +397,6 @@ func TestFormatSpeed(t *testing.T) {
 	}
 }
 
-// The upload body has to stop on its own, or the request never ends.
-func TestZeroSourceStopsAtDeadline(t *testing.T) {
-	source := &zeroSource{deadline: time.Now().Add(50 * time.Millisecond), limit: 1 << 30}
-	buffer := make([]byte, 4096)
-	for {
-		n, err := source.Read(buffer)
-		if err == io.EOF {
-			break
-		}
-		if err != nil || n == 0 {
-			t.Fatalf("read returned %d, %v", n, err)
-		}
-		if source.sent > 1<<30 {
-			t.Fatal("the source ran past its limit")
-		}
-	}
-	if source.sent == 0 {
-		t.Fatal("the source produced nothing before its deadline")
-	}
-}
-
-// It also stops at the byte limit, so a fast link cannot upload forever.
-func TestZeroSourceStopsAtLimit(t *testing.T) {
-	source := &zeroSource{deadline: time.Now().Add(time.Hour), limit: 10000}
-	buffer := make([]byte, 4096)
-	for {
-		if _, err := source.Read(buffer); err == io.EOF {
-			break
-		}
-	}
-	if source.sent < 10000 || source.sent > 10000+4096 {
-		t.Fatalf("sent %d bytes for a limit of 10000", source.sent)
-	}
-}
-
-func TestCounterTotalsBytes(t *testing.T) {
-	sink := &counter{}
-	if _, err := io.Copy(sink, io.LimitReader(&zeroSource{deadline: time.Now().Add(time.Minute), limit: 50000}, 50000)); err != nil {
-		t.Fatal(err)
-	}
-	if sink.total != 50000 {
-		t.Fatalf("counted %d bytes, want 50000", sink.total)
-	}
-}
-
-// TestSpeedtestLive runs the real measurement against Cloudflare, so the
-// numbers the command reports can be checked against a known-good tool
-// instead of trusted. It is skipped unless MIBOT_SPEEDTEST_LIVE=1, because
-// the suite must not depend on a network:
-//
-//	GOOS=linux go test -c ./internal/commands && \
-//	  MIBOT_SPEEDTEST_LIVE=1 ./commands.test -test.run SpeedtestLive -test.v
-func TestSpeedtestLive(t *testing.T) {
-	if os.Getenv("MIBOT_SPEEDTEST_LIVE") != "1" {
-		t.Skip("set MIBOT_SPEEDTEST_LIVE=1 to measure against the real endpoints")
-	}
-	ctx := context.Background()
-	node := describeNode(ctx)
-	t.Logf("节点 %s %s，出口 %s", node.Colo, node.Location, maskAddress(node.IP))
-	if node.Colo == "" {
-		t.Error("trace returned no colo")
-	}
-	if strings.Contains(maskAddress(node.IP), node.IP) && node.IP != "" {
-		t.Error("the address was not masked")
-	}
-
-	best, jitter, err := measureLatency(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("延迟 %s，抖动 %s", formatLatency(best), formatLatency(jitter))
-	if best <= 0 || best > 5*time.Second {
-		t.Errorf("implausible latency: %v", best)
-	}
-
-	started := time.Now()
-	download, err := measureDownload(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("下载 %s（耗时 %.1fs）", formatSpeed(download), time.Since(started).Seconds())
-	if download <= 0 {
-		t.Error("download measured as zero")
-	}
-
-	started = time.Now()
-	upload, err := measureUpload(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("上传 %s（耗时 %.1fs）", formatSpeed(upload), time.Since(started).Seconds())
-	if upload <= 0 {
-		t.Error("upload measured as zero")
-	}
-}
-
 // TestOoklaInstallLive downloads the pinned CLI and runs it, so the digest
 // in the source is checked against what the vendor actually serves rather
 // than assumed. Skipped unless MIBOT_SPEEDTEST_LIVE=1.
@@ -525,7 +428,13 @@ func TestOoklaInstallLive(t *testing.T) {
 	t.Logf("%s：延迟 %s 抖动 %s，下载 %s，上传 %s",
 		result.Source, formatLatency(result.Latency), formatLatency(result.Jitter),
 		formatSpeed(result.Download), formatSpeed(result.Upload))
-	t.Logf("服务器 %s，ISP %s", result.Server, result.ISP)
+	t.Logf("服务器 %s，ISP %s，出口 %s", result.Server, result.ISP, maskAddress(result.ExternalIP))
+	if result.ExternalIP == "" {
+		t.Error("the CLI reports the external address and the reading should carry it")
+	}
+	if result.Link == "" {
+		t.Error("without a result link there is no picture to send")
+	}
 	if result.Download <= 0 || result.Upload <= 0 || result.Latency <= 0 {
 		t.Error("the CLI reported an empty measurement")
 	}

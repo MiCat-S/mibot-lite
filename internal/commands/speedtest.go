@@ -10,8 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,250 +24,23 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/command"
 )
 
-// Speed is measured against Cloudflare's own test endpoints. They need no
-// account and no installed tool: MiBox drove the official Ookla CLI, which
-// is not on this host and would be one more thing to keep installed.
-const speedUserAgent = "MiBot-Lite/1"
-
-const (
-	speedDownURL  = "https://speed.cloudflare.com/__down?bytes=%d"
-	speedUpURL    = "https://speed.cloudflare.com/__up"
-	speedTraceURL = "https://speed.cloudflare.com/cdn-cgi/trace"
-)
-
-// The transfers are timed windows rather than fixed sizes, because a short
-// fixed size measures the burst and not the line: 10 MB from this host
-// reported 647 Mbps while 50 MB reported 120. A window long enough to
-// leave the burst behind reports what the connection actually sustains.
-//
-// One connection, not several. Four parallel streams were measured here at
-// 107 Mbps against a single stream's 120 — the link was already saturated,
-// and the extra streams only competed with each other.
-const (
-	speedWindow = 6 * time.Second
-	// A single __down request is refused above 100 MB — measured: 99 MB
-	// answers, 100 MB is a 403 — so a fast link needs several requests to
-	// fill the window rather than one enormous one.
-	speedChunk     = 90 << 20
-	speedMaxUpload = 100 << 20
-)
-
-// speedClient is separate from internal/httpx: that client buffers whole
-// responses to bound memory, which is exactly wrong for a transfer that is
-// supposed to be large and thrown away.
-var speedClient = &http.Client{
-	Transport: &http.Transport{
-		Proxy:               http.ProxyFromEnvironment,
-		DialContext:         (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
-		TLSHandshakeTimeout: 10 * time.Second,
-		DisableCompression:  true,
-		MaxIdleConns:        4,
-	},
-}
-
-// counter records how many bytes passed and discards them.
-type counter struct{ total int64 }
-
-func (c *counter) Write(p []byte) (int, error) {
-	c.total += int64(len(p))
-	return len(p), nil
-}
-
-// zeroSource feeds the upload without allocating the payload, and stops at
-// a deadline so the request ends on its own.
-type zeroSource struct {
-	deadline time.Time
-	limit    int64
-	sent     int64
-	block    []byte
-}
-
-func (z *zeroSource) Read(p []byte) (int, error) {
-	if time.Now().After(z.deadline) || z.sent >= z.limit {
-		return 0, io.EOF
-	}
-	if z.block == nil {
-		z.block = make([]byte, 64<<10)
-	}
-	n := len(p)
-	if n > len(z.block) {
-		n = len(z.block)
-	}
-	copy(p[:n], z.block[:n])
-	z.sent += int64(n)
-	return n, nil
-}
-
-// measureLatency times several tiny requests and reports the best and the
-// spread.
-//
-// The first request is thrown away: it pays for the TCP and TLS handshake,
-// and counting it reported 133 ms of jitter on a link whose real spread
-// was a few milliseconds. What is measured is the warm connection, which
-// is the one every other command uses too.
-func measureLatency(ctx context.Context) (best, jitter time.Duration, err error) {
-	var samples []time.Duration
-	for attempt := 0; attempt < 7; attempt++ {
-		if err := ctx.Err(); err != nil {
-			return 0, 0, err
-		}
-		started := time.Now()
-		request, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf(speedDownURL, 0), nil)
-		if err != nil {
-			return 0, 0, err
-		}
-		request.Header.Set("User-Agent", speedUserAgent)
-		response, err := speedClient.Do(request)
-		if err != nil {
-			continue
-		}
-		_, _ = io.Copy(io.Discard, response.Body)
-		response.Body.Close()
-		if attempt == 0 {
-			continue
-		}
-		samples = append(samples, time.Since(started))
-	}
-	if len(samples) == 0 {
-		return 0, 0, fail("无法连通测速节点")
-	}
-	best, worst := samples[0], samples[0]
-	for _, sample := range samples {
-		if sample < best {
-			best = sample
-		}
-		if sample > worst {
-			worst = sample
-		}
-	}
-	return best, worst - best, nil
-}
-
-// measureDownload streams until the window closes and reports bits per
-// second. Timing starts at the first byte, so the handshake and the
-// server's own think time are not counted as slow network.
-func measureDownload(ctx context.Context) (float64, error) {
-	ctx, cancel := context.WithTimeout(ctx, speedWindow+25*time.Second)
-	defer cancel()
-	var total int64
-	var started, stop time.Time
-	for request := 0; request < 12; request++ {
-		if !started.IsZero() && !time.Now().Before(stop) {
-			break
-		}
-		read, firstByte, err := downloadChunk(ctx, stop)
-		total += read
-		if err != nil && total == 0 {
-			return 0, err
-		}
-		if started.IsZero() && !firstByte.IsZero() {
-			started = firstByte
-			stop = started.Add(speedWindow)
-		}
-		if err != nil {
-			break
-		}
-	}
-	if started.IsZero() || total == 0 {
-		return 0, fail("下载测速没有取到数据")
-	}
-	elapsed := time.Since(started)
-	if stop.Before(time.Now()) {
-		elapsed = speedWindow
-	}
-	if elapsed <= 0 {
-		return 0, fail("下载测速没有取到数据")
-	}
-	return float64(total) * 8 / elapsed.Seconds(), nil
-}
-
-// downloadChunk streams one request, stopping early when stop passes. It
-// reports the bytes read and when the first of them arrived.
-func downloadChunk(ctx context.Context, stop time.Time) (int64, time.Time, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf(speedDownURL, speedChunk), nil)
-	if err != nil {
-		return 0, time.Time{}, err
-	}
-	request.Header.Set("User-Agent", speedUserAgent)
-	response, err := speedClient.Do(request)
-	if err != nil {
-		return 0, time.Time{}, err
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return 0, time.Time{}, failf("测速节点返回 HTTP %d", response.StatusCode)
-	}
-
-	head := make([]byte, 32<<10)
-	read, err := io.ReadFull(response.Body, head)
-	if read == 0 {
-		return 0, time.Time{}, err
-	}
-	firstByte := time.Now()
-	remaining := speedWindow
-	if !stop.IsZero() {
-		remaining = time.Until(stop)
-	}
-	if remaining <= 0 {
-		return int64(read), firstByte, nil
-	}
-
-	sink := &counter{total: int64(read)}
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		_, _ = io.Copy(sink, response.Body)
-	}()
-	select {
-	case <-done:
-	case <-time.After(remaining):
-		response.Body.Close()
-		<-done
-	}
-	return sink.total, firstByte, nil
-}
-
-// measureUpload posts zeros for the window and reports bits per second.
-func measureUpload(ctx context.Context) (float64, error) {
-	ctx, cancel := context.WithTimeout(ctx, speedWindow+15*time.Second)
-	defer cancel()
-	source := &zeroSource{deadline: time.Now().Add(speedWindow), limit: speedMaxUpload}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, speedUpURL, source)
-	if err != nil {
-		return 0, err
-	}
-	// An unknown length makes Go send it chunked, which is what lets the
-	// body stop at a deadline instead of at a size decided in advance.
-	request.ContentLength = -1
-	request.Header.Set("Content-Type", "application/octet-stream")
-	request.Header.Set("User-Agent", speedUserAgent)
-	started := time.Now()
-	response, err := speedClient.Do(request)
-	if err != nil {
-		return 0, err
-	}
-	_, _ = io.Copy(io.Discard, response.Body)
-	response.Body.Close()
-	elapsed := time.Since(started)
-	if elapsed <= 0 || source.sent == 0 {
-		return 0, fail("上传测速没有取到数据")
-	}
-	return float64(source.sent) * 8 / elapsed.Seconds(), nil
-}
+// Speed is measured by Ookla's official Speedtest CLI: it picks a nearby
+// server, knows the ISP, and publishes a result page that everyone already
+// recognises. When the CLI is not installed this command installs it once,
+// into its own data directory, and reuses it from then on.
 
 // reading is one complete measurement, however it was taken.
 type reading struct {
 	// Source names what produced it, for the line that says so.
-	Source   string
-	Latency  time.Duration
-	Jitter   time.Duration
-	Download float64
-	Upload   float64
-	// Server, ISP and Link are filled by the external tools, which know
-	// things the built-in measurement cannot.
-	Server string
-	ISP    string
-	Link   string
+	Source     string
+	Latency    time.Duration
+	Jitter     time.Duration
+	Download   float64
+	Upload     float64
+	Server     string
+	ISP        string
+	Link       string
+	ExternalIP string
 }
 
 // ooklaResult is `speedtest -f json` from the official CLI. Its bandwidth
@@ -294,6 +65,9 @@ type ooklaResult struct {
 	Result struct {
 		URL string `json:"url"`
 	} `json:"result"`
+	Interface struct {
+		ExternalIP string `json:"externalIp"`
+	} `json:"interface"`
 }
 
 // pythonResult is `speedtest-cli --json`. Its figures are bits per second.
@@ -421,12 +195,7 @@ func extractOokla(archive []byte, target string) (string, error) {
 	return "", fail("Ookla CLI 压缩包里没有可执行文件")
 }
 
-// runExternal drives an installed speedtest tool.
-//
-// It is preferred when present: it picks a nearby Ookla server and knows
-// the ISP, which a fixed CDN endpoint cannot. The built-in measurement
-// exists because the tool usually is not installed — this host had none of
-// the three — not because it is better.
+// runExternal drives the installed speedtest tool.
 func runExternal(ctx context.Context, path, kind string) (*reading, error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
@@ -459,6 +228,7 @@ func runExternal(ctx context.Context, path, kind string) (*reading, error) {
 			// Ookla reports bytes per second.
 			Download: parsed.Download.Bandwidth * 8, Upload: parsed.Upload.Bandwidth * 8,
 			Server: server, ISP: parsed.ISP, Link: parsed.Result.URL,
+			ExternalIP: parsed.Interface.ExternalIP,
 		}, nil
 	}
 	var parsed pythonResult
@@ -470,6 +240,7 @@ func runExternal(ctx context.Context, path, kind string) (*reading, error) {
 		Source: "speedtest-cli", Latency: durationFromMillis(parsed.Ping),
 		Download: parsed.Download, Upload: parsed.Upload,
 		Server: server, ISP: parsed.Client.ISP, Link: parsed.Share,
+		ExternalIP: parsed.Client.IP,
 	}, nil
 }
 
@@ -497,49 +268,6 @@ func resultImage(ctx context.Context, link string) []byte {
 
 func durationFromMillis(value float64) time.Duration {
 	return time.Duration(value * float64(time.Millisecond))
-}
-
-// speedNode is where the test landed.
-type speedNode struct {
-	Colo     string
-	Location string
-	IP       string
-}
-
-// describeNode reads Cloudflare's trace for the edge that served us.
-func describeNode(ctx context.Context) speedNode {
-	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
-	defer cancel()
-	var node speedNode
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, speedTraceURL, nil)
-	if err != nil {
-		return node
-	}
-	request.Header.Set("User-Agent", speedUserAgent)
-	response, err := speedClient.Do(request)
-	if err != nil {
-		return node
-	}
-	defer response.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(response.Body, 8<<10))
-	if err != nil {
-		return node
-	}
-	for _, line := range strings.Split(string(body), "\n") {
-		key, value, ok := strings.Cut(line, "=")
-		if !ok {
-			continue
-		}
-		switch key {
-		case "colo":
-			node.Colo = value
-		case "loc":
-			node.Location = value
-		case "ip":
-			node.IP = value
-		}
-	}
-	return node
 }
 
 // maskAddress hides the host's own address. The result goes into a chat,
@@ -583,60 +311,28 @@ func formatLatency(d time.Duration) string {
 func speedtestHelp(dataDir, prefix string) string {
 	p := command.Escape(prefix)
 	tool, kind := externalTool(dataDir)
-	source := "未安装 CLI，首次运行会自动下载 Ookla 官方 CLI"
+	source := "未安装，首次运行会自动下载 Ookla 官方 CLI"
 	if tool != "" {
 		source = "使用 " + kind + "：" + tool
 	}
 	return "🚀 <b>网络测速</b>\n\n测量这台服务器的出口带宽。\n\n• <code>" + p +
-		"speedtest</code> 完整测速\n• <code>" + p + "st</code> 同上，简写\n• <code>" + p +
-		"speedtest cf</code> 强制用内置测速\n\n<b>当前来源</b>\n" + command.Escape(source) +
-		"\n\n优先用 Ookla 官方 CLI：它自己挑就近的测速服务器，还能报出 ISP。没装的话首次运行会把官方静态构件" +
-		"下载到部署目录（校验 SHA-256，不写系统目录），之后直接复用。下载失败则退回内置测速，各测 " + command.Code(fmt.Sprint(int(speedWindow.Seconds()))+" 秒") +
-		"，取持续速率而不是突发峰值。\n\n输出里的出口地址会打码。"
-}
-
-// builtinReading measures with the Cloudflare endpoints, reporting
-// progress as it goes.
-func builtinReading(ctx context.Context, inv *command.Invocation, header string) (*reading, error) {
-	if err := inv.Edit(ctx, header+"⏱ 测量延迟…"); err != nil {
-		return nil, err
-	}
-	best, jitter, err := measureLatency(ctx)
-	if err != nil {
-		return nil, err
-	}
-	line := "⏱ 延迟: " + command.Code(formatLatency(best)) + "（抖动 " + command.Escape(formatLatency(jitter)) + "）\n"
-
-	if err := inv.Edit(ctx, header+line+"⬇️ 测量下载…"); err != nil {
-		return nil, err
-	}
-	download, err := measureDownload(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if err := inv.Edit(ctx, header+line+"⬇️ 下载: "+command.Code(formatSpeed(download))+"\n⬆️ 测量上传…"); err != nil {
-		return nil, err
-	}
-	upload, err := measureUpload(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return &reading{Source: "Cloudflare", Latency: best, Jitter: jitter, Download: download, Upload: upload}, nil
+		"speedtest</code> 完整测速\n• <code>" + p + "st</code> 同上，简写\n\n<b>当前来源</b>\n" +
+		command.Escape(source) +
+		"\n\n用 Ookla 官方 CLI 测：它自己挑就近的测速服务器，报得出 ISP，还会给一张结果图。没装的话首次运行会把" +
+		"官方静态构件下载到部署目录（校验 SHA-256，不写系统目录），之后直接复用。\n\n输出里的出口地址会打码。"
 }
 
 // render lays out a finished reading.
-func render(result *reading, node speedNode, elapsed time.Duration) string {
+func render(result *reading, elapsed time.Duration) string {
 	lines := []string{"🚀 <b>网络测速</b>", ""}
 	if result.Server != "" {
 		lines = append(lines, "📍 节点: "+command.Code(result.Server))
-	} else if node.Colo != "" {
-		lines = append(lines, "📍 节点: "+command.Code(strings.TrimSpace(node.Colo+" "+node.Location)))
 	}
 	if result.ISP != "" {
 		lines = append(lines, "🏢 运营商: "+command.Code(result.ISP))
 	}
-	if node.IP != "" {
-		lines = append(lines, "🌐 出口: "+command.Code(maskAddress(node.IP)))
+	if result.ExternalIP != "" {
+		lines = append(lines, "🌐 出口: "+command.Code(maskAddress(result.ExternalIP)))
 	}
 	lines = append(lines, "")
 	latency := "⏱ 延迟: " + command.Code(formatLatency(result.Latency))
@@ -672,18 +368,8 @@ func Speedtest(a *app.App) {
 		defer running.Unlock()
 
 		started := time.Now()
-		if err := inv.Edit(ctx, "🚀 <b>网络测速</b>\n\n正在准备…"); err != nil {
-			return err
-		}
-		node := describeNode(ctx)
-
-		forceBuiltin := false
-		switch strings.ToLower(inv.Arg(0)) {
-		case "cf", "builtin", "内置":
-			forceBuiltin = true
-		}
 		tool, kind := externalTool(dataDir)
-		if tool == "" && !forceBuiltin {
+		if tool == "" {
 			// Nothing installed: fetch the official CLI once and keep it.
 			if err := inv.Edit(ctx, "🚀 <b>网络测速</b>\n\n首次运行，正在下载 Ookla 官方 CLI…"); err != nil {
 				return err
@@ -691,55 +377,41 @@ func Speedtest(a *app.App) {
 			installed, err := installOokla(ctx, dataDir)
 			if err != nil {
 				inv.Log.Warn("speedtest.install_failed", "error", err.Error())
-			} else {
-				tool, kind = installed, "ookla"
-			}
-		}
-		if tool != "" && !forceBuiltin {
-			if err := inv.Edit(ctx, "🚀 <b>网络测速</b>\n\n正在通过 "+command.Escape(kind)+" 测速，约需一分钟…"); err != nil {
-				return err
-			}
-			result, err := runExternal(ctx, tool, kind)
-			if err == nil {
-				text := render(result, node, time.Since(started))
-				// Speedtest publishes a picture of every result; sending it
-				// is what people expect to see, and the numbers ride along
-				// as the caption.
-				if image := resultImage(ctx, result.Link); image != nil {
-					peer, peerErr := inv.Client.InputPeer(inv.Message.Peer)
-					if peerErr == nil {
-						if sendErr := inv.Client.SendPhoto(ctx, peer, "speedtest.png", image, text, 0); sendErr == nil {
-							return inv.Client.DeleteMessage(ctx, inv.Message)
-						}
-						inv.Log.Info("speedtest.photo_failed")
-					}
+				detail, ok := isUserError(err)
+				if !ok {
+					detail = "网络不通或构件无法校验"
 				}
-				return inv.Edit(ctx, text)
+				return inv.EditText(ctx, "❌ 无法安装 Speedtest CLI："+detail+"\n手动装好 speedtest 后再试")
 			}
-			// An installed tool that fails is not a reason to report
-			// nothing: the built-in path still works.
-			inv.Log.Warn("speedtest.external_failed", "tool", kind, "error", err.Error())
+			tool, kind = installed, "ookla"
 		}
-
-		header := "🚀 <b>网络测速</b>\n\n"
-		if node.Colo != "" {
-			header += "📍 节点: " + command.Code(strings.TrimSpace(node.Colo+" "+node.Location)) + "\n"
+		if err := inv.Edit(ctx, "🚀 <b>网络测速</b>\n\n正在通过 "+command.Escape(kind)+" 测速，约需一分钟…"); err != nil {
+			return err
 		}
-		if node.IP != "" {
-			header += "🌐 出口: " + command.Code(maskAddress(node.IP)) + "\n"
-		}
-		header += "\n"
-		result, err := builtinReading(ctx, inv, header)
+		result, err := runExternal(ctx, tool, kind)
 		if err != nil {
+			inv.Log.Warn("speedtest.external_failed", "tool", kind, "error", err.Error())
 			if detail, ok := isUserError(err); ok {
 				return inv.EditText(ctx, "❌ "+detail)
 			}
-			return err
+			return inv.EditText(ctx, "❌ 测速失败，请稍后再试")
 		}
-		return inv.Edit(ctx, render(result, node, time.Since(started)))
+		text := render(result, time.Since(started))
+		// Speedtest publishes a picture of every result; sending it is what
+		// people expect to see, and the numbers ride along as the caption.
+		if image := resultImage(ctx, result.Link); image != nil {
+			peer, peerErr := inv.Client.InputPeer(inv.Message.Peer)
+			if peerErr == nil {
+				if sendErr := inv.Client.SendPhoto(ctx, peer, "speedtest.png", image, text, 0); sendErr == nil {
+					return inv.Client.DeleteMessage(ctx, inv.Message)
+				}
+				inv.Log.Info("speedtest.photo_failed")
+			}
+		}
+		return inv.Edit(ctx, text)
 	}
 	a.Registry.Register(
-		&command.Command{Name: "speedtest", Description: "测量服务器网络速度", Usage: "[cf]",
+		&command.Command{Name: "speedtest", Description: "测量服务器网络速度",
 			Help: func(prefix string) string { return speedtestHelp(a.DataDir(), prefix) }, Timeout: 5 * time.Minute, Handle: handle},
 		&command.Command{Name: "st", Description: "speedtest 的简写", Hidden: true,
 			Help: func(prefix string) string { return speedtestHelp(a.DataDir(), prefix) }, Timeout: 5 * time.Minute, Handle: handle},
