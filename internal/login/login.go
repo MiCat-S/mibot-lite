@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 
 	gotdsession "github.com/gotd/td/session"
 	"github.com/gotd/td/telegram"
@@ -27,6 +28,10 @@ import (
 
 // SessionFile is gotd's session file name, shared with MiBox's Go host.
 const SessionFile = "gotd-session.json"
+
+// lockFile is the instance lock the running service holds, named to match
+// internal/app.
+const lockFile = "mibot-lite.lock"
 
 // Options configure a sign-in.
 type Options struct {
@@ -63,8 +68,18 @@ func Run(ctx context.Context, options Options) error {
 		if err := decoder.Decode(&existing); err != nil {
 			return fmt.Errorf("config.json: %w", err)
 		}
-		if current, _ := existing["session"].(string); current != "" && !options.Force {
+		current, _ := existing["session"].(string)
+		switch {
+		case current != "" && !options.Force:
 			return errors.New("config.json already holds a session; pass --force to replace it")
+		case current != "":
+			// --force says "replace the session", not "replace it while a
+			// process is running on it". The service would keep serving
+			// with a session that is no longer the one on disk, and the
+			// next restart would silently become a different login.
+			if err := refuseWhileRunning(root); err != nil {
+				return err
+			}
 		}
 	}
 	prompt := &terminal{in: in, out: out, reader: bufio.NewReader(in)}
@@ -155,6 +170,31 @@ func Run(ctx context.Context, options Options) error {
 	}
 	_ = os.Chmod(file.Path, 0o600)
 	fmt.Fprintf(out, "Signed in as %s. config.json and %s written to %s\n", who, SessionFile, root)
+	return nil
+}
+
+// refuseWhileRunning reports an error when a process already holds this
+// deployment's instance lock.
+//
+// The lock is the same flock the running service takes, so this asks the
+// kernel rather than guessing from a pid file or a unit name: it is right
+// whether the deployment runs under systemd, in a terminal, or not at all.
+func refuseWhileRunning(root string) error {
+	path := filepath.Join(root, lockFile)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		// A lock we cannot even open is not evidence that something is
+		// running; sign-in has its own reasons to fail later if the
+		// directory is unusable.
+		return nil
+	}
+	defer file.Close()
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		return errors.New("a mibot-lite instance is running on this directory; stop it before signing in again")
+	}
+	// Release it straight away: sign-in does not need to hold the lock, it
+	// only needed to know whether anyone else does.
+	_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
 	return nil
 }
 
