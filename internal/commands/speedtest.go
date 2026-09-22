@@ -504,7 +504,7 @@ func speedtestHelp(dataDir, prefix string, pinned int) string {
 		"speedtest set &lt;ID&gt;</code> 设为默认服务器\n• <code>" + p +
 		"speedtest clear</code> 恢复自动挑选\n• <code>" + p +
 		"speedtest config</code> 看当前设置\n\n<b>当前来源</b>\n" + command.Escape(source) +
-		"\n<b>服务器</b>\n" + command.Escape(server) +
+		"\n\n<b>当前服务器</b>\n" + command.Escape(server) +
 		"\n\n用 Ookla 官方 CLI 测：它自己挑就近的测速服务器，报得出 ISP，还会给一张结果图。没装的话首次" +
 		"运行会把官方静态构件下载到部署目录（校验 SHA-256，不写系统目录），之后直接复用。\n\n" +
 		"指定的服务器测不通时会自动退回自动挑选，并在结果里说明。输出里的出口地址会打码。"
@@ -603,7 +603,8 @@ func Speedtest(a *app.App) {
 			}); err != nil {
 				return err
 			}
-			return inv.Edit(ctx, "✅ 已恢复自动挑选服务器")
+			return inv.Edit(ctx, "✅ 已恢复自动挑选服务器\n<i>想再固定一台，"+
+				command.Escape(inv.Prefix+"speedtest list")+" 看有哪些</i>")
 		case "set":
 			id, err := strconv.Atoi(inv.Arg(1))
 			if err != nil || id <= 0 {
@@ -615,7 +616,9 @@ func Speedtest(a *app.App) {
 			}); err != nil {
 				return err
 			}
-			return inv.Edit(ctx, "✅ 默认服务器已设为 "+command.Code(strconv.Itoa(id)))
+			return inv.Edit(ctx, "✅ 默认服务器已设为 "+command.Code(strconv.Itoa(id))+
+				"\n<i>测不通会自动退回自动挑选；取消固定用 "+
+				command.Escape(inv.Prefix+"speedtest clear")+"</i>")
 		}
 
 		// Running two at once would have them measure each other.
@@ -677,7 +680,8 @@ func Speedtest(a *app.App) {
 			// the pin rather than failing on a choice made days ago.
 			inv.Log.Warn("speedtest.retrying", "tool", kind, "server", request, "error", err.Error())
 			if request > 0 {
-				note = "服务器 " + strconv.Itoa(request) + " 没测通，已改用自动挑选"
+				note = "服务器 " + strconv.Itoa(request) + " 没测通，已改用自动挑选。换一台用 " +
+					inv.Prefix + "speedtest list，取消固定用 " + inv.Prefix + "speedtest clear"
 				request = 0
 			}
 			result, err = runExternal(ctx, tool, kind, home, request)

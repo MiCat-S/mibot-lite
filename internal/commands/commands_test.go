@@ -601,3 +601,20 @@ func TestExplainCLI(t *testing.T) {
 		t.Errorf("an unknown reason should pass through, got %q", got)
 	}
 }
+
+// Every subcommand has to appear in the help, or it may as well not
+// exist: .speedtest list was missing for exactly this reason.
+func TestSpeedtestHelpDocumentsEverySubcommand(t *testing.T) {
+	text := speedtestHelp(t.TempDir(), ".", 0)
+	for _, wanted := range []string{".speedtest list", ".speedtest set", ".speedtest clear", ".speedtest config", ".st"} {
+		if !strings.Contains(text, wanted) {
+			t.Errorf("the help never mentions %q", wanted)
+		}
+	}
+	if !strings.Contains(text, "自动挑选") {
+		t.Error("the help does not say which server is in use")
+	}
+	if pinned := speedtestHelp(t.TempDir(), ".", 48463); !strings.Contains(pinned, "48463") {
+		t.Error("the help does not show the pinned server")
+	}
+}
