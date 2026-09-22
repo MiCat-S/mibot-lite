@@ -20,6 +20,7 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/commands"
 	"github.com/MiCat-S/mibot-lite/internal/config"
 	"github.com/MiCat-S/mibot-lite/internal/login"
+	"github.com/MiCat-S/mibot-lite/internal/logtail"
 	"github.com/MiCat-S/mibot-lite/internal/sysinfo"
 	"github.com/MiCat-S/mibot-lite/internal/verify"
 )
@@ -71,17 +72,21 @@ func main() {
 		os.Exit(2)
 	}
 
-	level := slog.LevelInfo
+	// A variable rather than a constant level: .log can raise it while
+	// the service runs, which is the difference between diagnosing a
+	// quiet failure and restarting the account to watch for it.
+	level := new(slog.LevelVar)
 	if *verbose {
-		level = slog.LevelDebug
+		level.Set(slog.LevelDebug)
 	}
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+	logs := logtail.New()
+	logger := slog.New(logtail.Wrap(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}), logs))
 
 	// A check reads; it does not serve. Asking for the single-instance
 	// lock would make it fail precisely when the service is up, which is
 	// when the self-updater runs it against a freshly downloaded build.
 	options := app.Options{Root: *root, Version: version, Logger: logger, Debug: *verbose,
-		Register: commands.RegisterAll, ReadOnly: *check}
+		Logs: logs, Level: level, Register: commands.RegisterAll, ReadOnly: *check}
 	failures := 0
 	if *check2 {
 		options.AfterReady = func(ctx context.Context, a *app.App, client *bot.Client) error {

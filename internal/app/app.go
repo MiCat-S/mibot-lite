@@ -29,6 +29,7 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/bot"
 	"github.com/MiCat-S/mibot-lite/internal/command"
 	"github.com/MiCat-S/mibot-lite/internal/config"
+	"github.com/MiCat-S/mibot-lite/internal/logtail"
 	"github.com/MiCat-S/mibot-lite/internal/session"
 	"github.com/MiCat-S/mibot-lite/internal/tgstate"
 )
@@ -41,6 +42,14 @@ type Options struct {
 	Debug   bool
 	// Register adds the commands once the registry exists.
 	Register func(app *App)
+	// Logs holds the tail of what was logged, so .log can show it. The
+	// app works without one; the command simply reports that nothing is
+	// being kept.
+	Logs *logtail.Ring
+	// Level is the live log level. Handing it over lets the operator
+	// raise it from a chat, which otherwise takes editing the unit and a
+	// restart — which is what it took the day .log was written.
+	Level *slog.LevelVar
 	// ReadOnly prepares everything except the single-instance lock.
 	//
 	// That lock means "only one process may serve this account", and a
@@ -64,6 +73,8 @@ type App struct {
 	Registry *command.Registry
 	Started  time.Time
 	BootID   string
+	Logs     *logtail.Ring
+	Level    *slog.LevelVar
 
 	client *telegram.Client
 	gaps   *updates.Manager
@@ -136,6 +147,7 @@ func Prepare(ctx context.Context, options Options) (*App, error) {
 
 	app := &App{Root: root, Version: options.Version, Logger: logger, Config: cfg, Env: env,
 		Registry: command.New(env.Prefixes(), logger), Started: time.Now(), BootID: strconv.FormatInt(time.Now().UnixNano(), 36),
+		Logs: options.Logs, Level: options.Level,
 		peers: bot.NewPeerCache(), lock: lock, options: options}
 
 	state, err := tgstate.Open(filepath.Join(root, "updates.json"))

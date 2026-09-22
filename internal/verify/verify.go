@@ -63,6 +63,8 @@ var Cases = []Case{
 	{Command: "ai config list", Expect: "AI"},
 	{Command: "sum config list", Expect: "配置"},
 	{Command: "aban", Expect: "封禁管理"},
+	{Command: "log debug", Expect: "当前日志级别"},
+	{Command: "help log", Expect: "运行日志"},
 	{Command: "eatgif list", Expect: "头像动图", Network: true, Wait: 60 * time.Second},
 	{Command: "whois example.com", Expect: "example.com", Network: true, Wait: 60 * time.Second},
 	{Command: "rate BTC", Expect: "数据更新", Network: true, Wait: 90 * time.Second},

@@ -21,6 +21,7 @@ func RegisterAll(a *app.App) {
 	Gt(a)
 	Translate(a)
 	Speedtest(a)
+	Log(a)
 	Sum(a)
 	Re(a)
 	Dme(a)
