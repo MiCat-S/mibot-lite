@@ -1,7 +1,7 @@
 # MiBot Lite
 
 一个小的 Telegram UserBot：单个静态 Go 二进制，命令用 Go 写死在程序里，
-状态存成 JSON 文件。它是 [MiBox](../MiBox) 的省内存版本——相同的账号、
+状态存成 JSON 文件。它是 [MiBox](https://github.com/MiCat-S/Mi-Box) 的省内存版本——相同的账号、
 相同的命令名，但没有插件系统、没有 JavaScript 运行时、没有 SQLite。
 
 ## 为什么另起一个
