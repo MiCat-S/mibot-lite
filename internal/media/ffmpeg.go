@@ -76,22 +76,21 @@ func StickerWebM(ctx context.Context, directory string, frames []Frame, width, h
 	}
 
 	output := filepath.Join(directory, "sticker.webm")
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
-	defer cancel()
-	command := exec.CommandContext(ctx, binary,
+	// libvpx-vp9 at its default speed is far slower and hungrier than a
+	// 512-pixel sticker needs. cpu-used trades a quality nobody will see
+	// at this size for an encode that finishes, and capping the threads
+	// keeps the encoder's own memory in a range a small service can host.
+	args := []string{
 		"-nostdin", "-v", "error",
 		"-f", "concat", "-safe", "0", "-i", "frames.txt",
 		"-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-b:v", "0", "-crf", "41",
+		"-deadline", "good", "-cpu-used", "5", "-row-mt", "1", "-threads", "2",
 		"-auto-alt-ref", "0", "-an",
 		"-vf", fmt.Sprintf("scale=%d:%d:flags=lanczos", width, height),
-		"-y", "sticker.webm")
-	command.Dir = directory
-	if combined, err := command.CombinedOutput(); err != nil {
-		detail := strings.TrimSpace(string(combined))
-		if len(detail) > 300 {
-			detail = detail[len(detail)-300:]
-		}
-		return nil, fmt.Errorf("ffmpeg failed: %s", detail)
+		"-y", "sticker.webm",
+	}
+	if err := run(ctx, binary, directory, args); err != nil {
+		return nil, err
 	}
 	return readBounded(output, 20<<20)
 }
@@ -106,19 +105,44 @@ func ToStickerWebM(ctx context.Context, directory string, input []byte, extensio
 	if err := os.WriteFile(source, input, 0o600); err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
-	defer cancel()
-	command := exec.CommandContext(ctx, binary, "-nostdin", "-v", "error", "-i", filepath.Base(source),
-		"-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-b:v", "400k", "-auto-alt-ref", "0", "-an", "-y", "converted.webm")
-	command.Dir = directory
-	if combined, err := command.CombinedOutput(); err != nil {
-		detail := strings.TrimSpace(string(combined))
-		if len(detail) > 300 {
-			detail = detail[len(detail)-300:]
-		}
-		return nil, fmt.Errorf("ffmpeg failed: %s", detail)
+	args := []string{"-nostdin", "-v", "error", "-i", filepath.Base(source),
+		"-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-b:v", "400k",
+		"-deadline", "good", "-cpu-used", "5", "-row-mt", "1", "-threads", "2",
+		"-auto-alt-ref", "0", "-an", "-y", "converted.webm"}
+	if err := run(ctx, binary, directory, args); err != nil {
+		return nil, err
 	}
 	return readBounded(filepath.Join(directory, "converted.webm"), 20<<20)
+}
+
+// encodeTimeout bounds one ffmpeg run.
+const encodeTimeout = 3 * time.Minute
+
+// run executes ffmpeg and turns a failure into something readable.
+//
+// A killed ffmpeg writes nothing, so reporting only its output produced
+// the message "ffmpeg failed:" with nothing after it — true, and useless.
+// The deadline is reported as itself.
+func run(ctx context.Context, binary, directory string, args []string) error {
+	ctx, cancel := context.WithTimeout(ctx, encodeTimeout)
+	defer cancel()
+	command := exec.CommandContext(ctx, binary, args...)
+	command.Dir = directory
+	combined, err := command.CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return fmt.Errorf("视频编码超过 %s 仍未完成", encodeTimeout)
+	}
+	detail := strings.TrimSpace(string(combined))
+	if detail == "" {
+		detail = err.Error()
+	}
+	if len(detail) > 300 {
+		detail = detail[len(detail)-300:]
+	}
+	return fmt.Errorf("ffmpeg 失败：%s", detail)
 }
 
 func readBounded(path string, limit int64) ([]byte, error) {

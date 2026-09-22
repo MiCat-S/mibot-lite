@@ -39,11 +39,21 @@ RestrictRealtime=yes
 LockPersonality=yes
 SystemCallArchitectures=native
 
-# The memory ceiling this project exists for. The process is expected to sit
-# far below it; the limit is what turns a leak into a restart rather than a
-# machine that starts swapping.
-MemoryMax=192M
-MemoryHigh=128M
+# A backstop against a leak, not a budget for the work.
+#
+# There was a MemoryHigh=128M here, and it was a mistake: MemoryHigh does
+# not fail, it throttles, so a transient spike becomes a process crawling
+# under constant reclaim instead of an error anyone can read. .eatgif
+# encodes VP9 through ffmpeg, which wants well over 100M for a few seconds
+# on top of the resident program, and it tripped that watermark 14613
+# times in one run — the encode was still going when its own timeout
+# killed it, leaving no output and no explanation.
+#
+# The resident process is ~25M, which is the number this project is about.
+# What follows is headroom for a child that runs for seconds at a time,
+# and a ceiling high enough that reaching it means something is actually
+# wrong.
+MemoryMax=512M
 
 Restart=on-failure
 RestartSec=5s
