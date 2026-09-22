@@ -15,9 +15,12 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 
 	gotdcrypto "github.com/gotd/td/crypto"
 	gotdsession "github.com/gotd/td/session"
+	"github.com/gotd/td/telegram/dcs"
+	"github.com/gotd/td/tg"
 )
 
 // AuthKeyLength is the fixed size of a Telegram auth key.
@@ -216,13 +219,64 @@ func FromData(data *gotdsession.Data) (*StringSession, error) {
 	if data == nil {
 		return nil, errors.New("no session data")
 	}
-	host, port, err := net.SplitHostPort(data.Addr)
+	address, err := ResolveAddress(data)
 	if err != nil {
-		return nil, fmt.Errorf("session address %q is not host:port: %w", data.Addr, err)
+		return nil, err
+	}
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, fmt.Errorf("session address %q is not host:port: %w", address, err)
 	}
 	number, err := strconv.Atoi(port)
 	if err != nil {
 		return nil, fmt.Errorf("session port %q is not a number", port)
 	}
 	return &StringSession{DC: data.DC, Address: host, Port: number, AuthKey: append([]byte(nil), data.AuthKey...)}, nil
+}
+
+// ResolveAddress finds the host:port for a session's data centre.
+//
+// A session gotd created itself carries no address: it reconnects from the
+// data-centre id plus the config it keeps alongside, and never needs one
+// written down — only the importers for other clients' formats fill the
+// field. A gramjs StringSession has no room for a config, the address is
+// part of the string, so exporting one has to look the address up: from
+// the config the session already carries, and failing that from the
+// published production list.
+//
+// This is the direction that had never run. Every session until now came
+// from a gramjs string, where Data() puts the address there itself, so the
+// export path was only ever exercised on data that already had one.
+func ResolveAddress(data *gotdsession.Data) (string, error) {
+	if data.Addr != "" {
+		return data.Addr, nil
+	}
+	if address, ok := pickOption(data.Config.DCOptions, data.DC); ok {
+		return address, nil
+	}
+	if address, ok := pickOption(dcs.Prod().Options, data.DC); ok {
+		return address, nil
+	}
+	return "", fmt.Errorf("no address is known for data centre %d", data.DC)
+}
+
+// pickOption chooses the address an ordinary client connects to: not a
+// media-only, CDN or obfuscated-only endpoint. IPv4 wins when both are
+// offered, because it is what every reader of this format has seen.
+func pickOption(options []tg.DCOption, dc int) (string, bool) {
+	fallback := ""
+	for _, option := range options {
+		if option.ID != dc || option.MediaOnly || option.CDN || option.TCPObfuscatedOnly {
+			continue
+		}
+		address := net.JoinHostPort(option.IPAddress, strconv.Itoa(option.Port))
+		if strings.Contains(option.IPAddress, ":") {
+			if fallback == "" {
+				fallback = address
+			}
+			continue
+		}
+		return address, true
+	}
+	return fallback, fallback != ""
 }
