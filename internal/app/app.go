@@ -247,6 +247,15 @@ func (a *App) handle(ctx context.Context, entities tg.Entities, message tg.Messa
 	// command the operator typed and never saw answered belongs at the
 	// level they are actually reading.
 	_, looksLikeCommand := a.Registry.Parse(plain.Message)
+	// Every message this account sends is worth a line. It is low volume
+	// by nature — only what the operator types — and it is the one fact
+	// that separates "the command was dropped" from "the update never
+	// arrived", which no amount of reading the library settles.
+	if plain.Out {
+		a.Logger.Info("update.outgoing", slog.String("chat", bot.PeerID(plain.PeerID)),
+			slog.Int("message", plain.ID), slog.Bool("command", looksLikeCommand),
+			slog.String("text", truncate(plain.Message, 40)))
+	}
 	drop := func(reason string) {
 		if looksLikeCommand && plain.Out {
 			a.Logger.Info("dispatch.dropped", slog.String("reason", reason),
