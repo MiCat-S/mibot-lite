@@ -317,23 +317,60 @@ func listServers(ctx context.Context, path, home string) ([]speedServer, error) 
 // speedListLimit is how many servers a chat message can usefully hold.
 const speedListLimit = 12
 
+// speedNameLimit keeps one server on one line.
+const speedNameLimit = 28
+
+// renderServers lays the list out one server per line.
+//
+// Two lines each with an indented location was 20 lines for 10 servers and
+// read as a wall. A monospace table would align the ids, but the names
+// come back in Japanese as often as not and CJK widths do not align in a
+// pre block anyway, so the id is simply first and the rest follows it.
 func renderServers(servers []speedServer, pinned int, prefix string) string {
-	lines := []string{"🌐 <b>可用测速服务器</b>", ""}
-	for index, server := range servers {
-		if index >= speedListLimit {
+	shown := servers
+	if len(shown) > speedListLimit {
+		shown = shown[:speedListLimit]
+	}
+	// When they are all in one country, saying so once is enough.
+	common := ""
+	for index, server := range shown {
+		if index == 0 {
+			common = server.Country
+		} else if server.Country != common {
+			common = ""
 			break
 		}
-		where := strings.TrimSpace(server.Location + " " + server.Country)
-		mark := ""
-		if server.ID == pinned {
-			mark = " ✅"
+	}
+	header := "🌐 <b>可用测速服务器</b>"
+	if common != "" {
+		header += " · " + command.Escape(common)
+	}
+	lines := []string{header, ""}
+	for _, server := range shown {
+		name := server.Name
+		if runes := []rune(name); len(runes) > speedNameLimit {
+			name = string(runes[:speedNameLimit]) + "…"
 		}
-		lines = append(lines, command.Code(strconv.Itoa(server.ID))+" "+
-			command.Escape(server.Name)+"\n    "+command.Escape(where)+mark)
+		line := command.Code(strconv.Itoa(server.ID)) + " " + command.Escape(name)
+		if where := strings.TrimSpace(server.Location); where != "" {
+			line += " · " + command.Escape(where)
+		}
+		if common == "" && server.Country != "" {
+			line += " " + command.Escape(server.Country)
+		}
+		if server.ID == pinned {
+			line += " ✅"
+		}
+		lines = append(lines, line)
+	}
+	// A worked example beats a placeholder: the id below can be copied.
+	sample := strconv.Itoa(shown[0].ID)
+	if pinned > 0 {
+		sample = strconv.Itoa(pinned)
 	}
 	lines = append(lines, "",
-		"用 "+command.Code(prefix+"speedtest <ID>")+" 测指定服务器，"+
-			command.Code(prefix+"speedtest set <ID>")+" 设为默认。")
+		"<i>"+command.Escape(prefix+"speedtest "+sample)+" 测这一台，"+
+			command.Escape(prefix+"speedtest set "+sample)+" 设为默认</i>")
 	return strings.Join(lines, "\n")
 }
 

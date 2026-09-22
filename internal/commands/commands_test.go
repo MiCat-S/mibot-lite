@@ -480,6 +480,30 @@ func TestRenderServersMarksThePinnedOne(t *testing.T) {
 	if !strings.Contains(text, "1000") {
 		t.Errorf("the nearest server is missing:\n%s", text)
 	}
+	// One line per server, or the list is a wall again: header, blank,
+	// speedListLimit servers, blank, footer.
+	if got := len(strings.Split(text, "\n")); got != speedListLimit+4 {
+		t.Errorf("the list is %d lines, want %d", got, speedListLimit+4)
+	}
+	// A shared country belongs in the header, once.
+	if strings.Count(text, "Japan") != 1 {
+		t.Errorf("the country is repeated per line:\n%s", text)
+	}
+	// The footer has to be something the reader can copy.
+	if !strings.Contains(text, ".speedtest 1003") {
+		t.Errorf("the footer has no usable example:\n%s", text)
+	}
+}
+
+// A list whose servers span countries has to say which is which.
+func TestRenderServersKeepsMixedCountries(t *testing.T) {
+	text := renderServers([]speedServer{
+		{ID: 1, Name: "A", Location: "Tokyo", Country: "Japan"},
+		{ID: 2, Name: "B", Location: "Seoul", Country: "Korea"},
+	}, 0, ".")
+	if !strings.Contains(text, "Japan") || !strings.Contains(text, "Korea") {
+		t.Errorf("a mixed list lost its countries:\n%s", text)
+	}
 }
 
 // TestListServersLive checks the two things the list is for: that the CLI
