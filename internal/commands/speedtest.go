@@ -445,12 +445,17 @@ func Speedtest(a *app.App) {
 		// Speedtest publishes a picture of every result; sending it is what
 		// people expect to see, and the numbers ride along as the caption.
 		if image := resultImage(ctx, result.Link); image != nil {
+			// Both failures carry their reason. A bare "photo_failed" was
+			// logged once from a group and said nothing at all: a chat
+			// that forbids media, a peer that will not resolve and a
+			// network error are three different problems.
 			peer, peerErr := inv.Client.InputPeer(inv.Message.Peer)
-			if peerErr == nil {
-				if sendErr := inv.Client.SendPhoto(ctx, peer, "speedtest.png", image, text, 0); sendErr == nil {
-					return inv.Client.DeleteMessage(ctx, inv.Message)
-				}
-				inv.Log.Info("speedtest.photo_failed")
+			if peerErr != nil {
+				inv.Log.Info("speedtest.peer_unresolved", "error", peerErr.Error())
+			} else if sendErr := inv.Client.SendPhoto(ctx, peer, "speedtest.png", image, text, 0); sendErr != nil {
+				inv.Log.Info("speedtest.photo_failed", "error", sendErr.Error())
+			} else {
+				return inv.Client.DeleteMessage(ctx, inv.Message)
 			}
 		}
 		return inv.Edit(ctx, text)
