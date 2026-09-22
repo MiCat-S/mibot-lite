@@ -190,3 +190,43 @@ func TestPeerCacheKeepsEmojiStatus(t *testing.T) {
 		t.Fatalf("emoji status is %q", info.EmojiStatus)
 	}
 }
+
+// A chat with oneself has no direction, so Telegram leaves Out clear.
+// Gating commands on that flag discarded every command typed in Saved
+// Messages; the question a gate should ask is who wrote the message.
+func TestEnvelopeTreatsSavedMessagesAsOwn(t *testing.T) {
+	peers := NewPeerCache()
+	peers.SetSelf(7)
+	message := &tg.Message{ID: 3, PeerID: &tg.PeerUser{UserID: 7}, Message: ".ping"}
+	envelope, ok := Envelope(message, 7, false, peers)
+	if !ok {
+		t.Fatal("envelope failed")
+	}
+	if !envelope.Saved {
+		t.Fatal("a message whose peer is the account is in Saved Messages")
+	}
+	if envelope.SenderID() != 7 {
+		t.Fatalf("sender is %d, want the account", envelope.SenderID())
+	}
+	if !envelope.Out {
+		t.Fatal("the account is the only writer in Saved Messages, so this is its own")
+	}
+}
+
+// Someone else's private message must not be mistaken for the account's.
+func TestEnvelopeKeepsOtherPeopleIncoming(t *testing.T) {
+	peers := NewPeerCache()
+	peers.SetSelf(7)
+	message := &tg.Message{ID: 4, PeerID: &tg.PeerUser{UserID: 99}, Message: ".ping"}
+	message.SetFromID(&tg.PeerUser{UserID: 99})
+	envelope, ok := Envelope(message, 7, false, peers)
+	if !ok {
+		t.Fatal("envelope failed")
+	}
+	if envelope.Out || envelope.Saved {
+		t.Fatalf("another user's message: out=%v saved=%v", envelope.Out, envelope.Saved)
+	}
+	if envelope.SenderID() != 99 {
+		t.Fatalf("sender is %d, want 99", envelope.SenderID())
+	}
+}

@@ -138,6 +138,12 @@ func Envelope(message *tg.Message, selfID int64, edited bool, peers *PeerCache) 
 	if _, hasSaved := message.GetSavedPeerID(); hasSaved {
 		result.Saved = true
 	}
+	// Telegram leaves Out clear in a chat with oneself: there is no
+	// direction to record. The account is the only writer there, so the
+	// envelope says so rather than leaving callers to rediscover it.
+	if result.Saved && result.SenderID() == selfID {
+		result.Out = true
+	}
 	editDate, hasEdit := message.GetEditDate()
 	result.Edited = edited || (hasEdit && editDate != 0)
 	_, result.Forward = message.GetFwdFrom()

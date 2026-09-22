@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -135,7 +136,7 @@ func Prepare(ctx context.Context, options Options) (*App, error) {
 
 	protocol := protocolLogger(logger, options.Debug)
 	gapsConfig := updates.Config{
-		Handler: app.dispatcher(),
+		Handler: loggingHandler{next: app.dispatcher(), logger: logger},
 		Logger:  protocol,
 		OnChannelTooLong: func(channelID int64) {
 			logger.Warn("updates.channel_too_long", slog.Int64("channel", channelID))
@@ -202,6 +203,62 @@ func (f levelFilter) WithGroup(name string) slog.Handler {
 	return levelFilter{handler: f.handler.WithGroup(name), floor: f.floor}
 }
 
+// loggingHandler records what the server actually pushed, before any of
+// this program's own filtering sees it.
+//
+// It exists because "the command did nothing" and "the update never
+// arrived" produce identical silence, and no amount of reading gotd
+// settles which one is happening. Volume is low: a busy account pushes a
+// handful of these a minute.
+type loggingHandler struct {
+	next   telegram.UpdateHandler
+	logger *slog.Logger
+}
+
+func (h loggingHandler) Handle(ctx context.Context, updates tg.UpdatesClass) error {
+	switch value := updates.(type) {
+	case *tg.Updates:
+		h.logger.Debug("update.batch", slog.String("kind", "Updates"), slog.Any("types", updateNames(value.Updates)))
+	case *tg.UpdatesCombined:
+		h.logger.Debug("update.batch", slog.String("kind", "UpdatesCombined"), slog.Any("types", updateNames(value.Updates)))
+	case *tg.UpdateShort:
+		h.logger.Debug("update.batch", slog.String("kind", "UpdateShort"), slog.Any("types", updateNames([]tg.UpdateClass{value.Update})))
+	default:
+		h.logger.Debug("update.batch", slog.String("kind", fmt.Sprintf("%T", updates)))
+	}
+	return h.next.Handle(ctx, updates)
+}
+
+// updateNames lists the type names in a batch, with the chat for the
+// message-bearing ones.
+func updateNames(list []tg.UpdateClass) []string {
+	names := make([]string, 0, len(list))
+	for _, item := range list {
+		name := fmt.Sprintf("%T", item)
+		if index := strings.LastIndexByte(name, '.'); index >= 0 {
+			name = name[index+1:]
+		}
+		switch value := item.(type) {
+		case *tg.UpdateNewMessage:
+			name += "(" + messageChat(value.Message) + ")"
+		case *tg.UpdateNewChannelMessage:
+			name += "(" + messageChat(value.Message) + ")"
+		case *tg.UpdateEditMessage:
+			name += "(" + messageChat(value.Message) + ")"
+		}
+		names = append(names, name)
+	}
+	return names
+}
+
+func messageChat(message tg.MessageClass) string {
+	plain, ok := message.(*tg.Message)
+	if !ok {
+		return "?"
+	}
+	return bot.PeerID(plain.PeerID)
+}
+
 func (a *App) dispatcher() tg.UpdateDispatcher {
 	dispatcher := tg.NewUpdateDispatcher()
 	dispatcher.OnNewMessage(func(ctx context.Context, entities tg.Entities, update *tg.UpdateNewMessage) error {
@@ -247,17 +304,19 @@ func (a *App) handle(ctx context.Context, entities tg.Entities, message tg.Messa
 	// command the operator typed and never saw answered belongs at the
 	// level they are actually reading.
 	_, looksLikeCommand := a.Registry.Parse(plain.Message)
-	// Every message this account sends is worth a line. It is low volume
-	// by nature — only what the operator types — and it is the one fact
-	// that separates "the command was dropped" from "the update never
-	// arrived", which no amount of reading the library settles.
-	if plain.Out {
-		a.Logger.Info("update.outgoing", slog.String("chat", bot.PeerID(plain.PeerID)),
-			slog.Int("message", plain.ID), slog.Bool("command", looksLikeCommand),
-			slog.String("text", truncate(plain.Message, 40)))
+	envelope, converted := bot.Envelope(plain, client.SelfID(), edited, a.peers)
+	// Whether the account itself wrote this, which is the real question a
+	// command gate asks. The Out flag alone answers it wrongly in Saved
+	// Messages: a chat with oneself has no direction, Telegram leaves the
+	// flag clear, and every command typed there was being discarded as
+	// someone else's message.
+	mine := plain.Out || (converted && envelope.SenderID() == client.SelfID())
+	if mine {
+		a.Logger.Debug("update.outgoing", slog.String("chat", bot.PeerID(plain.PeerID)),
+			slog.Int("message", plain.ID), slog.Bool("command", looksLikeCommand))
 	}
 	drop := func(reason string) {
-		if looksLikeCommand && plain.Out {
+		if looksLikeCommand && mine {
 			a.Logger.Info("dispatch.dropped", slog.String("reason", reason),
 				slog.Int("message", plain.ID), slog.String("text", truncate(plain.Message, 40)))
 			return
@@ -268,14 +327,11 @@ func (a *App) handle(ctx context.Context, entities tg.Entities, message tg.Messa
 	case edited:
 		drop("edited")
 		return
-	case !plain.Out:
-		drop("incoming")
-		return
-	}
-	envelope, ok := bot.Envelope(plain, client.SelfID(), edited, a.peers)
-	switch {
-	case !ok:
+	case !converted:
 		drop("unaddressable peer")
+		return
+	case !mine:
+		drop("not written by this account")
 		return
 	case envelope.Edited:
 		drop("carries an edit date")
