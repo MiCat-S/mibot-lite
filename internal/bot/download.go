@@ -28,7 +28,14 @@ var ErrTooLarge = errors.New("file exceeds the size limit")
 // here rather than left to the caller's context.
 const dcConnectTimeout = 20 * time.Second
 
-// mediaDC opens a connection to another data centre.
+// dcConnection is a held connection to another data centre.
+type dcConnection struct {
+	api    *tg.Client
+	closer io.Closer
+}
+
+// mediaDC returns a connection to another data centre, opening one the
+// first time and keeping it afterwards.
 //
 // It asks for an ordinary connection rather than a media-only one. Media
 // DCs live on their own address list, and a host that reaches Telegram
@@ -36,14 +43,40 @@ const dcConnectTimeout = 20 * time.Second
 // hung inside the pool waiting for a connection that never came up, with
 // the session itself healthy on DC 4 the whole time. The ordinary address
 // is the one already known to work.
-func (c *Client) mediaDC(ctx context.Context, dcID int) (*tg.Client, io.Closer, error) {
-	ctx, cancel := context.WithTimeout(ctx, dcConnectTimeout)
-	defer cancel()
-	invoker, err := c.tg.DC(ctx, dcID, 1)
-	if err != nil {
-		return nil, nil, fmt.Errorf("connect to DC %d: %w", dcID, err)
+//
+// The connection is kept rather than closed after each file. Opening one
+// is a full handshake plus an authorization transfer — seconds, not
+// milliseconds — and an account whose session is on one data centre and
+// whose avatars live on another pays that on every single download. One
+// idle socket is a much smaller price than repeating the handshake.
+func (c *Client) mediaDC(ctx context.Context, dcID int) (*tg.Client, error) {
+	c.dcMu.Lock()
+	defer c.dcMu.Unlock()
+	if held, ok := c.dcConns[dcID]; ok {
+		return held.api, nil
 	}
-	return tg.NewClient(invoker), invoker, nil
+	dial, cancel := context.WithTimeout(ctx, dcConnectTimeout)
+	defer cancel()
+	invoker, err := c.tg.DC(dial, dcID, 1)
+	if err != nil {
+		return nil, fmt.Errorf("connect to DC %d: %w", dcID, err)
+	}
+	api := tg.NewClient(invoker)
+	if c.dcConns == nil {
+		c.dcConns = map[int]*dcConnection{}
+	}
+	c.dcConns[dcID] = &dcConnection{api: api, closer: invoker}
+	return api, nil
+}
+
+// CloseDataCentres releases every extra data-centre connection.
+func (c *Client) CloseDataCentres() {
+	c.dcMu.Lock()
+	defer c.dcMu.Unlock()
+	for dcID, held := range c.dcConns {
+		_ = held.closer.Close()
+		delete(c.dcConns, dcID)
+	}
 }
 
 // limitedWriter fails once more than limit bytes arrive, so a hostile or
@@ -84,11 +117,10 @@ func (c *Client) DownloadFile(ctx context.Context, location tg.InputFileLocation
 	if target == 0 {
 		return nil, err
 	}
-	api, closer, dcErr := c.mediaDC(ctx, target)
+	api, dcErr := c.mediaDC(ctx, target)
 	if dcErr != nil {
 		return nil, dcErr
 	}
-	defer closer.Close()
 	return download(ctx, api, location, limit)
 }
 

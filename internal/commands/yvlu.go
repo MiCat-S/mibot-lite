@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gotd/td/tg"
@@ -345,6 +346,39 @@ type quotePayload struct {
 type yvluService struct {
 	a     *app.App
 	store *store.Store[yvluConfig]
+
+	// rendered caches encoded avatars, keyed by the peer and the photo id
+	// Telegram gave it. A changed avatar is a new photo id, so a stale
+	// entry can never be served; the key does the invalidating.
+	avatarMu sync.Mutex
+	rendered map[string]*quotePhot
+}
+
+// avatarCacheLimit bounds the cache. Quoting is bursty and repetitive —
+// the same handful of people, over and over — so a small map catches
+// nearly everything.
+const avatarCacheLimit = 32
+
+func (s *yvluService) cachedAvatar(key string) (*quotePhot, bool) {
+	s.avatarMu.Lock()
+	defer s.avatarMu.Unlock()
+	photo, ok := s.rendered[key]
+	return photo, ok
+}
+
+func (s *yvluService) cacheAvatar(key string, photo *quotePhot) {
+	s.avatarMu.Lock()
+	defer s.avatarMu.Unlock()
+	if s.rendered == nil {
+		s.rendered = map[string]*quotePhot{}
+	}
+	if len(s.rendered) >= avatarCacheLimit {
+		for existing := range s.rendered {
+			delete(s.rendered, existing)
+			break
+		}
+	}
+	s.rendered[key] = photo
 }
 
 // Yvlu registers .yvlu.
@@ -397,14 +431,17 @@ func (s *yvluService) handle(ctx context.Context, inv *command.Invocation) error
 	if err := inv.Edit(ctx, feedback("working", "正在生成语录贴纸", "")); err != nil {
 		return err
 	}
+	started := time.Now()
 	payload, err := s.build(ctx, inv, reply, options)
 	if err != nil {
 		return err
 	}
+	built := time.Now()
 	image, extension, err := s.render(ctx, payload)
 	if err != nil {
 		return err
 	}
+	rendered := time.Now()
 	peer, err := inv.Client.InputPeer(inv.Message.Peer)
 	if err != nil {
 		return err
@@ -424,6 +461,14 @@ func (s *yvluService) handle(ctx context.Context, inv *command.Invocation) error
 	if err := inv.Client.SendDocumentWith(ctx, peer, image, document); err != nil {
 		return err
 	}
+	// Where a slow quote spent its time. At debug, because it is a
+	// diagnostic: the answer to "why did that take seven seconds" is one
+	// of these three numbers, and guessing at it cost a deployment.
+	inv.Log.Debug("yvlu.timing",
+		"collect", built.Sub(started).String(),
+		"render", rendered.Sub(built).String(),
+		"upload", time.Since(rendered).String(),
+		"bytes", len(image))
 	return inv.Client.DeleteMessage(ctx, inv.Message)
 }
 
@@ -761,6 +806,14 @@ func (s *yvluService) avatar(ctx context.Context, inv *command.Invocation, messa
 		}
 		peer = resolved
 	}
+	// A cached entry skips a cross-data-centre download entirely, which is
+	// most of what a quote spends its time on.
+	key := avatarKey(inv, peer)
+	if key != "" {
+		if photo, ok := s.cachedAvatar(key); ok {
+			return photo
+		}
+	}
 	// Small first, then large: a peer whose small photo will not download
 	// often still has the big one.
 	data, err := inv.Client.DownloadProfilePhoto(ctx, peer, false, 2<<20)
@@ -778,7 +831,33 @@ func (s *yvluService) avatar(ctx context.Context, inv *command.Invocation, messa
 	if err != nil {
 		return nil
 	}
-	return &quotePhot{URL: "data:image/png;base64," + base64.StdEncoding.EncodeToString(encoded)}
+	photo := &quotePhot{URL: "data:image/png;base64," + base64.StdEncoding.EncodeToString(encoded)}
+	if key != "" {
+		s.cacheAvatar(key, photo)
+	}
+	return photo
+}
+
+// avatarKey identifies one rendered avatar: the peer plus the id of the
+// photo it is wearing.
+func avatarKey(inv *command.Invocation, peer tg.InputPeerClass) string {
+	switch value := peer.(type) {
+	case *tg.InputPeerSelf:
+		if photo, ok := inv.Client.Self().GetPhoto(); ok {
+			if current, ok := photo.(*tg.UserProfilePhoto); ok {
+				return "self:" + strconv.FormatInt(current.PhotoID, 10)
+			}
+		}
+	case *tg.InputPeerUser:
+		if info, known := inv.Client.Peers().User(value.UserID); known && info.PhotoID != 0 {
+			return "user:" + strconv.FormatInt(value.UserID, 10) + ":" + strconv.FormatInt(info.PhotoID, 10)
+		}
+	case *tg.InputPeerChannel:
+		if info, known := inv.Client.Peers().Channel(value.ChannelID); known && info.PhotoID != 0 {
+			return "channel:" + strconv.FormatInt(value.ChannelID, 10) + ":" + strconv.FormatInt(info.PhotoID, 10)
+		}
+	}
+	return ""
 }
 
 // describeMedia attaches whatever the quoted message carried: a picture is

@@ -297,6 +297,7 @@ func (a *App) Run(ctx context.Context) error {
 		a.peers.SetSelf(self.ID)
 		a.peers.RememberUsers([]tg.UserClass{self})
 		client := bot.New(a.client, a.peers, self, a.Logger)
+		defer client.CloseDataCentres()
 		a.bot.Store(client)
 		a.Logger.Info("runtime.ready", slog.Int64("account", self.ID), slog.Int("commands", len(a.Registry.Commands())), slog.String("version", a.Version))
 		for _, job := range a.Registry.Jobs() {

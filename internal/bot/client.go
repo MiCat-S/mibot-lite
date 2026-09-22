@@ -10,6 +10,7 @@ import (
 	"math/rand/v2"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gotd/td/telegram"
@@ -33,6 +34,10 @@ type Client struct {
 	self   *tg.User
 	logger *slog.Logger
 	upload *uploader.Uploader
+
+	// dcConns holds the extra data-centre connections downloads opened.
+	dcMu    sync.Mutex
+	dcConns map[int]*dcConnection
 }
 
 // New wraps an authorized client.
