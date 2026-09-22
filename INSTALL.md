@@ -1,5 +1,26 @@
 # 从零部署 MiBot Lite
 
+## 一键安装
+
+服务器上执行（Linux + systemd + root）：
+
+```sh
+bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scripts/install.sh)
+```
+
+它会检测架构、下载对应构件、按发布自带的 `checksums.txt` 校验 SHA-256、
+没有会话就先带你登录、装好 systemd 单元并启动。重跑即升级，`config.json`
+和 `data/` 原样保留。
+
+**用 `bash <(curl …)` 而不是 `curl … | bash`**：登录要输手机号和验证码，
+管道进来的脚本没有键盘。拿不到终端时它会装好二进制并告诉你下一步命令。
+
+常用选项：`--root 目录`（默认 `/root/mibot-lite`）、`--no-service`（只装二进制不碰 systemd）。
+
+下面是手动分步的流程，想清楚每一步做了什么再看。
+
+---
+
 每一步都注明在哪执行。服务器需要 Linux + systemd + root。
 
 ## 1. 本机：编译

@@ -56,12 +56,20 @@ case "$(uname -m)" in
 esac
 ASSET="mibot-lite-linux-$ARCH"
 
-# A service already running on this directory must not have its binary
-# swapped underneath it mid-request; stop it first and start it again at
-# the end, so an upgrade is a restart rather than a surprise.
-WAS_RUNNING=0
-if systemctl is-active --quiet "$SERVICE" 2>/dev/null; then
-  WAS_RUNNING=1
+# A service running on *this* directory must not have its binary swapped
+# underneath it mid-request, so it is stopped first and started again at
+# the end. A service running on some other directory is none of this
+# install's business: asking systemd which root the unit actually points
+# at is what keeps `--root somewhere-else` from taking down a live bot,
+# which is exactly what an earlier version of this script did.
+OWNS_SERVICE=0
+if [ "$WITH_SERVICE" = 1 ] && systemctl is-active --quiet "$SERVICE" 2>/dev/null; then
+  RUNNING_ROOT=$(systemctl show "$SERVICE" -p WorkingDirectory --value 2>/dev/null || true)
+  if [ "$RUNNING_ROOT" = "$ROOT" ]; then
+    OWNS_SERVICE=1
+  else
+    say "A mibot-lite service is running on ${RUNNING_ROOT:-another directory}; leaving it alone"
+  fi
 fi
 
 say "Fetching the latest release of $REPO"
@@ -113,7 +121,7 @@ if ! grep -q '"session"' "$ROOT/config.json" 2>/dev/null; then
   fi
 fi
 
-if [ "$WAS_RUNNING" = 1 ]; then
+if [ "$OWNS_SERVICE" = 1 ]; then
   say "Stopping the running service to replace its binary"
   systemctl stop "$SERVICE"
 fi
@@ -123,8 +131,19 @@ say "Checking that this build can read $ROOT"
 "$ROOT/mibot-lite" --check --root "$ROOT" || die "the new binary cannot read this deployment; nothing was started"
 
 if [ "$WITH_SERVICE" = 0 ]; then
-  say "Installed to $ROOT/mibot-lite (service skipped)"
+  say "Installed to $ROOT/mibot-lite (service untouched)"
   exit 0
+fi
+
+# Installing over a unit that points somewhere else would repoint the
+# service at this directory without saying so.
+if [ -f "$UNIT" ]; then
+  EXISTING_ROOT=$(systemctl show "$SERVICE" -p WorkingDirectory --value 2>/dev/null || true)
+  if [ -n "$EXISTING_ROOT" ] && [ "$EXISTING_ROOT" != "$ROOT" ]; then
+    die "$SERVICE already points at $EXISTING_ROOT.
+  Installing here would repoint it at $ROOT and orphan that deployment.
+  Use --root $EXISTING_ROOT to upgrade it, or remove the unit first."
+  fi
 fi
 
 # systemd-analyze reads the file name as the unit name, so the rendered

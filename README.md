@@ -58,7 +58,11 @@ Go 函数。代价是装新命令要重新编译；换来的是一个更小的�
 
 ## 部署
 
-从零部署见 [INSTALL.md](INSTALL.md)。已经有一个 MiBox 部署目录时，
+```sh
+bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scripts/install.sh)
+```
+
+下载、校验、登录、装服务一步到位，重跑即升级。分步流程见 [INSTALL.md](INSTALL.md)。已经有一个 MiBox 部署目录时，
 `--import-mibox` 可以把 ai、sum、whois 等命令的配置直接搬过来：
 
 ```sh
