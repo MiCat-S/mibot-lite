@@ -30,6 +30,12 @@ import (
 // no font stack and no emoji rendering lives in this process.
 const quoteEndpoint = "https://quote-api-enhanced.zhetengsha.eu.org/generate.webp"
 
+// quoteUserAgent is not decoration: the service sits behind a filter that
+// answers 403 with a challenge page to anything it does not recognise.
+// This exact string is what the plugin sent and what still gets through,
+// so it is part of the protocol rather than a courtesy.
+const quoteUserAgent = "TeleBox/0.2.1"
+
 type yvluConfig struct {
 	StickerSet string `json:"stickerSetShortName"`
 }
@@ -547,9 +553,13 @@ func (s *yvluService) render(ctx context.Context, payload *quotePayload) ([]byte
 		return nil, "", err
 	}
 	response, err := httpx.Do(ctx, httpx.Request{Method: "POST", URL: quoteEndpoint, Body: encoded,
-		Headers: map[string]string{"Content-Type": "application/json"}, Timeout: 60 * time.Second, MaxBytes: 20 << 20})
+		Headers: map[string]string{"Content-Type": "application/json", "User-Agent": quoteUserAgent},
+		Timeout: 60 * time.Second, MaxBytes: 20 << 20})
 	if err != nil {
 		return nil, "", failf("quote 服务不可用：%s", httpx.Reason(err))
+	}
+	if response.Status == 403 {
+		return nil, "", fail("quote 服务拒绝了请求（403），可能是它换了准入规则")
 	}
 	if !response.OK() {
 		return nil, "", failf("quote-api HTTP %d", response.Status)
