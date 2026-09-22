@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -203,7 +204,7 @@ func extractOokla(archive []byte, target string) (string, error) {
 // — it aborts on a null string before it measures anything. Handing it a
 // writable directory of its own is also what keeps ProtectSystem=strict
 // from being the thing that breaks it.
-func runExternal(ctx context.Context, path, kind, home string) (*reading, error) {
+func runExternal(ctx context.Context, path, kind, home string, server int) (*reading, error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	if err := os.MkdirAll(home, 0o700); err != nil {
@@ -213,8 +214,14 @@ func runExternal(ctx context.Context, path, kind, home string) (*reading, error)
 	switch kind {
 	case "ookla":
 		arguments = []string{"-f", "json", "--accept-license", "--accept-gdpr"}
+		if server > 0 {
+			arguments = append(arguments, "-s", strconv.Itoa(server))
+		}
 	default:
 		arguments = []string{"--json", "--secure"}
+		if server > 0 {
+			arguments = append(arguments, "--server", strconv.Itoa(server))
+		}
 	}
 	tool := exec.CommandContext(ctx, path, arguments...)
 	tool.Env = append(os.Environ(), "HOME="+home)
@@ -241,13 +248,13 @@ func runExternal(ctx context.Context, path, kind, home string) (*reading, error)
 		if err := json.Unmarshal(line, &parsed); err != nil {
 			return nil, fail("无法解析 speedtest 的输出")
 		}
-		server := strings.TrimSpace(parsed.Server.Name + " " + parsed.Server.Location)
+		where := strings.TrimSpace(parsed.Server.Name + " " + parsed.Server.Location)
 		return &reading{
 			Source: "Ookla Speedtest", Latency: durationFromMillis(parsed.Ping.Latency),
 			Jitter: durationFromMillis(parsed.Ping.Jitter),
 			// Ookla reports bytes per second.
 			Download: parsed.Download.Bandwidth * 8, Upload: parsed.Upload.Bandwidth * 8,
-			Server: server, ISP: parsed.ISP, Link: parsed.Result.URL,
+			Server: where, ISP: parsed.ISP, Link: parsed.Result.URL,
 			ExternalIP: parsed.Interface.ExternalIP,
 		}, nil
 	}
@@ -255,13 +262,79 @@ func runExternal(ctx context.Context, path, kind, home string) (*reading, error)
 	if err := json.Unmarshal(line, &parsed); err != nil {
 		return nil, fail("无法解析 speedtest-cli 的输出")
 	}
-	server := strings.TrimSpace(parsed.Server.Sponsor + " " + parsed.Server.Name)
+	where := strings.TrimSpace(parsed.Server.Sponsor + " " + parsed.Server.Name)
 	return &reading{
 		Source: "speedtest-cli", Latency: durationFromMillis(parsed.Ping),
 		Download: parsed.Download, Upload: parsed.Upload,
-		Server: server, ISP: parsed.Client.ISP, Link: parsed.Share,
+		Server: where, ISP: parsed.Client.ISP, Link: parsed.Share,
 		ExternalIP: parsed.Client.IP,
 	}, nil
+}
+
+// speedServer is one entry of `speedtest -f json -L`.
+type speedServer struct {
+	ID       int    `json:"id"`
+	Host     string `json:"host"`
+	Name     string `json:"name"`
+	Location string `json:"location"`
+	Country  string `json:"country"`
+}
+
+// listServers asks the CLI which servers it can see from here.
+//
+// Ookla orders them by its own idea of proximity, so the first entries are
+// the ones worth pinning; the whole list is hundreds long and no use in a
+// chat.
+func listServers(ctx context.Context, path, home string) ([]speedServer, error) {
+	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		return nil, err
+	}
+	tool := exec.CommandContext(ctx, path, "-f", "json", "-L", "--accept-license", "--accept-gdpr")
+	tool.Env = append(os.Environ(), "HOME="+home)
+	var out, complaint bytes.Buffer
+	tool.Stdout = &out
+	tool.Stderr = &complaint
+	if err := tool.Run(); err != nil {
+		if detail := lastLine(complaint.String()); detail != "" {
+			return nil, fail("取服务器列表失败：" + detail)
+		}
+		return nil, fmt.Errorf("speedtest -L failed: %w", err)
+	}
+	var parsed struct {
+		Servers []speedServer `json:"servers"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &parsed); err != nil {
+		return nil, fail("无法解析服务器列表")
+	}
+	if len(parsed.Servers) == 0 {
+		return nil, fail("没有可用的测速服务器")
+	}
+	return parsed.Servers, nil
+}
+
+// speedListLimit is how many servers a chat message can usefully hold.
+const speedListLimit = 12
+
+func renderServers(servers []speedServer, pinned int, prefix string) string {
+	lines := []string{"🌐 <b>可用测速服务器</b>", ""}
+	for index, server := range servers {
+		if index >= speedListLimit {
+			break
+		}
+		where := strings.TrimSpace(server.Location + " " + server.Country)
+		mark := ""
+		if server.ID == pinned {
+			mark = " ✅"
+		}
+		lines = append(lines, command.Code(strconv.Itoa(server.ID))+" "+
+			command.Escape(server.Name)+"\n    "+command.Escape(where)+mark)
+	}
+	lines = append(lines, "",
+		"用 "+command.Code(prefix+"speedtest <ID>")+" 测指定服务器，"+
+			command.Code(prefix+"speedtest set <ID>")+" 设为默认。")
+	return strings.Join(lines, "\n")
 }
 
 // resultImage fetches the picture Speedtest publishes for a result, or
@@ -288,12 +361,23 @@ func resultImage(ctx context.Context, link string) []byte {
 
 // lastLine returns the final non-empty line, which is where these tools
 // put the reason they gave up.
+//
+// Ookla writes that line as a JSON log record. Its message field is a
+// sentence a person can act on ("Could not retrieve or read
+// configuration"); the surrounding JSON is noise in a chat, so it is
+// unwrapped when it parses and kept verbatim when it does not.
 func lastLine(text string) string {
 	lines := strings.Split(strings.TrimSpace(text), "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := strings.TrimSpace(lines[i])
 		if line == "" {
 			continue
+		}
+		var record struct {
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(line), &record); err == nil && record.Message != "" {
+			line = record.Message
 		}
 		if len(line) > 200 {
 			line = line[:200] + "…"
@@ -345,22 +429,32 @@ func formatLatency(d time.Duration) string {
 	return fmt.Sprintf("%.1f ms", float64(d.Microseconds())/1000)
 }
 
-func speedtestHelp(dataDir, prefix string) string {
+func speedtestHelp(dataDir, prefix string, pinned int) string {
 	p := command.Escape(prefix)
 	tool, kind := externalTool(dataDir)
 	source := "未安装，首次运行会自动下载 Ookla 官方 CLI"
 	if tool != "" {
 		source = "使用 " + kind + "：" + tool
 	}
+	server := "自动挑选最近的服务器"
+	if pinned > 0 {
+		server = "固定用 " + strconv.Itoa(pinned)
+	}
 	return "🚀 <b>网络测速</b>\n\n测量这台服务器的出口带宽。\n\n• <code>" + p +
-		"speedtest</code> 完整测速\n• <code>" + p + "st</code> 同上，简写\n\n<b>当前来源</b>\n" +
-		command.Escape(source) +
-		"\n\n用 Ookla 官方 CLI 测：它自己挑就近的测速服务器，报得出 ISP，还会给一张结果图。没装的话首次运行会把" +
-		"官方静态构件下载到部署目录（校验 SHA-256，不写系统目录），之后直接复用。\n\n输出里的出口地址会打码。"
+		"speedtest</code> 完整测速\n• <code>" + p + "st</code> 同上，简写\n• <code>" + p +
+		"speedtest list</code> 列出可用服务器\n• <code>" + p +
+		"speedtest &lt;ID&gt;</code> 只这一次用指定服务器\n• <code>" + p +
+		"speedtest set &lt;ID&gt;</code> 设为默认服务器\n• <code>" + p +
+		"speedtest clear</code> 恢复自动挑选\n• <code>" + p +
+		"speedtest config</code> 看当前设置\n\n<b>当前来源</b>\n" + command.Escape(source) +
+		"\n<b>服务器</b>\n" + command.Escape(server) +
+		"\n\n用 Ookla 官方 CLI 测：它自己挑就近的测速服务器，报得出 ISP，还会给一张结果图。没装的话首次" +
+		"运行会把官方静态构件下载到部署目录（校验 SHA-256，不写系统目录），之后直接复用。\n\n" +
+		"指定的服务器测不通时会自动退回自动挑选，并在结果里说明。输出里的出口地址会打码。"
 }
 
 // render lays out a finished reading.
-func render(result *reading, elapsed time.Duration) string {
+func render(result *reading, elapsed time.Duration, note string) string {
 	lines := []string{"🚀 <b>网络测速</b>", ""}
 	if result.Server != "" {
 		lines = append(lines, "📍 节点: "+command.Code(result.Server))
@@ -381,6 +475,9 @@ func render(result *reading, elapsed time.Duration) string {
 		"⬇️ 下载: "+command.Code(formatSpeed(result.Download)),
 		"⬆️ 上传: "+command.Code(formatSpeed(result.Upload)),
 		"")
+	if note != "" {
+		lines = append(lines, "<i>"+command.Escape(note)+"</i>")
+	}
 	if result.Link != "" {
 		lines = append(lines, "🔗 <a href=\""+command.Escape(result.Link)+"\">详细结果</a>")
 	}
@@ -389,50 +486,144 @@ func render(result *reading, elapsed time.Duration) string {
 	return strings.Join(lines, "\n")
 }
 
+// speedtestDocument remembers a pinned server between runs.
+type speedtestDocument struct {
+	Server int `json:"server,omitempty"`
+}
+
 // Speedtest registers .speedtest and its short form.
 func Speedtest(a *app.App) {
 	var running sync.Mutex
+	settings := newStore(a, "speedtest.json", func() speedtestDocument { return speedtestDocument{} })
+	pinnedServer := func() int {
+		current, err := settings.Read()
+		if err != nil {
+			return 0
+		}
+		return current.Server
+	}
+	help := func(prefix string) string { return speedtestHelp(a.DataDir(), prefix, pinnedServer()) }
+
+	// ensureTool finds the CLI, installing it the first time.
+	ensureTool := func(ctx context.Context, inv *command.Invocation) (string, string, error) {
+		if tool, kind := externalTool(a.DataDir()); tool != "" {
+			return tool, kind, nil
+		}
+		if err := inv.Edit(ctx, "🚀 <b>网络测速</b>\n\n首次运行，正在下载 Ookla 官方 CLI…"); err != nil {
+			return "", "", err
+		}
+		installed, err := installOokla(ctx, a.DataDir())
+		if err != nil {
+			inv.Log.Warn("speedtest.install_failed", "error", err.Error())
+			return "", "", err
+		}
+		return installed, "ookla", nil
+	}
+	installProblem := func(ctx context.Context, inv *command.Invocation, err error) error {
+		detail, ok := isUserError(err)
+		if !ok {
+			detail = "网络不通或构件无法校验"
+		}
+		return inv.EditText(ctx, "❌ 无法安装 Speedtest CLI："+detail+"\n手动装好 speedtest 后再试")
+	}
+
 	handle := func(ctx context.Context, inv *command.Invocation) error {
 		dataDir := a.DataDir()
-		switch strings.ToLower(inv.Arg(0)) {
+		home := filepath.Join(dataDir, "speedtest")
+		first := strings.ToLower(inv.Arg(0))
+
+		switch first {
 		case "help", "h":
-			return inv.Edit(ctx, speedtestHelp(dataDir, inv.Prefix))
+			return inv.Edit(ctx, help(inv.Prefix))
+		case "debug", "level":
+			// Reserved by .log; here it would only confuse.
+		case "config":
+			return inv.Edit(ctx, help(inv.Prefix))
+		case "clear", "auto", "自动":
+			if err := settings.Update(func(value *speedtestDocument) error {
+				value.Server = 0
+				return nil
+			}); err != nil {
+				return err
+			}
+			return inv.Edit(ctx, "✅ 已恢复自动挑选服务器")
+		case "set":
+			id, err := strconv.Atoi(inv.Arg(1))
+			if err != nil || id <= 0 {
+				return inv.EditText(ctx, "用法：set 后面跟服务器 ID，ID 用 list 查")
+			}
+			if err := settings.Update(func(value *speedtestDocument) error {
+				value.Server = id
+				return nil
+			}); err != nil {
+				return err
+			}
+			return inv.Edit(ctx, "✅ 默认服务器已设为 "+command.Code(strconv.Itoa(id)))
 		}
+
 		// Running two at once would have them measure each other.
 		if !running.TryLock() {
 			return inv.EditText(ctx, "已有一个测速在进行，请稍候")
 		}
 		defer running.Unlock()
 
-		started := time.Now()
-		tool, kind := externalTool(dataDir)
-		if tool == "" {
-			// Nothing installed: fetch the official CLI once and keep it.
-			if err := inv.Edit(ctx, "🚀 <b>网络测速</b>\n\n首次运行，正在下载 Ookla 官方 CLI…"); err != nil {
+		if first == "list" || first == "servers" || first == "列表" {
+			if err := inv.Edit(ctx, "🌐 正在取服务器列表…"); err != nil {
 				return err
 			}
-			installed, err := installOokla(ctx, dataDir)
+			tool, kind, err := ensureTool(ctx, inv)
 			if err != nil {
-				inv.Log.Warn("speedtest.install_failed", "error", err.Error())
-				detail, ok := isUserError(err)
-				if !ok {
-					detail = "网络不通或构件无法校验"
-				}
-				return inv.EditText(ctx, "❌ 无法安装 Speedtest CLI："+detail+"\n手动装好 speedtest 后再试")
+				return installProblem(ctx, inv, err)
 			}
-			tool, kind = installed, "ookla"
+			if kind != "ookla" {
+				return inv.EditText(ctx, "只有 Ookla 官方 CLI 能列出服务器，当前用的是 speedtest-cli")
+			}
+			servers, err := listServers(ctx, tool, home)
+			if err != nil {
+				if detail, ok := isUserError(err); ok {
+					return inv.EditText(ctx, "❌ "+detail)
+				}
+				return err
+			}
+			return inv.Edit(ctx, renderServers(servers, pinnedServer(), inv.Prefix))
 		}
-		if err := inv.Edit(ctx, "🚀 <b>网络测速</b>\n\n正在通过 "+command.Escape(kind)+" 测速，约需一分钟…"); err != nil {
+
+		// A bare number picks a server for this run only.
+		request := pinnedServer()
+		once := false
+		if first != "" {
+			id, err := strconv.Atoi(first)
+			if err != nil || id <= 0 {
+				return inv.Edit(ctx, help(inv.Prefix))
+			}
+			request, once = id, true
+		}
+
+		started := time.Now()
+		tool, kind, err := ensureTool(ctx, inv)
+		if err != nil {
+			return installProblem(ctx, inv, err)
+		}
+		where := "，约需一分钟…"
+		if request > 0 {
+			where = "（服务器 " + strconv.Itoa(request) + "），约需一分钟…"
+		}
+		if err := inv.Edit(ctx, "🚀 <b>网络测速</b>\n\n正在通过 "+command.Escape(kind)+" 测速"+command.Escape(where)); err != nil {
 			return err
 		}
-		home := filepath.Join(dataDir, "speedtest")
-		result, err := runExternal(ctx, tool, kind, home)
+		note := ""
+		result, err := runExternal(ctx, tool, kind, home, request)
 		if err != nil {
 			// One retry. The CLI occasionally loses its server part way
-			// through — "Latency test failed", seen twice here — and there
-			// is no second path to fall back on any more.
-			inv.Log.Warn("speedtest.retrying", "tool", kind, "error", err.Error())
-			result, err = runExternal(ctx, tool, kind, home)
+			// through — "Latency test failed", seen twice here — and a
+			// pinned server may simply be gone, so the retry also drops
+			// the pin rather than failing on a choice made days ago.
+			inv.Log.Warn("speedtest.retrying", "tool", kind, "server", request, "error", err.Error())
+			if request > 0 {
+				note = "服务器 " + strconv.Itoa(request) + " 没测通，已改用自动挑选"
+				request = 0
+			}
+			result, err = runExternal(ctx, tool, kind, home, request)
 		}
 		if err != nil {
 			inv.Log.Warn("speedtest.external_failed", "tool", kind, "error", err.Error())
@@ -441,7 +632,10 @@ func Speedtest(a *app.App) {
 			}
 			return inv.EditText(ctx, "❌ 测速失败，请稍后再试")
 		}
-		text := render(result, time.Since(started))
+		if once && note == "" {
+			note = "本次指定了服务器，未改动默认设置"
+		}
+		text := render(result, time.Since(started), note)
 		// Speedtest publishes a picture of every result; sending it is what
 		// people expect to see, and the numbers ride along as the caption.
 		if image := resultImage(ctx, result.Link); image != nil {
@@ -461,9 +655,9 @@ func Speedtest(a *app.App) {
 		return inv.Edit(ctx, text)
 	}
 	a.Registry.Register(
-		&command.Command{Name: "speedtest", Description: "测量服务器网络速度",
-			Help: func(prefix string) string { return speedtestHelp(a.DataDir(), prefix) }, Timeout: 5 * time.Minute, Handle: handle},
+		&command.Command{Name: "speedtest", Description: "测量服务器网络速度", Usage: "[list|set ID|clear|ID]",
+			Help: help, Timeout: 5 * time.Minute, Handle: handle},
 		&command.Command{Name: "st", Description: "speedtest 的简写", Hidden: true,
-			Help: func(prefix string) string { return speedtestHelp(a.DataDir(), prefix) }, Timeout: 5 * time.Minute, Handle: handle},
+			Help: help, Timeout: 5 * time.Minute, Handle: handle},
 	)
 }

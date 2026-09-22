@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -422,7 +423,7 @@ func TestOoklaInstallLive(t *testing.T) {
 		t.Fatalf("externalTool found %q (%s), want the installed copy", found, kind)
 	}
 
-	result, err := runExternal(context.Background(), path, "ookla", filepath.Join(dir, "speedtest"))
+	result, err := runExternal(context.Background(), path, "ookla", filepath.Join(dir, "speedtest"), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -459,5 +460,106 @@ func TestResultImageRefusesOtherSources(t *testing.T) {
 		if image := resultImage(context.Background(), link); image != nil {
 			t.Errorf("%q should not be fetched", link)
 		}
+	}
+}
+
+// The server list is the only way to learn an ID, so it has to show the
+// ID, stay short enough for a chat, and say which one is currently pinned.
+func TestRenderServersMarksThePinnedOne(t *testing.T) {
+	servers := make([]speedServer, 0, speedListLimit+5)
+	for i := 0; i < speedListLimit+5; i++ {
+		servers = append(servers, speedServer{ID: 1000 + i, Name: "Server", Location: "Tokyo", Country: "Japan"})
+	}
+	text := renderServers(servers, 1003, ".")
+	if !strings.Contains(text, "1003") || !strings.Contains(text, "✅") {
+		t.Errorf("the pinned server is not marked:\n%s", text)
+	}
+	if strings.Contains(text, strconv.Itoa(1000+speedListLimit)) {
+		t.Errorf("the list ran past its limit:\n%s", text)
+	}
+	if !strings.Contains(text, "1000") {
+		t.Errorf("the nearest server is missing:\n%s", text)
+	}
+}
+
+// TestListServersLive checks the two things the list is for: that the CLI
+// will enumerate servers from this host, and that an ID taken from that
+// list can actually be measured against. Skipped unless
+// MIBOT_SPEEDTEST_LIVE=1.
+func TestListServersLive(t *testing.T) {
+	if os.Getenv("MIBOT_SPEEDTEST_LIVE") != "1" {
+		t.Skip("set MIBOT_SPEEDTEST_LIVE=1 to reach the real servers")
+	}
+	dir := t.TempDir()
+	home := filepath.Join(dir, "speedtest")
+	path, err := installOokla(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	servers, err := listServers(context.Background(), path, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("取到 %d 个服务器", len(servers))
+	for index, server := range servers {
+		if index >= 3 {
+			break
+		}
+		t.Logf("  %d  %s  %s %s", server.ID, server.Name, server.Location, server.Country)
+	}
+	if servers[0].ID <= 0 || servers[0].Name == "" {
+		t.Fatalf("the first entry is unusable: %+v", servers[0])
+	}
+
+	// A listed server is not necessarily reachable: 56935 in Tokyo
+	// answered the enumeration and then refused the socket. That is the
+	// case the command falls back on, so the test walks the list the same
+	// way rather than insisting the first entry works.
+	var measured *reading
+	var lastErr error
+	for _, server := range servers {
+		result, err := runExternal(context.Background(), path, "ookla", home, server.ID)
+		if err == nil {
+			measured = result
+			t.Logf("指定 %d 测得：%s，下载 %s，上传 %s", server.ID, result.Server,
+				formatSpeed(result.Download), formatSpeed(result.Upload))
+			break
+		}
+		lastErr = err
+		t.Logf("服务器 %d（%s）测不通", server.ID, server.Name)
+	}
+	if measured == nil {
+		// Not a defect here, but the reason has to be readable — that is
+		// what tells the operator to pick another ID.
+		if lastErr == nil || lastErr.Error() == "" {
+			t.Fatal("every server failed and none said why")
+		}
+		t.Skip("这台机器到列表里每个服务器都不通，指定测速无法验证")
+	}
+	if measured.Download <= 0 || measured.Server == "" {
+		t.Error("pinning a server produced an empty measurement")
+	}
+
+	// Auto selection has to keep working, since that is where a failed
+	// pin lands.
+	auto, err := runExternal(context.Background(), path, "ookla", home, 0)
+	if err != nil {
+		t.Fatalf("auto selection failed after a pinned run: %v", err)
+	}
+	t.Logf("自动挑选：%s，下载 %s", auto.Server, formatSpeed(auto.Download))
+}
+
+// The CLI's failure reason is a JSON log record; a chat needs the
+// sentence inside it, not the envelope.
+func TestLastLineUnwrapsTheCLIRecord(t *testing.T) {
+	raw := `{"type":"log","timestamp":"2026-09-22T10:53:22Z","message":"Could not retrieve or read configuration","level":"error"}`
+	if got := lastLine(raw); got != "Could not retrieve or read configuration" {
+		t.Errorf("lastLine = %q", got)
+	}
+	if got := lastLine("ookla failed: signal: aborted"); got != "ookla failed: signal: aborted" {
+		t.Errorf("a plain line should survive unchanged, got %q", got)
+	}
+	if got := lastLine("  \n\n plain \n\n"); got != "plain" {
+		t.Errorf("lastLine = %q", got)
 	}
 }
