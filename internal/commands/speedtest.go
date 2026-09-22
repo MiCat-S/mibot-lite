@@ -232,7 +232,7 @@ func runExternal(ctx context.Context, path, kind, home string, server int) (*rea
 	tool.Stderr = &complaint
 	if err := tool.Run(); err != nil {
 		if detail := lastLine(complaint.String()); detail != "" {
-			return nil, fmt.Errorf("%s failed: %w: %s", kind, err, detail)
+			return nil, failf("%s", explainCLI(detail))
 		}
 		return nil, fmt.Errorf("%s failed: %w", kind, err)
 	}
@@ -298,7 +298,7 @@ func listServers(ctx context.Context, path, home string) ([]speedServer, error) 
 	tool.Stderr = &complaint
 	if err := tool.Run(); err != nil {
 		if detail := lastLine(complaint.String()); detail != "" {
-			return nil, fail("取服务器列表失败：" + detail)
+			return nil, fail("取服务器列表失败：" + explainCLI(detail))
 		}
 		return nil, fmt.Errorf("speedtest -L failed: %w", err)
 	}
@@ -385,6 +385,26 @@ func lastLine(text string) string {
 		return line
 	}
 	return ""
+}
+
+// explainCLI turns the CLI's own wording into something actionable.
+//
+// Both of these were met here for real. Running the test many times in an
+// afternoon got this host refused by Ookla's configuration endpoint, and
+// the message for that says "ConfigurationError", which reads like a
+// broken install rather than "wait a while". A listed server that will
+// not answer says "Cannot read from socket", which reads like a local
+// network fault rather than "pick another one".
+func explainCLI(detail string) string {
+	switch {
+	case strings.Contains(detail, "Configuration"):
+		return "Speedtest 暂时拒绝了这台机器的请求，通常是短时间内测得太频繁，过一阵再试"
+	case strings.Contains(detail, "Cannot read from socket"), strings.Contains(detail, "Latency test failed"):
+		return "这个服务器现在连不上，换一个 ID 或用自动挑选"
+	case strings.Contains(detail, "NoServersException"):
+		return "找不到可用的测速服务器"
+	}
+	return detail
 }
 
 func durationFromMillis(value float64) time.Duration {

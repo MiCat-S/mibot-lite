@@ -563,3 +563,17 @@ func TestLastLineUnwrapsTheCLIRecord(t *testing.T) {
 		t.Errorf("lastLine = %q", got)
 	}
 }
+
+// The CLI's wording is accurate and useless. These two were met for real
+// on the deployment, so the translation is pinned.
+func TestExplainCLI(t *testing.T) {
+	if got := explainCLI("Configuration - Could not retrieve or read configuration (ConfigurationError)"); !strings.Contains(got, "过一阵再试") {
+		t.Errorf("throttling was not explained: %q", got)
+	}
+	if got := explainCLI("Error: [0] Cannot read from socket: "); !strings.Contains(got, "换一个 ID") {
+		t.Errorf("an unreachable server was not explained: %q", got)
+	}
+	if got := explainCLI("signal: aborted"); got != "signal: aborted" {
+		t.Errorf("an unknown reason should pass through, got %q", got)
+	}
+}
