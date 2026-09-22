@@ -72,13 +72,20 @@ install -m 644 "$rendered" "$unit"
 
 /usr/bin/systemctl daemon-reload
 /usr/bin/systemctl reset-failed mibot-lite 2>/dev/null || true
+since=$(date '+%Y-%m-%d %H:%M:%S')
 /usr/bin/systemctl enable --now mibot-lite
 
+# Not `journalctl | grep -q`: grep leaves on the first match, journalctl
+# dies of SIGPIPE, and `set -o pipefail` turns that into a failed check
+# over a service that started perfectly well.
 for _ in $(seq 30); do
-  if /usr/bin/journalctl -u mibot-lite -n 50 --no-pager -o cat 2>/dev/null | grep -q 'msg=runtime.ready'; then
-    printf '%s\n' 'MiBot Lite is ready and enabled at boot.' 'Verify .help and .ping in Telegram.' 'Logs: journalctl -u mibot-lite -f'
-    exit 0
-  fi
+  log=$(/usr/bin/journalctl -u mibot-lite --since "$since" --no-pager -o cat 2>/dev/null || true)
+  case $log in
+    *msg=runtime.ready*)
+      printf '%s\n' 'MiBot Lite is ready and enabled at boot.' 'Verify .help and .ping in Telegram.' 'Logs: journalctl -u mibot-lite -f'
+      exit 0
+      ;;
+  esac
   /usr/bin/systemctl is-active --quiet mibot-lite || break
   sleep 2
 done

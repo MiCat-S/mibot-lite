@@ -161,17 +161,28 @@ rm -rf "$STAGING"
 
 systemctl daemon-reload
 systemctl reset-failed mibot-lite 2> /dev/null || true
+# Readiness is judged from this moment on, so the line the outgoing version
+# logged when it started cannot be read as the new one coming up.
+SINCE=$(date '+%Y-%m-%d %H:%M:%S')
 systemctl enable --now mibot-lite
 
+# Deliberately not `journalctl … | grep -q`. That reads correctly and is
+# wrong: grep leaves on the first match, journalctl dies of SIGPIPE, and
+# under `set -o pipefail` the pipeline reports 141 — so the check failed
+# on every successful start and the installer announced a failure over a
+# service that was already running.
 for _ in $(seq 30); do
-  if journalctl -u mibot-lite -n 50 --no-pager -o cat 2> /dev/null | grep -q 'msg=runtime.ready'; then
-    say "MiBot Lite $TAG is running and enabled at boot"
-    printf '%s\n' \
-      "   Try .help and .ping in Telegram." \
-      "   Logs:    journalctl -u mibot-lite -f" \
-      "   Upgrade: re-run this installer, or .update run in Telegram"
-    exit 0
-  fi
+  LOG=$(journalctl -u mibot-lite --since "$SINCE" --no-pager -o cat 2> /dev/null || true)
+  case $LOG in
+    *msg=runtime.ready*)
+      say "MiBot Lite $TAG is running and enabled at boot"
+      printf '%s\n' \
+        "   Try .help and .ping in Telegram." \
+        "   Logs:    journalctl -u mibot-lite -f" \
+        "   Upgrade: re-run this installer, or .update run in Telegram"
+      exit 0
+      ;;
+  esac
   systemctl is-active --quiet mibot-lite || break
   sleep 2
 done
