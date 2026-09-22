@@ -295,3 +295,75 @@ func TestNameHashIsStableAndPositive(t *testing.T) {
 		t.Fatal("different names should not collide this easily")
 	}
 }
+
+// The endpoint answers with two different shapes depending on whether the
+// request asked it to detect the source language.
+func TestParseTranslation(t *testing.T) {
+	detected, err := parseTranslation([]byte(`[["你好世界","en"]]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detected.Text != "你好世界" || detected.Source != "en" {
+		t.Fatalf("got %+v", detected)
+	}
+	// A request that named its source gets a bare string back.
+	named, err := parseTranslation([]byte(`["早上好"]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if named.Text != "早上好" || named.Source != "" {
+		t.Fatalf("got %+v", named)
+	}
+	for _, raw := range []string{``, `{}`, `[]`, `[[]]`, `[[""]]`, `[""]`, `not json`} {
+		if _, err := parseTranslation([]byte(raw)); err == nil {
+			t.Errorf("%q should not parse into a translation", raw)
+		}
+	}
+}
+
+// The first argument is a target language only when it names one. Deciding
+// by shape would eat the first word of "tr is this correct".
+func TestNamedLanguage(t *testing.T) {
+	for input, want := range map[string]string{
+		"en": "en", "EN": "en", "english": "en", "英文": "en",
+		"zh": "zh-CN", "cn": "zh-CN", "中文": "zh-CN", "tw": "zh-TW",
+		"jp": "ja", "ja": "ja", "ko": "ko", "ru": "ru",
+	} {
+		got, ok := namedLanguage(input)
+		if !ok || got != want {
+			t.Errorf("namedLanguage(%q) = %q %v, want %q", input, got, ok, want)
+		}
+	}
+	for _, input := range []string{"", "hello", "this", "翻译一下", "zzz", "xyzzy"} {
+		if code, ok := namedLanguage(input); ok {
+			t.Errorf("%q should be text, not the language %q", input, code)
+		}
+	}
+	// "is" and "tr" are real codes and would be surprising to swallow, so
+	// they are deliberately absent from the list.
+	for _, ambiguous := range []string{"is", "no", "it"} {
+		_, ok := namedLanguage(ambiguous)
+		if ambiguous == "is" && ok {
+			t.Error(`"is" should stay text: it is also an English word`)
+		}
+	}
+}
+
+// An unqualified translation of Chinese must not ask for Chinese back.
+func TestHasHan(t *testing.T) {
+	if !hasHan("今天天气不错") || !hasHan("mixed 中文 text") {
+		t.Error("Chinese text should be detected")
+	}
+	if hasHan("hello world") || hasHan("こんにちは") || hasHan("") {
+		t.Error("non-Han text should not be detected as Chinese")
+	}
+}
+
+func TestLanguageName(t *testing.T) {
+	if got := languageName("en"); got != "英语" {
+		t.Fatalf("languageName(en) = %q", got)
+	}
+	if got := languageName("qqq"); got != "qqq" {
+		t.Fatalf("an unknown code should render as itself, got %q", got)
+	}
+}

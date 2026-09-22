@@ -19,6 +19,7 @@ func RegisterAll(a *app.App) {
 	Whois(a)
 	AI(a)
 	Gt(a)
+	Translate(a)
 	Sum(a)
 	Re(a)
 	Dme(a)
