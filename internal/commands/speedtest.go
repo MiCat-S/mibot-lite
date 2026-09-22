@@ -196,9 +196,19 @@ func extractOokla(archive []byte, target string) (string, error) {
 }
 
 // runExternal drives the installed speedtest tool.
-func runExternal(ctx context.Context, path, kind string) (*reading, error) {
+//
+// home is where the tool is allowed to keep its own state. It matters:
+// the Ookla CLI reads $HOME to find where it recorded the licence, and
+// under this service's sandbox $HOME is unset, which it does not survive
+// — it aborts on a null string before it measures anything. Handing it a
+// writable directory of its own is also what keeps ProtectSystem=strict
+// from being the thing that breaks it.
+func runExternal(ctx context.Context, path, kind, home string) (*reading, error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		return nil, err
+	}
 	var arguments []string
 	switch kind {
 	case "ookla":
@@ -206,10 +216,20 @@ func runExternal(ctx context.Context, path, kind string) (*reading, error) {
 	default:
 		arguments = []string{"--json", "--secure"}
 	}
-	output, err := exec.CommandContext(ctx, path, arguments...).Output()
-	if err != nil {
+	tool := exec.CommandContext(ctx, path, arguments...)
+	tool.Env = append(os.Environ(), "HOME="+home)
+	// Both streams are kept: the tool says why it failed on stderr, and
+	// "exit status 2" on its own sent me looking in the wrong place.
+	var out, complaint bytes.Buffer
+	tool.Stdout = &out
+	tool.Stderr = &complaint
+	if err := tool.Run(); err != nil {
+		if detail := lastLine(complaint.String()); detail != "" {
+			return nil, fmt.Errorf("%s failed: %w: %s", kind, err, detail)
+		}
 		return nil, fmt.Errorf("%s failed: %w", kind, err)
 	}
+	output := out.Bytes()
 	// Ookla prints one JSON object per line and ends with the result.
 	line := output
 	if index := strings.LastIndexByte(strings.TrimSpace(string(output)), '\n'); index >= 0 {
@@ -264,6 +284,23 @@ func resultImage(ctx context.Context, link string) []byte {
 		return nil
 	}
 	return response.Body
+}
+
+// lastLine returns the final non-empty line, which is where these tools
+// put the reason they gave up.
+func lastLine(text string) string {
+	lines := strings.Split(strings.TrimSpace(text), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		if len(line) > 200 {
+			line = line[:200] + "…"
+		}
+		return line
+	}
+	return ""
 }
 
 func durationFromMillis(value float64) time.Duration {
@@ -388,7 +425,15 @@ func Speedtest(a *app.App) {
 		if err := inv.Edit(ctx, "🚀 <b>网络测速</b>\n\n正在通过 "+command.Escape(kind)+" 测速，约需一分钟…"); err != nil {
 			return err
 		}
-		result, err := runExternal(ctx, tool, kind)
+		home := filepath.Join(dataDir, "speedtest")
+		result, err := runExternal(ctx, tool, kind, home)
+		if err != nil {
+			// One retry. The CLI occasionally loses its server part way
+			// through — "Latency test failed", seen twice here — and there
+			// is no second path to fall back on any more.
+			inv.Log.Warn("speedtest.retrying", "tool", kind, "error", err.Error())
+			result, err = runExternal(ctx, tool, kind, home)
+		}
 		if err != nil {
 			inv.Log.Warn("speedtest.external_failed", "tool", kind, "error", err.Error())
 			if detail, ok := isUserError(err); ok {

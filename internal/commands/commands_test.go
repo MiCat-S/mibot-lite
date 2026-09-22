@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -421,7 +422,7 @@ func TestOoklaInstallLive(t *testing.T) {
 		t.Fatalf("externalTool found %q (%s), want the installed copy", found, kind)
 	}
 
-	result, err := runExternal(context.Background(), path, "ookla")
+	result, err := runExternal(context.Background(), path, "ookla", filepath.Join(dir, "speedtest"))
 	if err != nil {
 		t.Fatal(err)
 	}
