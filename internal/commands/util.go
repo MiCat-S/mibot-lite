@@ -2,8 +2,13 @@ package commands
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -15,6 +20,7 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/app"
 	"github.com/MiCat-S/mibot-lite/internal/bot"
 	"github.com/MiCat-S/mibot-lite/internal/command"
+	"github.com/MiCat-S/mibot-lite/internal/httpx"
 	"github.com/MiCat-S/mibot-lite/internal/store"
 )
 
@@ -183,4 +189,98 @@ func chatHTMLError(err error) string {
 		return command.Escape(text)
 	}
 	return ""
+}
+
+func messageID(item tg.MessageClass) int {
+	switch value := item.(type) {
+	case *tg.Message:
+		return value.ID
+	case *tg.MessageService:
+		return value.ID
+	case *tg.MessageEmpty:
+		return value.ID
+	}
+	return 0
+}
+
+func clampInt(value, low, high int) int {
+	if value < low {
+		return low
+	}
+	if value > high {
+		return high
+	}
+	return value
+}
+
+func orDefault(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
+}
+
+func onOffText(value bool) string {
+	if value {
+		return "on"
+	}
+	return "off"
+}
+
+func formatBytes(size int) string {
+	switch {
+	case size >= 1<<20:
+		return fmt.Sprintf("%.1f MB", float64(size)/(1<<20))
+	case size >= 1<<10:
+		return fmt.Sprintf("%.1f KB", float64(size)/(1<<10))
+	}
+	return strconv.Itoa(size) + " B"
+}
+
+func download(ctx context.Context, url, target string, limit int64) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	request.Header.Set("User-Agent", httpx.UserAgent)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return "", err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return "", &httpx.StatusError{Status: response.StatusCode}
+	}
+	file, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o700)
+	if err != nil {
+		return "", err
+	}
+	hash := sha256.New()
+	written, err := io.Copy(io.MultiWriter(file, hash), io.LimitReader(response.Body, limit+1))
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return "", err
+	}
+	if written > limit {
+		return "", httpx.ErrTooLarge
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func versionOf(a *app.App) string {
+	if a.Version == "" {
+		return "未知"
+	}
+	return a.Version
+}
+
+func orDash(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "—"
+	}
+	return value
 }

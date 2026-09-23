@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -53,7 +54,7 @@ func delegationAllowed(route command.Route) bool {
 	if !ok {
 		return false
 	}
-	return len(route.Args) == 0 || !containsString(ownerOnly, strings.ToLower(route.Args[0]))
+	return len(route.Args) == 0 || !slices.Contains(ownerOnly, strings.ToLower(route.Args[0]))
 }
 
 // delegableList 按字母顺序列出能借出去的命令，写进帮助里，和上面的表保持一致。

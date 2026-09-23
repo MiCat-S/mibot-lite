@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"unicode"
@@ -58,14 +59,14 @@ func nextPrefixes(action string, current, tokens []string) []string {
 		candidates = append(append([]string{}, current...), tokens...)
 	default:
 		for _, prefix := range current {
-			if !containsString(tokens, prefix) {
+			if !slices.Contains(tokens, prefix) {
 				candidates = append(candidates, prefix)
 			}
 		}
 	}
 	var result []string
 	for _, prefix := range candidates {
-		if !containsString(result, prefix) {
+		if !slices.Contains(result, prefix) {
 			result = append(result, prefix)
 		}
 	}

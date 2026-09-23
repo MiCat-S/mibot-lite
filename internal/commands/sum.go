@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -496,10 +497,10 @@ func (s *sumService) summarize(ctx context.Context, client *bot.Client, chatID s
 		timeout = 60 * time.Second
 	}
 	reasoning, tier := db.AIConfig.DefaultReasoningEffort, db.AIConfig.DefaultServiceTier
-	if !containsString(aiReasoningValues, reasoning) {
+	if !slices.Contains(aiReasoningValues, reasoning) {
 		reasoning = "auto"
 	}
-	if !containsString(aiTierValues, tier) {
+	if !slices.Contains(aiTierValues, tier) {
 		tier = "auto"
 	}
 	output, err := sumCallAI(ctx, provider, sumFormatMessages(rows), prompt, reasoning, tier, timeout)
@@ -886,7 +887,7 @@ func (s *sumService) configAdd(inv *command.Invocation, name, base string, rest 
 	if err := assertAllowedModel(model); err != nil {
 		return err
 	}
-	if !containsString(sumTypes, kind) {
+	if !slices.Contains(sumTypes, kind) {
 		return fail("无效接口类型")
 	}
 	return s.update(func(db *sumDB) error {
@@ -939,7 +940,7 @@ func (s *sumService) configSet(ctx context.Context, inv *command.Invocation, db 
 		if name == "service" {
 			values = aiTierValues
 		}
-		if !containsString(values, property) {
+		if !slices.Contains(values, property) {
 			return false, fail("无效选项")
 		}
 		return false, s.update(func(db *sumDB) error {
@@ -978,7 +979,7 @@ func (s *sumService) configPrompt(ctx context.Context, inv *command.Invocation, 
 // configProvider 改某个服务商的一个字段：model、url、key、type。改 key 同样只允许在收藏夹里。
 func (s *sumService) configProvider(inv *command.Invocation, db sumDB, name, property, value string) error {
 	provider, ok := db.AIConfig.Providers[name]
-	if !ok || !containsString([]string{"model", "url", "key", "type"}, property) || value == "" {
+	if !ok || !slices.Contains([]string{"model", "url", "key", "type"}, property) || value == "" {
 		return fail("用法：sum config set 名称 model|url|key|type 值")
 	}
 	if property == "key" && !inv.Message.Saved {
@@ -998,7 +999,7 @@ func (s *sumService) configProvider(inv *command.Invocation, db sumDB, name, pro
 	case "key":
 		provider.APIKey = value
 	default:
-		if !containsString(sumTypes, value) {
+		if !slices.Contains(sumTypes, value) {
 			return fail("无效接口类型")
 		}
 		provider.Type = value

@@ -2,13 +2,9 @@ package commands
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -222,38 +218,4 @@ func runUpdate(ctx context.Context, a *app.App, inv *command.Invocation, repo, b
 		return err
 	}
 	return serviceRestarter.command(ctx, inv, "update", "<b>MiBot Lite 更新</b>\n已安装 "+command.Code(latest.TagName)+"，正在重启…", "更新后重启失败，可手动重启服务。")
-}
-
-func download(ctx context.Context, url, target string, limit int64) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return "", err
-	}
-	request.Header.Set("User-Agent", httpx.UserAgent)
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		return "", err
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return "", &httpx.StatusError{Status: response.StatusCode}
-	}
-	file, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o700)
-	if err != nil {
-		return "", err
-	}
-	hash := sha256.New()
-	written, err := io.Copy(io.MultiWriter(file, hash), io.LimitReader(response.Body, limit+1))
-	if closeErr := file.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return "", err
-	}
-	if written > limit {
-		return "", httpx.ErrTooLarge
-	}
-	return hex.EncodeToString(hash.Sum(nil)), nil
 }

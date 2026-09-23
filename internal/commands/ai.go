@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -88,15 +89,6 @@ func aiDefaults() aiConfig {
 		VideoDuration: 5, Collapse: true, Timeout: 30, Telegraph: aiTelegraph{Limit: 5}}
 }
 
-func containsString(list []string, value string) bool {
-	for _, item := range list {
-		if item == value {
-			return true
-		}
-	}
-	return false
-}
-
 func (c *aiConfig) normalize() {
 	if c.Configs == nil {
 		c.Configs = map[string]aiProvider{}
@@ -106,14 +98,14 @@ func (c *aiConfig) normalize() {
 		c.Configs[tag] = provider
 	}
 	for _, field := range []*string{&c.CurrentChatReasoningEffort, &c.CurrentSearchReasoningEffort} {
-		if !containsString(aiReasoningValues, strings.ToLower(strings.TrimSpace(*field))) {
+		if !slices.Contains(aiReasoningValues, strings.ToLower(strings.TrimSpace(*field))) {
 			*field = "auto"
 		} else {
 			*field = strings.ToLower(strings.TrimSpace(*field))
 		}
 	}
 	for _, field := range []*string{&c.CurrentChatServiceTier, &c.CurrentSearchServiceTier} {
-		if !containsString(aiTierValues, strings.ToLower(strings.TrimSpace(*field))) {
+		if !slices.Contains(aiTierValues, strings.ToLower(strings.TrimSpace(*field))) {
 			*field = "auto"
 		} else {
 			*field = strings.ToLower(strings.TrimSpace(*field))
@@ -163,7 +155,7 @@ func (c aiConfig) selection(mode string) aiSelection {
 
 func resolveProviderType(provider aiProvider) string {
 	explicit := strings.ToLower(strings.TrimSpace(provider.Type))
-	if containsString(aiProviderTypes, explicit) {
+	if slices.Contains(aiProviderTypes, explicit) {
 		return explicit
 	}
 	if parsed, err := url.Parse(provider.URL); err == nil {
@@ -845,7 +837,7 @@ func (s *aiService) handle(ctx context.Context, inv *command.Invocation) error {
 		if sub == "service" {
 			values = aiTierValues
 		}
-		if !containsString(values, value) {
+		if !slices.Contains(values, value) {
 			return fail("无效选项")
 		}
 		if err := s.update(func(cfg *aiConfig) error {
@@ -1049,7 +1041,7 @@ func (s *aiService) configure(ctx context.Context, inv *command.Invocation) erro
 		if parsed, err := url.Parse(link); err != nil || parsed.Host == "" {
 			return fail("API 地址无效")
 		}
-		if kind != "" && !containsString(aiProviderTypes, kind) {
+		if kind != "" && !slices.Contains(aiProviderTypes, kind) {
 			return fail("无效 API 类型")
 		}
 		if err := s.update(func(cfg *aiConfig) error {
@@ -1086,7 +1078,7 @@ func (s *aiService) configure(ctx context.Context, inv *command.Invocation) erro
 			}
 			switch action {
 			case "type":
-				if !containsString(aiProviderTypes, value) {
+				if !slices.Contains(aiProviderTypes, value) {
 					return fail("无效 API 类型")
 				}
 				provider.Type = value
@@ -1112,13 +1104,6 @@ func (s *aiService) configure(ctx context.Context, inv *command.Invocation) erro
 		return fail("未知 config 子命令")
 	}
 	return inv.Edit(ctx, feedback("success", "AI 配置已更新", ""))
-}
-
-func onOffText(value bool) string {
-	if value {
-		return "on"
-	}
-	return "off"
 }
 
 var errAIUnavailable = errors.New("ai unavailable")

@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -611,7 +612,7 @@ func (c *acnCall) order() error {
 		return c.inv.Edit(c.ctx, "当前顺序: "+command.Code(order))
 	}
 	for _, value := range values {
-		if !containsString(acnComponents, value) {
+		if !slices.Contains(acnComponents, value) {
 			return c.inv.EditText(c.ctx, "❌ 无效组件")
 		}
 	}
@@ -850,13 +851,6 @@ func cleanNickname(name string) string {
 	}
 	cleaned := clockTimePattern.ReplaceAllString(b.String(), "")
 	return strings.TrimSpace(strings.Join(strings.Fields(cleaned), " "))
-}
-
-func orDefault(value, fallback string) string {
-	if strings.TrimSpace(value) == "" {
-		return fallback
-	}
-	return value
 }
 
 // clockTimePattern 匹配旧昵称里带着的 "9:30" 或 "09:30 PM"。

@@ -14,14 +14,6 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/command"
 )
 
-const (
-	dmeSelf    = int64(100)
-	dmeOther   = int64(200)
-	dmeAlias   = int64(300) // 自己能以它的身份发言的频道
-	dmeGroup   = int64(5000)
-	dmeCommand = 1000
-)
-
 type dmeScenario struct {
 	name     string
 	peer     tg.PeerClass
@@ -36,19 +28,6 @@ type dmeScenario struct {
 	// deleted 是跑完之后必须消失的消息，kept 是必须还在的。
 	deleted, kept []int
 }
-
-func withHash[T interface{ SetAccessHash(int64) }](value T) T {
-	value.SetAccessHash(1)
-	return value
-}
-
-var (
-	dmePrivate    = &tg.PeerUser{UserID: dmeOther}
-	dmeSupergroup = &tg.PeerChannel{ChannelID: dmeGroup}
-	otherUser     = []tg.UserClass{withHash(&tg.User{ID: dmeOther})}
-	supergroup    = []tg.ChatClass{withHash(&tg.Channel{ID: dmeGroup, Megagroup: true, Title: "群"})}
-	broadcast     = []tg.ChatClass{withHash(&tg.Channel{ID: dmeGroup, Broadcast: true, Title: "频道"})}
-)
 
 // alternating 造一段自己和对方交替发言的私聊：奇数编号是自己的。
 func alternating(peer tg.PeerClass, count int) func() []*tg.Message {

@@ -472,15 +472,3 @@ func dmeExecute(ctx context.Context, inv *command.Invocation, count int, anti bo
 	run.report(count)
 	return nil
 }
-
-func messageID(item tg.MessageClass) int {
-	switch value := item.(type) {
-	case *tg.Message:
-		return value.ID
-	case *tg.MessageService:
-		return value.ID
-	case *tg.MessageEmpty:
-		return value.ID
-	}
-	return 0
-}

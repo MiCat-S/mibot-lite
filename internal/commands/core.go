@@ -88,13 +88,6 @@ func Core(a *app.App) {
 	)
 }
 
-func versionOf(a *app.App) string {
-	if a.Version == "" {
-		return "未知"
-	}
-	return a.Version
-}
-
 func versionText(a *app.App) string {
 	return strings.Join([]string{
 		"<b>MiBot Lite 版本</b>", "",

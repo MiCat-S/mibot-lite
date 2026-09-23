@@ -8,16 +8,6 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/command"
 )
 
-func clampInt(value, low, high int) int {
-	if value < low {
-		return low
-	}
-	if value > high {
-		return high
-	}
-	return value
-}
-
 // Re 注册 .re：把被回复的消息（以及它之前的几条）转发到当前对话，
 // 可以转发多次。
 func Re(a *app.App) {

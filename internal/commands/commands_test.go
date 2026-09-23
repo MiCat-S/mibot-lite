@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/MiCat-S/mibot-lite/internal/bot"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -12,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/MiCat-S/mibot-lite/internal/bot"
 
 	"github.com/gotd/td/tg"
 

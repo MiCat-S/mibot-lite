@@ -41,16 +41,6 @@ func backupCaption(version string, names []string, size int) string {
 		"恢复前先停掉旧机器上的服务：同一个账号不能在两处同时在线。"
 }
 
-func formatBytes(size int) string {
-	switch {
-	case size >= 1<<20:
-		return fmt.Sprintf("%.1f MB", float64(size)/(1<<20))
-	case size >= 1<<10:
-		return fmt.Sprintf("%.1f KB", float64(size)/(1<<10))
-	}
-	return strconv.Itoa(size) + " B"
-}
-
 func backupHelp(prefix string) string {
 	p := command.Escape(prefix)
 	return "📦 <b>配置备份</b>\n\n把这个部署的配置打包，发到本账号的收藏夹。重装系统或换机器时用它恢复，不用重新登录，也不用重新配各命令。\n\n" +
