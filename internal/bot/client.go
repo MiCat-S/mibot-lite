@@ -203,6 +203,30 @@ func (c *Client) SendText(ctx context.Context, peer tg.InputPeerClass, text stri
 	return c.SendHTML(ctx, peer, Escape(text), options)
 }
 
+// SendRaw 按原文发一条消息（不解析 HTML），可以带格式实体，返回新消息的编号。
+// replyTo 为 0 表示不回复；topic 不为 0 时发到论坛的那个话题里。
+func (c *Client) SendRaw(ctx context.Context, peer tg.InputPeerClass, text string, entities []tg.MessageEntityClass, replyTo, topic int) (int, error) {
+	request := &tg.MessagesSendMessageRequest{Peer: peer, Message: text, RandomID: rand.Int64(), NoWebpage: true}
+	if len(entities) > 0 {
+		request.SetEntities(entities)
+	}
+	if replyTo > 0 || topic > 0 {
+		reply := &tg.InputReplyToMessage{ReplyToMsgID: replyTo}
+		if replyTo == 0 {
+			reply.ReplyToMsgID = topic
+		}
+		if topic > 0 {
+			reply.SetTopMsgID(topic)
+		}
+		request.SetReplyTo(reply)
+	}
+	updates, err := c.api.MessagesSendMessage(ctx, request)
+	if err != nil {
+		return 0, err
+	}
+	return unpack.MessageID(updates, nil)
+}
+
 // SendSelf 发到收藏夹。
 func (c *Client) SendSelf(ctx context.Context, text string) (int, error) {
 	return c.SendHTML(ctx, &tg.InputPeerSelf{}, text, SendOptions{})

@@ -36,6 +36,7 @@ func RegisterAll(a *app.App) {
 	Eatgif(a)
 	Prefix(a)
 	Alias(a)
+	Delegate(a)
 }
 
 // miboxFiles 把 MiBox 插件的数据文件映射到 data/ 下的文件名。JSON 结构

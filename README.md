@@ -53,9 +53,27 @@ Go 函数。代价是装新命令要重新编译；换来的是一个更小的�
 .ai .gt .sum .re .dme .da
 .ban .unban .kick .mute .unmute .sb .unsb .refresh .aban
 .acn .autochangename .yvlu .eatgif
+.sudo .sure
 ```
 
 每条命令的用法见 `.help 命令`。
+
+### 借用账号：.sudo 和 .sure
+
+两者都是让名单里的人通过你的账号执行命令：对方在群里发消息，账号以你的身份
+在同一个对话里发出命令、回复同一个目标并执行。`.sudo` 让对方直接发命令；
+`.sure` 更窄，对方的消息要和你设的规则对上，还能重定向，比如把群友发的
+`/sb` 变成 `.ban`。
+
+和 MiBox 不同的是**能借出去的范围是白名单**。MiBox 让名单里的人执行任何命令，
+包括 `.sudo add` 本身，被授权的人可以再去授权别人。这里只有查询类命令
+（`.ping` `.rate` `.calc` `.whois` `.ip` 等）、`.ai` `.sum` `.gt` `.tr` `.yvlu` `.eatgif` `.re`
+和单群的 `.ban` `.kick` `.mute` 这一类能借；改设置的子命令（`.ai config` 之类）、
+授权管理、删消息、改昵称或前缀别名、备份与日志、`.save`、重启更新、跨所有群的
+`.sb`、`.sysinfo` 都只限本人。判断按别名展开之后的真实命令来，起个别名绕不过去；
+以后新加的命令默认也不能借。名单里的人发了不能借的命令，账号只回一句没有权限。
+
+名单存在 `data/sudo.json` 和 `data/sure.json`，`.bf` 备份时会一起带上。
 
 ## 部署
 

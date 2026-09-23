@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +27,9 @@ type Invocation struct {
 	Message *bot.Message
 	Client  *bot.Client
 	Log     *slog.Logger
+	// Trigger 不为空时，这条命令是别人借用账号发起的（.sudo、.sure）：
+	// Message 是账号代发的那条，Trigger 是对方原来发的那条。
+	Trigger *bot.Message
 }
 
 // Arg 返回第 i 个参数，没有就返回 ""。
@@ -92,6 +96,9 @@ type Registry struct {
 	logger   *slog.Logger
 	sem      chan struct{}
 	inFlight sync.WaitGroup
+	// relayed 是账号替别人代发过的命令消息。它们已经按借用规则执行过一次；
+	// 万一之后又被当成本人发的消息收到，不能不经检查再执行一遍。
+	relayed map[string]time.Time
 }
 
 // New 创建一个空的注册表。
@@ -290,6 +297,10 @@ func isSpace(r rune) bool {
 // Dispatch 把一条消息交给注册表，返回是否匹配到命令；
 // 处理函数异步运行。
 func (r *Registry) Dispatch(ctx context.Context, client *bot.Client, message *bot.Message) bool {
+	if r.wasRelayed(message) {
+		r.logger.Info("dispatch.relayed_again", slog.String("chat", message.ChatID), slog.Int("message", message.ID))
+		return false
+	}
 	route, ok := r.Parse(message.Text)
 	if !ok {
 		return false
@@ -298,8 +309,59 @@ func (r *Registry) Dispatch(ctx context.Context, client *bot.Client, message *bo
 	if !ok {
 		return false
 	}
+	r.run(ctx, client, message, nil, route, command)
+	return true
+}
+
+// DispatchFor 执行一条账号替别人代发的命令。allowed 决定这条命令能不能借出去，
+// 不许就不执行；trigger 是对方原来的那条消息。
+func (r *Registry) DispatchFor(ctx context.Context, client *bot.Client, message, trigger *bot.Message, allowed func(Route) bool) bool {
+	route, ok := r.Parse(message.Text)
+	if !ok || !allowed(route) {
+		return false
+	}
+	command, ok := r.Lookup(route.Command)
+	if !ok {
+		return false
+	}
+	r.markRelayed(message)
+	r.run(ctx, client, message, trigger, route, command)
+	return true
+}
+
+func relayKey(message *bot.Message) string { return message.ChatID + "/" + strconv.Itoa(message.ID) }
+
+// markRelayed 记下一条代发的消息。记录保留 10 分钟，足够覆盖更新晚到的情况。
+func (r *Registry) markRelayed(message *bot.Message) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.relayed == nil {
+		r.relayed = map[string]time.Time{}
+	}
+	now := time.Now()
+	for key, at := range r.relayed {
+		if now.Sub(at) > 10*time.Minute {
+			delete(r.relayed, key)
+		}
+	}
+	r.relayed[relayKey(message)] = now
+}
+
+func (r *Registry) wasRelayed(message *bot.Message) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, ok := r.relayed[relayKey(message)]
+	return ok
+}
+
+// run 在后台执行一条命令：限制同时运行的数量、套上超时、兜住 panic、记日志。
+func (r *Registry) run(ctx context.Context, client *bot.Client, message, trigger *bot.Message, route Route, command *Command) {
+	logger := r.logger.With(slog.String("command", route.Command))
+	if trigger != nil {
+		logger = logger.With(slog.String("for", trigger.ChatID+"#"+strconv.Itoa(trigger.ID)))
+	}
 	inv := &Invocation{Prefix: route.Prefix, Command: route.Command, Args: route.Args, Text: route.Text,
-		Message: message, Client: client, Log: r.logger.With(slog.String("command", route.Command))}
+		Message: message, Client: client, Log: logger, Trigger: trigger}
 	r.inFlight.Add(1)
 	go func() {
 		defer r.inFlight.Done()
@@ -338,7 +400,6 @@ func (r *Registry) Dispatch(ctx context.Context, client *bot.Client, message *bo
 			_ = inv.EditText(context.WithoutCancel(ctx), "命令执行失败："+Brief(err))
 		}
 	}()
-	return true
 }
 
 // Wait 阻塞到正在运行的命令全部结束，或者超时为止。

@@ -80,6 +80,8 @@ type App struct {
 	// options 留着是为了让 Run 能拿到 AfterReady。
 	options    Options
 	hookResult atomic.Pointer[error]
+	// foreign 是看别人消息的监听者（.sure、.sudo）。只在注册阶段添加，之后只读。
+	foreign []ForeignListener
 }
 
 // sleepFor 等待一段时间，ctx 结束时提前返回。
@@ -356,6 +358,10 @@ func (a *App) handle(ctx context.Context, entities tg.Entities, message tg.Messa
 		drop("unaddressable peer")
 		return
 	case !mine:
+		// 别人的消息：转发的、编辑过的不算，其余交给借用规则看一眼。
+		if !envelope.Edited && !envelope.Forward && a.OfferForeign(context.WithoutCancel(ctx), client, envelope) {
+			return
+		}
 		drop("not written by this account")
 		return
 	case envelope.Edited:
@@ -368,6 +374,26 @@ func (a *App) handle(ctx context.Context, entities tg.Entities, message tg.Messa
 	if !a.Registry.Dispatch(context.WithoutCancel(ctx), client, envelope) {
 		drop("no command matched")
 	}
+}
+
+// ForeignListener 看一条别人发的消息，处理了就返回 true。
+type ForeignListener func(ctx context.Context, client *bot.Client, message *bot.Message) bool
+
+// OnForeign 登记一个看别人消息的监听者。只能在注册命令时调用；
+// 按登记顺序依次询问，第一个处理了的为准。
+func (a *App) OnForeign(listener ForeignListener) {
+	a.foreign = append(a.foreign, listener)
+}
+
+// OfferForeign 把一条别人的消息依次交给监听者，返回有没有谁处理了。
+// 监听者要自己判断得快：这里还在处理更新的路上，耗时的活得放到后台。
+func (a *App) OfferForeign(ctx context.Context, client *bot.Client, message *bot.Message) bool {
+	for _, listener := range a.foreign {
+		if listener(ctx, client, message) {
+			return true
+		}
+	}
+	return false
 }
 
 // truncate 截短文本，用在日志行里。

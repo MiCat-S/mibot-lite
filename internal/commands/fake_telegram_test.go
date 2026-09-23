@@ -207,8 +207,22 @@ func (f *fakeTelegram) Invoke(_ context.Context, input bin.Encoder, output bin.D
 		return respond(output, &tg.User{ID: f.self, FirstName: first, LastName: last})
 	case *tg.MessagesSendMessageRequest:
 		if _, self := request.Peer.(*tg.InputPeerSelf); !self {
-			f.log("send %q to %s", request.Message, describePeer(request.Peer))
-			return respond(output, &tg.UpdateShortSentMessage{ID: 1, Date: int(time.Now().Unix())})
+			reply := ""
+			if header, ok := request.GetReplyTo(); ok {
+				if to, ok := header.(*tg.InputReplyToMessage); ok {
+					reply = fmt.Sprintf(" reply=%d", to.ReplyToMsgID)
+					if top, ok := to.GetTopMsgID(); ok {
+						reply += fmt.Sprintf(" topic=%d", top)
+					}
+				}
+			}
+			f.log("send %q to %s%s", request.Message, describePeer(request.Peer), reply)
+			// 账号发出的消息存进对话里，好让随后按编号读回来。
+			id := f.nextID()
+			sent := &tg.Message{ID: id, PeerID: peerOf(request.Peer, f.self), Out: true, Message: request.Message, Date: int(time.Now().Unix())}
+			sent.SetFromID(&tg.PeerUser{UserID: f.self})
+			f.messages[id] = sent
+			return respond(output, &tg.UpdateShortSentMessage{ID: id, Date: sent.Date})
 		}
 		f.log("send-self %q", firstLine(request.Message))
 		return respond(output, &tg.UpdateShortSentMessage{ID: 1, Date: int(time.Now().Unix())})
@@ -294,4 +308,27 @@ func tinyPNG() []byte {
 	var buffer bytes.Buffer
 	_ = png.Encode(&buffer, canvas)
 	return buffer.Bytes()
+}
+
+// nextID 给账号新发的消息编号，从 2000 起，和场景里的消息不重叠。
+func (f *fakeTelegram) nextID() int {
+	id := 2000
+	for {
+		if _, taken := f.messages[id]; !taken {
+			return id
+		}
+		id++
+	}
+}
+
+func peerOf(input tg.InputPeerClass, self int64) tg.PeerClass {
+	switch value := input.(type) {
+	case *tg.InputPeerChannel:
+		return &tg.PeerChannel{ChannelID: value.ChannelID}
+	case *tg.InputPeerUser:
+		return &tg.PeerUser{UserID: value.UserID}
+	case *tg.InputPeerChat:
+		return &tg.PeerChat{ChatID: value.ChatID}
+	}
+	return &tg.PeerUser{UserID: self}
 }

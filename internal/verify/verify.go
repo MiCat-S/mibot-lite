@@ -63,6 +63,8 @@ var Cases = []Case{
 	{Command: "help bf", Expect: "配置备份"},
 	{Command: "alias", Expect: "别名"},
 	{Command: "prefix", Expect: "当前前缀"},
+	{Command: "sudo ls", Expect: "用户"},
+	{Command: "sure msg ls", Expect: "消息规则"},
 	{Command: "help save", Expect: "保存消息"},
 	{Command: "help bin", Expect: "卡头"},
 	{Command: "ids", Expect: "注册时间"},
