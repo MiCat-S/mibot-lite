@@ -1,0 +1,77 @@
+package rate
+
+// currency 是一条内置的法币或加密货币条目。
+type currency struct {
+	Symbol  string
+	Name    string
+	Aliases []string
+}
+
+var fiatCurrencies = map[string]currency{
+	"usd": {Symbol: "USD", Name: "US Dollar"}, "eur": {Symbol: "EUR", Name: "Euro"}, "gbp": {Symbol: "GBP", Name: "British Pound"},
+	"jpy": {Symbol: "JPY", Name: "Japanese Yen"}, "cny": {Symbol: "CNY", Name: "Chinese Yuan", Aliases: []string{"rmb", "yuan", "cnh"}},
+	"cad": {Symbol: "CAD", Name: "Canadian Dollar"}, "aud": {Symbol: "AUD", Name: "Australian Dollar"}, "chf": {Symbol: "CHF", Name: "Swiss Franc"},
+	"nzd": {Symbol: "NZD", Name: "New Zealand Dollar"}, "sek": {Symbol: "SEK", Name: "Swedish Krona"}, "nok": {Symbol: "NOK", Name: "Norwegian Krone"},
+	"dkk": {Symbol: "DKK", Name: "Danish Krone"}, "isk": {Symbol: "ISK", Name: "Icelandic Krona"}, "pln": {Symbol: "PLN", Name: "Polish Zloty"},
+	"czk": {Symbol: "CZK", Name: "Czech Koruna"}, "huf": {Symbol: "HUF", Name: "Hungarian Forint"}, "ron": {Symbol: "RON", Name: "Romanian Leu"},
+	"bgn": {Symbol: "BGN", Name: "Bulgarian Lev"}, "hrk": {Symbol: "HRK", Name: "Croatian Kuna"}, "rsd": {Symbol: "RSD", Name: "Serbian Dinar"},
+	"bam": {Symbol: "BAM", Name: "Bosnia-Herzegovina Convertible Mark"}, "mkd": {Symbol: "MKD", Name: "Macedonian Denar"}, "all": {Symbol: "ALL", Name: "Albanian Lek"},
+	"rub": {Symbol: "RUB", Name: "Russian Ruble"}, "uah": {Symbol: "UAH", Name: "Ukrainian Hryvnia"}, "byn": {Symbol: "BYN", Name: "Belarusian Ruble"},
+	"mdl": {Symbol: "MDL", Name: "Moldovan Leu"}, "try": {Symbol: "TRY", Name: "Turkish Lira"}, "gel": {Symbol: "GEL", Name: "Georgian Lari"},
+	"amd": {Symbol: "AMD", Name: "Armenian Dram"}, "azn": {Symbol: "AZN", Name: "Azerbaijani Manat"}, "brl": {Symbol: "BRL", Name: "Brazilian Real"},
+	"mxn": {Symbol: "MXN", Name: "Mexican Peso"}, "ars": {Symbol: "ARS", Name: "Argentine Peso"}, "cop": {Symbol: "COP", Name: "Colombian Peso"},
+	"pen": {Symbol: "PEN", Name: "Peruvian Sol"}, "clp": {Symbol: "CLP", Name: "Chilean Peso"}, "uyu": {Symbol: "UYU", Name: "Uruguayan Peso"},
+	"pyg": {Symbol: "PYG", Name: "Paraguayan Guarani"}, "bob": {Symbol: "BOB", Name: "Bolivian Boliviano"}, "ves": {Symbol: "VES", Name: "Venezuelan Bolívar"},
+	"gyd": {Symbol: "GYD", Name: "Guyanese Dollar"}, "srd": {Symbol: "SRD", Name: "Surinamese Dollar"}, "ttd": {Symbol: "TTD", Name: "Trinidad and Tobago Dollar"},
+	"jmd": {Symbol: "JMD", Name: "Jamaican Dollar"}, "bbd": {Symbol: "BBD", Name: "Barbadian Dollar"}, "bsd": {Symbol: "BSD", Name: "Bahamian Dollar"},
+	"bzd": {Symbol: "BZD", Name: "Belize Dollar"}, "crc": {Symbol: "CRC", Name: "Costa Rican Colón"}, "gtq": {Symbol: "GTQ", Name: "Guatemalan Quetzal"},
+	"hnl": {Symbol: "HNL", Name: "Honduran Lempira"}, "nio": {Symbol: "NIO", Name: "Nicaraguan Córdoba"}, "pab": {Symbol: "PAB", Name: "Panamanian Balboa"},
+	"dop": {Symbol: "DOP", Name: "Dominican Peso"}, "htg": {Symbol: "HTG", Name: "Haitian Gourde"}, "cub": {Symbol: "CUP", Name: "Cuban Peso"},
+	"sgd": {Symbol: "SGD", Name: "Singapore Dollar"}, "hkd": {Symbol: "HKD", Name: "Hong Kong Dollar"}, "krw": {Symbol: "KRW", Name: "South Korean Won"},
+	"inr": {Symbol: "INR", Name: "Indian Rupee"}, "thb": {Symbol: "THB", Name: "Thai Baht"}, "myr": {Symbol: "MYR", Name: "Malaysian Ringgit"},
+	"php": {Symbol: "PHP", Name: "Philippine Peso"}, "idr": {Symbol: "IDR", Name: "Indonesian Rupiah"}, "vnd": {Symbol: "VND", Name: "Vietnamese Dong"},
+	"lak": {Symbol: "LAK", Name: "Lao Kip"}, "khr": {Symbol: "KHR", Name: "Cambodian Riel"}, "mmk": {Symbol: "MMK", Name: "Myanmar Kyat"},
+	"bnd": {Symbol: "BND", Name: "Brunei Dollar"}, "twd": {Symbol: "TWD", Name: "Taiwan Dollar"}, "mop": {Symbol: "MOP", Name: "Macanese Pataca"},
+	"fjd": {Symbol: "FJD", Name: "Fijian Dollar"}, "pgk": {Symbol: "PGK", Name: "Papua New Guinea Kina"}, "sbd": {Symbol: "SBD", Name: "Solomon Islands Dollar"},
+	"vuv": {Symbol: "VUV", Name: "Vanuatu Vatu"}, "top": {Symbol: "TOP", Name: "Tongan Paʻanga"}, "wst": {Symbol: "WST", Name: "Samoan Tala"},
+	"lkr": {Symbol: "LKR", Name: "Sri Lankan Rupee"}, "pkr": {Symbol: "PKR", Name: "Pakistani Rupee"}, "bdt": {Symbol: "BDT", Name: "Bangladeshi Taka"},
+	"npr": {Symbol: "NPR", Name: "Nepalese Rupee"}, "btn": {Symbol: "BTN", Name: "Bhutanese Ngultrum"}, "mvr": {Symbol: "MVR", Name: "Maldivian Rufiyaa"},
+	"afn": {Symbol: "AFN", Name: "Afghan Afghani"}, "kzt": {Symbol: "KZT", Name: "Kazakhstani Tenge"}, "uzs": {Symbol: "UZS", Name: "Uzbekistani Som"},
+	"kgs": {Symbol: "KGS", Name: "Kyrgyzstani Som"}, "tjs": {Symbol: "TJS", Name: "Tajikistani Somoni"}, "tmm": {Symbol: "TMT", Name: "Turkmenistani Manat"},
+	"zar": {Symbol: "ZAR", Name: "South African Rand"}, "ils": {Symbol: "ILS", Name: "Israeli Shekel"}, "aed": {Symbol: "AED", Name: "UAE Dirham"},
+	"sar": {Symbol: "SAR", Name: "Saudi Riyal"}, "qar": {Symbol: "QAR", Name: "Qatari Riyal"}, "kwd": {Symbol: "KWD", Name: "Kuwaiti Dinar"},
+	"bhd": {Symbol: "BHD", Name: "Bahraini Dinar"}, "omr": {Symbol: "OMR", Name: "Omani Rial"}, "jod": {Symbol: "JOD", Name: "Jordanian Dinar"},
+	"lbp": {Symbol: "LBP", Name: "Lebanese Pound"}, "syp": {Symbol: "SYP", Name: "Syrian Pound"}, "iqd": {Symbol: "IQD", Name: "Iraqi Dinar"},
+	"irr": {Symbol: "IRR", Name: "Iranian Rial"}, "yer": {Symbol: "YER", Name: "Yemeni Rial"}, "egp": {Symbol: "EGP", Name: "Egyptian Pound"},
+	"mad": {Symbol: "MAD", Name: "Moroccan Dirham"}, "dzd": {Symbol: "DZD", Name: "Algerian Dinar"}, "tnd": {Symbol: "TND", Name: "Tunisian Dinar"},
+	"lyd": {Symbol: "LYD", Name: "Libyan Dinar"}, "sdg": {Symbol: "SDG", Name: "Sudanese Pound"}, "etb": {Symbol: "ETB", Name: "Ethiopian Birr"},
+	"ern": {Symbol: "ERN", Name: "Eritrean Nakfa"}, "djf": {Symbol: "DJF", Name: "Djiboutian Franc"}, "sos": {Symbol: "SOS", Name: "Somali Shilling"},
+	"ngn": {Symbol: "NGN", Name: "Nigerian Naira"}, "ghs": {Symbol: "GHS", Name: "Ghanaian Cedi"}, "xof": {Symbol: "XOF", Name: "West African CFA Franc"},
+	"sll": {Symbol: "SLL", Name: "Sierra Leonean Leone"}, "lrd": {Symbol: "LRD", Name: "Liberian Dollar"}, "gmd": {Symbol: "GMD", Name: "Gambian Dalasi"},
+	"gnf": {Symbol: "GNF", Name: "Guinean Franc"}, "cvs": {Symbol: "CVE", Name: "Cape Verdean Escudo"}, "kes": {Symbol: "KES", Name: "Kenyan Shilling"},
+	"ugx": {Symbol: "UGX", Name: "Ugandan Shilling"}, "tzs": {Symbol: "TZS", Name: "Tanzanian Shilling"}, "rwf": {Symbol: "RWF", Name: "Rwandan Franc"},
+	"bif": {Symbol: "BIF", Name: "Burundian Franc"}, "mzn": {Symbol: "MZN", Name: "Mozambican Metical"}, "mwk": {Symbol: "MWK", Name: "Malawian Kwacha"},
+	"zmw": {Symbol: "ZMW", Name: "Zambian Kwacha"}, "zwd": {Symbol: "ZWL", Name: "Zimbabwean Dollar"}, "mga": {Symbol: "MGA", Name: "Malagasy Ariary"},
+	"mur": {Symbol: "MUR", Name: "Mauritian Rupee"}, "scr": {Symbol: "SCR", Name: "Seychellois Rupee"}, "kmf": {Symbol: "KMF", Name: "Comorian Franc"},
+	"xaf": {Symbol: "XAF", Name: "Central African CFA Franc"}, "cdf": {Symbol: "CDF", Name: "Congolese Franc"}, "aoa": {Symbol: "AOA", Name: "Angolan Kwanza"},
+	"std": {Symbol: "STN", Name: "São Tomé and Príncipe Dobra"}, "gqe": {Symbol: "XAF", Name: "Equatorial Guinea CFA Franc"}, "bwp": {Symbol: "BWP", Name: "Botswana Pula"},
+	"nad": {Symbol: "NAD", Name: "Namibian Dollar"}, "szl": {Symbol: "SZL", Name: "Swazi Lilangeni"}, "lsl": {Symbol: "LSL", Name: "Lesotho Loti"},
+}
+
+var cryptoCurrencies = map[string]currency{
+	"btc": {Symbol: "BTC", Name: "Bitcoin", Aliases: []string{"bitcoin"}}, "eth": {Symbol: "ETH", Name: "Ethereum", Aliases: []string{"ethereum"}},
+	"usdt": {Symbol: "USDT", Name: "Tether", Aliases: []string{"tether"}}, "bnb": {Symbol: "BNB", Name: "BNB", Aliases: []string{"binancecoin"}},
+	"sol": {Symbol: "SOL", Name: "Solana", Aliases: []string{"solana"}}, "usdc": {Symbol: "USDC", Name: "USD Coin", Aliases: []string{"usd-coin"}},
+	"xrp": {Symbol: "XRP", Name: "XRP", Aliases: []string{"ripple"}}, "doge": {Symbol: "DOGE", Name: "Dogecoin", Aliases: []string{"dogecoin"}},
+	"ton": {Symbol: "TON", Name: "Toncoin", Aliases: []string{"toncoin"}}, "ada": {Symbol: "ADA", Name: "Cardano", Aliases: []string{"cardano"}},
+	"shib": {Symbol: "SHIB", Name: "Shiba Inu", Aliases: []string{"shiba-inu"}}, "avax": {Symbol: "AVAX", Name: "Avalanche", Aliases: []string{"avalanche-2"}},
+	"trx": {Symbol: "TRX", Name: "TRON", Aliases: []string{"tron"}}, "dot": {Symbol: "DOT", Name: "Polkadot", Aliases: []string{"polkadot"}},
+	"link": {Symbol: "LINK", Name: "Chainlink", Aliases: []string{"chainlink"}}, "matic": {Symbol: "MATIC", Name: "Polygon", Aliases: []string{"matic-network"}},
+	"wbtc": {Symbol: "WBTC", Name: "Wrapped Bitcoin", Aliases: []string{"wrapped-bitcoin"}}, "ltc": {Symbol: "LTC", Name: "Litecoin", Aliases: []string{"litecoin"}},
+	"bch": {Symbol: "BCH", Name: "Bitcoin Cash", Aliases: []string{"bitcoin-cash"}}, "uni": {Symbol: "UNI", Name: "Uniswap", Aliases: []string{"uniswap"}},
+	"atom": {Symbol: "ATOM", Name: "Cosmos", Aliases: []string{"cosmos"}}, "etc": {Symbol: "ETC", Name: "Ethereum Classic", Aliases: []string{"ethereum-classic"}},
+	"xlm": {Symbol: "XLM", Name: "Stellar", Aliases: []string{"stellar"}}, "okb": {Symbol: "OKB", Name: "OKB"},
+	"icp": {Symbol: "ICP", Name: "Internet Computer", Aliases: []string{"internet-computer"}}, "fil": {Symbol: "FIL", Name: "Filecoin", Aliases: []string{"filecoin"}},
+	"hbar": {Symbol: "HBAR", Name: "Hedera", Aliases: []string{"hedera-hashgraph"}}, "ldo": {Symbol: "LDO", Name: "Lido DAO", Aliases: []string{"lido-dao"}},
+	"crv": {Symbol: "CRV", Name: "Curve DAO Token", Aliases: []string{"curve-dao-token"}}, "arb": {Symbol: "ARB", Name: "Arbitrum", Aliases: []string{"arbitrum"}},
+}

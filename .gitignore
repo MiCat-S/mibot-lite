@@ -11,3 +11,8 @@ restart-receipt.json
 mibot-lite.lock
 /data/
 .env
+
+# 只留在本地的测试：假 Telegram、快照、连真服务的测试
+*_local_test.go
+/internal/commands/testkit/
+/internal/commands/*/testdata/

@@ -118,11 +118,17 @@ MIBOT_EATGIF_ASSETS=/path/to/eatgif go test ./internal/imaging/ -run RealAnimati
 - 连接与更新分发：`internal/app`
 - Telegram 封装：`internal/bot`
 - 命令注册与分发：`internal/command`
-- 命令实现：`internal/commands`
+- 命令实现：`internal/commands/<命令>/`，每个子目录一个命令，或共用一套数据的一组命令
+  （如 `aban` 是全部封禁命令，`ids` 含 `.dc`，`sudo` 含 `.sure`）
+- 命令共用的小工具：`internal/commands/kit`
 
-新增一条命令：在 `internal/commands` 里写一个 `Xxx(a *app.App)` 函数，
+新增一条命令：建一个 `internal/commands/xxx/` 目录，写一个 `Register(a *app.App)`，
 调用 `a.Registry.Register(&command.Command{...})`，再在
 `internal/commands/register.go` 的 `RegisterAll` 里挂上。
+
+仓库里的测试只覆盖不依赖外部环境的纯逻辑。用假 Telegram 跑的行为测试、快照测试和
+连真服务的测试（文件名 `*_local_test.go`，连同 `internal/commands/testkit` 和各命令的
+`testdata`）只留在维护者本地，已写进 `.gitignore`。
 
 ## 许可
 
