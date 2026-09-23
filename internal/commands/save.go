@@ -21,6 +21,7 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/app"
 	"github.com/MiCat-S/mibot-lite/internal/bot"
 	"github.com/MiCat-S/mibot-lite/internal/command"
+	"github.com/MiCat-S/mibot-lite/internal/store"
 )
 
 // saveDocument is data/save.json.
@@ -158,11 +159,13 @@ func describeTarget(target string) string {
 
 // saver carries one command's work.
 type saver struct {
-	client   *bot.Client
-	root     string
-	partial  string
-	upload   *uploader.Uploader
-	learned  bool
+	client  *bot.Client
+	root    string
+	partial string
+	upload  *uploader.Uploader
+	learned bool
+	// status 是进度行的前半段（第几条/共几条），progress 在后面接上当前步骤。
+	status   string
 	progress func(string)
 }
 
@@ -523,236 +526,299 @@ func saveHelp(prefix string) string {
 		"<b>本地模式</b>\n只存媒体，纯文本跳过。文件放在部署目录的 <code>save/对话/</code> 下，旁边有同名 <code>.json</code> 记录来源。"
 }
 
-// Save registers .save.
-func Save(a *app.App) {
-	settings := newStore(a, "save.json", func() saveDocument { return saveDocument{} })
-	showSettings := func(ctx context.Context, inv *command.Invocation) error {
-		current, err := settings.Read()
-		if err != nil {
-			return err
-		}
-		source := "关"
-		if current.Source {
-			source = "开"
-		}
-		return inv.Edit(ctx, "💾 <b>保存设置</b>\n\n默认目标："+command.Code(describeTarget(current.Target))+
-			"\n来源链接："+command.Code(source)+"\n\n<i>"+command.Escape(inv.Prefix+"save to 目标")+" 修改默认目标</i>")
+// saveJob 是同一个对话里要保存的一批消息。
+type saveJob struct {
+	link     messageLink
+	peer     tg.InputPeerClass
+	messages []*tg.Message
+}
+
+// saveTally 是一次保存的结果。
+type saveTally struct {
+	saved, copied, skipped int
+	failures, files        []string
+}
+
+func showSaveSettings(ctx context.Context, inv *command.Invocation, settings *store.Store[saveDocument]) error {
+	current, err := settings.Read()
+	if err != nil {
+		return err
 	}
+	source := "关"
+	if current.Source {
+		source = "开"
+	}
+	return inv.Edit(ctx, "💾 <b>保存设置</b>\n\n默认目标："+command.Code(describeTarget(current.Target))+
+		"\n来源链接："+command.Code(source)+"\n\n<i>"+command.Escape(inv.Prefix+"save to 目标")+" 修改默认目标</i>")
+}
 
-	handle := func(ctx context.Context, inv *command.Invocation) error {
-		switch strings.ToLower(inv.Arg(0)) {
-		case "help", "h":
-			return inv.Edit(ctx, saveHelp(inv.Prefix))
-		case "target", "config":
-			return showSettings(ctx, inv)
-		case "source":
-			switch strings.ToLower(inv.Arg(1)) {
-			case "on", "off":
-				on := strings.EqualFold(inv.Arg(1), "on")
-				if err := settings.Update(func(value *saveDocument) error { value.Source = on; return nil }); err != nil {
-					return err
-				}
+// saveSetting 处理 help、target、source、to 这几个设置类子命令。
+// 第一个返回值表示参数是不是设置命令；不是的话，调用方把它当成保存请求。
+func saveSetting(ctx context.Context, inv *command.Invocation, settings *store.Store[saveDocument]) (bool, error) {
+	switch strings.ToLower(inv.Arg(0)) {
+	case "help", "h":
+		return true, inv.Edit(ctx, saveHelp(inv.Prefix))
+	case "target", "config":
+		return true, showSaveSettings(ctx, inv, settings)
+	case "source":
+		if choice := strings.ToLower(inv.Arg(1)); choice == "on" || choice == "off" {
+			if err := settings.Update(func(value *saveDocument) error { value.Source = choice == "on"; return nil }); err != nil {
+				return true, err
 			}
-			return showSettings(ctx, inv)
-		case "to":
-			target := inv.Rest(1)
-			if target == "" {
-				return inv.EditText(ctx, "用法："+inv.Prefix+"save to me / @用户名 / 对话ID / local")
-			}
-			if !isSelfTarget(target) && !isLocalTarget(target) {
-				check := &saver{client: inv.Client}
-				if _, err := check.targetOf(ctx, target); err != nil {
-					return inv.EditText(ctx, "❌ "+err.Error())
-				}
-			}
-			if isSelfTarget(target) {
-				target = ""
-			}
-			if err := settings.Update(func(value *saveDocument) error { value.Target = target; return nil }); err != nil {
-				return err
-			}
-			return showSettings(ctx, inv)
 		}
+		return true, showSaveSettings(ctx, inv, settings)
+	case "to":
+		return true, setSaveTarget(ctx, inv, settings)
+	}
+	return false, nil
+}
 
-		request, err := parseSaveArgs(inv.Args)
-		if err != nil {
+// setSaveTarget 修改默认目标。设之前先解析一次，免得存下一个根本发不过去的目标。
+func setSaveTarget(ctx context.Context, inv *command.Invocation, settings *store.Store[saveDocument]) error {
+	target := inv.Rest(1)
+	if target == "" {
+		return inv.EditText(ctx, "用法："+inv.Prefix+"save to me / @用户名 / 对话ID / local")
+	}
+	if !isSelfTarget(target) && !isLocalTarget(target) {
+		check := &saver{client: inv.Client}
+		if _, err := check.targetOf(ctx, target); err != nil {
 			return inv.EditText(ctx, "❌ "+err.Error())
 		}
-		current, err := settings.Read()
-		if err != nil {
-			return err
-		}
-		target := current.Target
-		if request.Target != "" {
-			target = request.Target
-		}
-
-		lastEdit := time.Time{}
-		work := &saver{client: inv.Client, root: a.Root, partial: filepath.Join(a.Root, "save", ".partial"),
-			upload: uploader.NewUploader(inv.Client.API()).WithThreads(4)}
-		status := ""
-		work.progress = func(step string) {
-			// Edits are throttled: a range of a few hundred would
-			// otherwise spend its time rate-limited on the status line.
-			if time.Since(lastEdit) < 3*time.Second {
-				return
-			}
-			lastEdit = time.Now()
-			_ = inv.EditText(ctx, strings.TrimSpace(status+" "+step))
-		}
-
-		// What to save, as (chat, messages) pairs.
-		type job struct {
-			link     messageLink
-			peer     tg.InputPeerClass
-			messages []*tg.Message
-		}
-		var jobs []job
-		switch {
-		case request.Range != nil:
-			from, to := request.Range[0], request.Range[1]
-			if to.ID-from.ID+1 > saveRangeLimit {
-				return inv.EditText(ctx, fmt.Sprintf("❌ 范围有 %d 条，一次最多 %d 条，分几段来", to.ID-from.ID+1, saveRangeLimit))
-			}
-			peer, err := work.peerOf(ctx, from)
-			if err != nil {
-				return inv.EditText(ctx, "❌ "+err.Error())
-			}
-			ids := make([]int, 0, to.ID-from.ID+1)
-			for id := from.ID; id <= to.ID; id++ {
-				ids = append(ids, id)
-			}
-			if err := inv.EditText(ctx, "💾 正在读取 "+strconv.Itoa(len(ids))+" 个编号…"); err != nil {
-				return err
-			}
-			messages, err := work.fetch(ctx, peer, ids)
-			if err != nil {
-				return err
-			}
-			jobs = append(jobs, job{link: from, peer: peer, messages: messages})
-		case len(request.Links) > 0:
-			for _, link := range request.Links {
-				peer, err := work.peerOf(ctx, link)
-				if err != nil {
-					return inv.EditText(ctx, "❌ "+link.Raw+"："+err.Error())
-				}
-				messages, err := work.fetch(ctx, peer, []int{link.ID})
-				if err != nil {
-					return err
-				}
-				if len(messages) == 0 {
-					return inv.EditText(ctx, "❌ "+link.Raw+" 这条消息不存在或已删除")
-				}
-				jobs = append(jobs, job{link: link, peer: peer, messages: messages})
-			}
-		default:
-			if inv.Message.ReplyToID == 0 {
-				return inv.Edit(ctx, saveHelp(inv.Prefix))
-			}
-			reply, err := inv.Client.GetReply(ctx, inv.Message)
-			if err != nil || reply == nil || reply.Raw == nil {
-				return inv.EditText(ctx, "❌ 读不到被回复的消息")
-			}
-			peer, err := inv.Client.InputPeer(reply.Peer)
-			if err != nil {
-				return err
-			}
-			link := messageLink{ChatID: reply.ChatID, ID: reply.ID}
-			jobs = append(jobs, job{link: link, peer: peer, messages: []*tg.Message{reply.Raw}})
-		}
-
-		total := 0
-		for _, item := range jobs {
-			total += len(item.messages)
-		}
-		if total == 0 {
-			return inv.EditText(ctx, "❌ 范围内没有消息")
-		}
-
-		local := isLocalTarget(target)
-		var destination tg.InputPeerClass
-		if !local {
-			if destination, err = work.targetOf(ctx, target); err != nil {
-				return inv.EditText(ctx, "❌ "+err.Error())
-			}
-		}
-
-		saved, copied, skipped := 0, 0, 0
-		var failures []string
-		var files []string
-		index := 0
-		for _, item := range jobs {
-			for _, message := range item.messages {
-				index++
-				status = fmt.Sprintf("💾 %d/%d", index, total)
-				work.progress("")
-				link := messageLink{Username: item.link.Username, ChatID: item.link.ChatID, ID: message.ID}
-				if local {
-					path, err := work.saveLocal(ctx, message, link)
-					switch {
-					case err != nil:
-						failures = append(failures, "#"+strconv.Itoa(message.ID)+"："+err.Error())
-					case path == "":
-						skipped++
-					default:
-						saved++
-						files = append(files, path)
-					}
-					continue
-				}
-				wasCopied, err := work.send(ctx, message, item.peer, destination)
-				if err != nil {
-					if ctx.Err() != nil {
-						return ctx.Err()
-					}
-					failures = append(failures, "#"+strconv.Itoa(message.ID)+"："+command.Brief(err))
-					continue
-				}
-				saved++
-				if wasCopied {
-					copied++
-				}
-			}
-		}
-
-		if current.Source && !local && saved > 0 && jobs[0].link.url() != "" {
-			first := jobs[0].link
-			if len(jobs) == 1 && len(jobs[0].messages) > 0 {
-				first.ID = jobs[0].messages[0].ID
-			}
-			line := "📎 来源：" + first.url()
-			if total > 1 {
-				line += fmt.Sprintf(" 等 %d 条", total)
-			}
-			_, _ = inv.Client.API().MessagesSendMessage(ctx, &tg.MessagesSendMessageRequest{
-				Peer: destination, Message: line, RandomID: rand.Int64(), NoWebpage: true})
-		}
-
-		lines := []string{fmt.Sprintf("✅ 已保存 %d 条到%s", saved, describeTarget(target))}
-		if copied > 0 {
-			lines = append(lines, fmt.Sprintf("其中 %d 条来自禁止转发的对话，已重新上传", copied))
-		}
-		if skipped > 0 {
-			lines = append(lines, fmt.Sprintf("跳过 %d 条纯文本（本地模式只存媒体）", skipped))
-		}
-		if len(files) > 0 {
-			lines = append(lines, "文件在 "+filepath.Join(a.Root, "save")+"/")
-		}
-		if len(failures) > 0 {
-			if saved == 0 {
-				lines[0] = "❌ 没有保存成功"
-			}
-			shown := failures
-			if len(shown) > 5 {
-				shown = shown[:5]
-			}
-			lines = append(lines, fmt.Sprintf("失败 %d 条：", len(failures)))
-			lines = append(lines, shown...)
-		}
-		return inv.EditText(ctx, strings.Join(lines, "\n"))
 	}
+	if isSelfTarget(target) {
+		target = ""
+	}
+	if err := settings.Update(func(value *saveDocument) error { value.Target = target; return nil }); err != nil {
+		return err
+	}
+	return showSaveSettings(ctx, inv, settings)
+}
+
+// newSaver 准备一次保存要用的东西。
+//
+// 进度编辑每 3 秒最多一次：几百条的范围如果每条都改状态行，时间会耗在被限流上。
+func newSaver(ctx context.Context, inv *command.Invocation, root string) *saver {
+	work := &saver{client: inv.Client, root: root, partial: filepath.Join(root, "save", ".partial"),
+		upload: uploader.NewUploader(inv.Client.API()).WithThreads(4)}
+	var lastEdit time.Time
+	work.progress = func(step string) {
+		if time.Since(lastEdit) < 3*time.Second {
+			return
+		}
+		lastEdit = time.Now()
+		_ = inv.EditText(ctx, strings.TrimSpace(work.status+" "+step))
+	}
+	return work
+}
+
+// collectSaveJobs 找出要保存的消息：一个范围、若干链接，或者被回复的那一条。
+// 给用户看的错误用 fail 包起来，由调用方原样显示。
+func collectSaveJobs(ctx context.Context, inv *command.Invocation, work *saver, request saveRequest) ([]saveJob, error) {
+	switch {
+	case request.Range != nil:
+		return collectSaveRange(ctx, inv, work, request.Range[0], request.Range[1])
+	case len(request.Links) > 0:
+		var jobs []saveJob
+		for _, link := range request.Links {
+			peer, err := work.peerOf(ctx, link)
+			if err != nil {
+				return nil, fail(link.Raw + "：" + err.Error())
+			}
+			messages, err := work.fetch(ctx, peer, []int{link.ID})
+			if err != nil {
+				return nil, err
+			}
+			if len(messages) == 0 {
+				return nil, fail(link.Raw + " 这条消息不存在或已删除")
+			}
+			jobs = append(jobs, saveJob{link: link, peer: peer, messages: messages})
+		}
+		return jobs, nil
+	}
+	reply, err := inv.Client.GetReply(ctx, inv.Message)
+	if err != nil || reply == nil || reply.Raw == nil {
+		return nil, fail("读不到被回复的消息")
+	}
+	peer, err := inv.Client.InputPeer(reply.Peer)
+	if err != nil {
+		return nil, err
+	}
+	return []saveJob{{link: messageLink{ChatID: reply.ChatID, ID: reply.ID}, peer: peer, messages: []*tg.Message{reply.Raw}}}, nil
+}
+
+// collectSaveRange 按编号逐个读出范围内的消息，缺号跳过。
+func collectSaveRange(ctx context.Context, inv *command.Invocation, work *saver, from, to messageLink) ([]saveJob, error) {
+	count := to.ID - from.ID + 1
+	if count > saveRangeLimit {
+		return nil, failf("范围有 %d 条，一次最多 %d 条，分几段来", count, saveRangeLimit)
+	}
+	peer, err := work.peerOf(ctx, from)
+	if err != nil {
+		return nil, fail(err.Error())
+	}
+	ids := make([]int, 0, count)
+	for id := from.ID; id <= to.ID; id++ {
+		ids = append(ids, id)
+	}
+	if err := inv.EditText(ctx, "💾 正在读取 "+strconv.Itoa(count)+" 个编号…"); err != nil {
+		return nil, err
+	}
+	messages, err := work.fetch(ctx, peer, ids)
+	if err != nil {
+		return nil, err
+	}
+	return []saveJob{{link: from, peer: peer, messages: messages}}, nil
+}
+
+func countMessages(jobs []saveJob) int {
+	total := 0
+	for _, job := range jobs {
+		total += len(job.messages)
+	}
+	return total
+}
+
+// runSaveJobs 逐条保存。单条失败只记下来接着往下走；只有命令本身被取消才中止。
+func runSaveJobs(ctx context.Context, work *saver, jobs []saveJob, destination tg.InputPeerClass, local bool) (saveTally, error) {
+	var tally saveTally
+	total, index := countMessages(jobs), 0
+	for _, job := range jobs {
+		for _, message := range job.messages {
+			index++
+			work.status = fmt.Sprintf("💾 %d/%d", index, total)
+			work.progress("")
+			if local {
+				link := messageLink{Username: job.link.Username, ChatID: job.link.ChatID, ID: message.ID}
+				path, err := work.saveLocal(ctx, message, link)
+				switch {
+				case err != nil:
+					tally.failures = append(tally.failures, "#"+strconv.Itoa(message.ID)+"："+err.Error())
+				case path == "":
+					tally.skipped++
+				default:
+					tally.saved++
+					tally.files = append(tally.files, path)
+				}
+				continue
+			}
+			copied, err := work.send(ctx, message, job.peer, destination)
+			if err != nil {
+				if ctx.Err() != nil {
+					return tally, ctx.Err()
+				}
+				tally.failures = append(tally.failures, "#"+strconv.Itoa(message.ID)+"："+command.Brief(err))
+				continue
+			}
+			tally.saved++
+			if copied {
+				tally.copied++
+			}
+		}
+	}
+	return tally, nil
+}
+
+// sendSourceLine 在目标对话里补一行来源链接。和人私聊的消息没有 t.me 地址，就不发。
+func sendSourceLine(ctx context.Context, client *bot.Client, jobs []saveJob, total int, destination tg.InputPeerClass) {
+	first := jobs[0].link
+	if first.url() == "" {
+		return
+	}
+	if len(jobs) == 1 && len(jobs[0].messages) > 0 {
+		first.ID = jobs[0].messages[0].ID
+	}
+	line := "📎 来源：" + first.url()
+	if total > 1 {
+		line += fmt.Sprintf(" 等 %d 条", total)
+	}
+	_, _ = client.API().MessagesSendMessage(ctx, &tg.MessagesSendMessageRequest{
+		Peer: destination, Message: line, RandomID: rand.Int64(), NoWebpage: true})
+}
+
+// renderSaveResult 把结果写成给人看的一段话，失败最多列前 5 条。
+func renderSaveResult(tally saveTally, target, root string) string {
+	lines := []string{fmt.Sprintf("✅ 已保存 %d 条到%s", tally.saved, describeTarget(target))}
+	if tally.copied > 0 {
+		lines = append(lines, fmt.Sprintf("其中 %d 条来自禁止转发的对话，已重新上传", tally.copied))
+	}
+	if tally.skipped > 0 {
+		lines = append(lines, fmt.Sprintf("跳过 %d 条纯文本（本地模式只存媒体）", tally.skipped))
+	}
+	if len(tally.files) > 0 {
+		lines = append(lines, "文件在 "+filepath.Join(root, "save")+"/")
+	}
+	if len(tally.failures) > 0 {
+		if tally.saved == 0 {
+			lines[0] = "❌ 没有保存成功"
+		}
+		shown := tally.failures
+		if len(shown) > 5 {
+			shown = shown[:5]
+		}
+		lines = append(lines, fmt.Sprintf("失败 %d 条：", len(tally.failures)))
+		lines = append(lines, shown...)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// saveHandle 处理一次 .save：先看是不是设置类子命令，否则收集要存的消息、逐条保存、汇报结果。
+func saveHandle(ctx context.Context, inv *command.Invocation, settings *store.Store[saveDocument], root string) error {
+	if handled, err := saveSetting(ctx, inv, settings); handled {
+		return err
+	}
+	request, err := parseSaveArgs(inv.Args)
+	if err != nil {
+		return inv.EditText(ctx, "❌ "+err.Error())
+	}
+	if request.Range == nil && len(request.Links) == 0 && inv.Message.ReplyToID == 0 {
+		return inv.Edit(ctx, saveHelp(inv.Prefix))
+	}
+	current, err := settings.Read()
+	if err != nil {
+		return err
+	}
+	target := current.Target
+	if request.Target != "" {
+		target = request.Target
+	}
+
+	work := newSaver(ctx, inv, root)
+	jobs, err := collectSaveJobs(ctx, inv, work, request)
+	if detail, ok := isUserError(err); ok {
+		return inv.EditText(ctx, "❌ "+detail)
+	}
+	if err != nil {
+		return err
+	}
+	total := countMessages(jobs)
+	if total == 0 {
+		return inv.EditText(ctx, "❌ 范围内没有消息")
+	}
+	local := isLocalTarget(target)
+	var destination tg.InputPeerClass
+	if !local {
+		if destination, err = work.targetOf(ctx, target); err != nil {
+			return inv.EditText(ctx, "❌ "+err.Error())
+		}
+	}
+	tally, err := runSaveJobs(ctx, work, jobs, destination, local)
+	if err != nil {
+		return err
+	}
+	if current.Source && !local && tally.saved > 0 {
+		sendSourceLine(ctx, inv.Client, jobs, total, destination)
+	}
+	return inv.EditText(ctx, renderSaveResult(tally, target, root))
+}
+
+// Save 注册 .save。
+func Save(a *app.App) {
+	settings := newStore(a, "save.json", func() saveDocument { return saveDocument{} })
 	a.Registry.Register(&command.Command{
 		Name: "save", Description: "保存或转发消息，突破禁止转发", Usage: "[链接…|链接1|链接2] [目标]",
-		Help: saveHelp, Timeout: time.Hour, Handle: handle,
+		Help: saveHelp, Timeout: time.Hour,
+		Handle: func(ctx context.Context, inv *command.Invocation) error {
+			return saveHandle(ctx, inv, settings, a.Root)
+		},
 	})
 }

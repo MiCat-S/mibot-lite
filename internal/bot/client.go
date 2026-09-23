@@ -40,6 +40,15 @@ type Client struct {
 	dcConns map[int]*dcConnection
 }
 
+// FromAPI 只用一个 RPC 接口构造客户端，没有底层连接。
+//
+// 给测试用：把一个假的 Telegram 接进来，就能在不连网络的情况下，
+// 逐个请求地检查 .dme、.da 这类会删消息的命令到底发了什么。
+// 需要底层连接的功能（跨数据中心下载）在这样的客户端上不可用。
+func FromAPI(api *tg.Client, peers *PeerCache, self *tg.User, logger *slog.Logger) *Client {
+	return &Client{api: api, peers: peers, self: self, logger: logger, upload: uploader.NewUploader(api)}
+}
+
 // New wraps an authorized client.
 func New(client *telegram.Client, peers *PeerCache, self *tg.User, logger *slog.Logger) *Client {
 	api := client.API()

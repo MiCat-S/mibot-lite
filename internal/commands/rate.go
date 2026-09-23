@@ -59,6 +59,8 @@ type rateService struct {
 	dynamicFiats map[string]bool
 	dynamicAt    time.Time
 	active       int
+	// fetch 是取行情用的，默认就是 httpx.Do；测试里换成假的行情接口。
+	fetch func(context.Context, httpx.Request) (httpx.Response, error)
 }
 
 func newRateService() *rateService {
@@ -70,6 +72,7 @@ func newRateService() *rateService {
 
 // rateGet fetches a JSON document under the per-query request budget.
 type rateGetter struct {
+	fetch    func(context.Context, httpx.Request) (httpx.Response, error)
 	requests int
 }
 
@@ -81,7 +84,11 @@ func (g *rateGetter) get(ctx context.Context, target string, timeout time.Durati
 	if g.requests > 64 {
 		return nil, rateFail("本次查询已达到请求上限，请稍后重试")
 	}
-	response, err := httpx.Do(ctx, httpx.Request{URL: target, Timeout: timeout, MaxBytes: 128 << 10})
+	fetch := g.fetch
+	if fetch == nil {
+		fetch = httpx.Do
+	}
+	response, err := fetch(ctx, httpx.Request{URL: target, Timeout: timeout, MaxBytes: 128 << 10})
 	if err != nil {
 		return nil, rateFail(httpx.Reason(err))
 	}
@@ -371,203 +378,247 @@ func (s *rateService) fiatRates(ctx context.Context, base string, get *rateGette
 	return nil, rateFail("法币汇率服务不可用：" + last)
 }
 
+func rateHelp(prefix string) string {
+	line := func(args, detail string) string {
+		return "• " + command.Code(prefix+"rate "+args) + " - " + detail + "\n"
+	}
+	return "🚀 <b>智能汇率查询助手</b>\n\n📊 <b>使用示例</b>\n" + line("BTC", "比特币美元价") + line("ETH CNY", "以太坊人民币价") +
+		line("CNY TRY", "人民币兑土耳其里拉") + line("BTC CNY 0.5", "0.5个BTC换算") + line("CNY USDT 7000", "7000元换USDT")
+}
+
+// enter 占一个查询名额，同时最多 4 个，满了返回 false。用完要 leave。
+func (s *rateService) enter() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.active >= 4 {
+		return false
+	}
+	s.active++
+	return true
+}
+
+func (s *rateService) leave() {
+	s.mu.Lock()
+	s.active--
+	s.mu.Unlock()
+}
+
+// ratePricer 算一次查询的价格。同一个币安交易对在一次查询里只取一次。
+type ratePricer struct {
+	ctx     context.Context
+	service *rateService
+	get     *rateGetter
+	tickers map[string]float64
+}
+
+// binance 取币安一个交易对的现价。
+func (p *ratePricer) binance(pair string) (float64, error) {
+	if cached, ok := p.tickers[pair]; ok {
+		return cached, nil
+	}
+	data, err := p.get.get(p.ctx, "https://api.binance.com/api/v3/ticker/price?symbol="+url.QueryEscape(pair), 5*time.Second)
+	if err != nil {
+		return 0, err
+	}
+	object, _ := asObject(data)
+	var price float64
+	switch value := object["price"].(type) {
+	case float64:
+		price = value
+	case string:
+		price, err = strconv.ParseFloat(value, 64)
+		if err != nil {
+			return 0, rateFail("币安交易对价格无效")
+		}
+	default:
+		return 0, rateFail("币安交易对价格无效")
+	}
+	price, err = positiveRate(price)
+	if err != nil {
+		return 0, err
+	}
+	p.tickers[pair] = price
+	return price, nil
+}
+
+// cryptoFiat 算一个币值多少法币：先经稳定币取美元价，再乘美元对该法币的汇率。
+// 几个中转稳定币挨个试，全失败时报最后一个原因。
+func (p *ratePricer) cryptoFiat(crypto, fiat string) (float64, error) {
+	last := "交易对不可用"
+	for _, bridge := range rateBridges {
+		price, err := p.binance(crypto + bridge)
+		if err != nil {
+			if p.ctx.Err() != nil {
+				return 0, err
+			}
+			last = rateReason(err)
+			continue
+		}
+		rates, err := p.service.fiatRates(p.ctx, "usd", p.get)
+		if err != nil {
+			if p.ctx.Err() != nil {
+				return 0, err
+			}
+			last = rateReason(err)
+			continue
+		}
+		rate, err := positiveRate(rates[strings.ToLower(fiat)])
+		if err != nil {
+			last = rateReason(err)
+			continue
+		}
+		return positiveRate(price * rate)
+	}
+	return 0, rateFail(fmt.Sprintf("无法获取 %s 对 %s 的价格。最后错误: %s", crypto, fiat, last))
+}
+
+// cryptoCrypto 算两个币之间的比率：先找直接交易对（正反都试），没有就经稳定币中转。
+func (p *ratePricer) cryptoCrypto(first, second string) (float64, error) {
+	if price, err := p.binance(first + second); err == nil {
+		return price, nil
+	} else if p.ctx.Err() != nil {
+		return 0, err
+	}
+	if price, err := p.binance(second + first); err == nil {
+		return positiveRate(1 / price)
+	} else if p.ctx.Err() != nil {
+		return 0, err
+	}
+	for _, bridge := range rateBridges {
+		a, err := p.binance(first + bridge)
+		if err != nil {
+			if p.ctx.Err() != nil {
+				return 0, err
+			}
+			continue
+		}
+		b, err := p.binance(second + bridge)
+		if err != nil {
+			if p.ctx.Err() != nil {
+				return 0, err
+			}
+			continue
+		}
+		return positiveRate(a / b)
+	}
+	return 0, rateFail(fmt.Sprintf("无法找到 %s 和 %s 之间的交易对", first, second))
+}
+
+// price 按两种货币的类型选路：币对币、币对法币、法币对币（反过来算再取倒数）、法币对法币。
+func (p *ratePricer) price(source, target rateCurrency) (float64, error) {
+	switch {
+	case !source.Fiat && !target.Fiat:
+		return p.cryptoCrypto(source.Symbol, target.Symbol)
+	case !source.Fiat:
+		return p.cryptoFiat(source.Symbol, target.Symbol)
+	case !target.Fiat:
+		reverse, err := p.cryptoFiat(target.Symbol, source.Symbol)
+		if err == nil {
+			return positiveRate(1 / reverse)
+		}
+		if p.ctx.Err() == nil {
+			err = rateFail(fmt.Sprintf("无法获取 %s 对 %s 的价格来计算反向汇率", target.Symbol, source.Symbol))
+		}
+		return 0, err
+	}
+	rates, err := p.service.fiatRates(p.ctx, source.Symbol, p.get)
+	if err != nil {
+		return 0, err
+	}
+	if rates[strings.ToLower(target.Symbol)] == 0 {
+		return 0, rateFail(fmt.Sprintf("无法获取 %s 到 %s 的汇率", source.Symbol, target.Symbol))
+	}
+	return positiveRate(rates[strings.ToLower(target.Symbol)])
+}
+
+// renderPriceFailure 是取价失败时的回复。附上两种货币各被当成了法币还是加密货币，
+// 认错了一眼就能看出来；再给一个谷歌搜索的链接兜底。
+func renderPriceFailure(err error, source, target rateCurrency, fallback string) string {
+	kind := func(c rateCurrency) string {
+		if c.Fiat {
+			return "fiat"
+		}
+		return "crypto"
+	}
+	return feedback("error", "获取价格失败", rateReason(err)) + "\n\n<b>🔍 调试信息:</b>\n• " + command.Code(source.Symbol) + " (" + kind(source) + ")\n• " +
+		command.Code(target.Symbol) + " (" + kind(target) + ")" + fallback
+}
+
+// renderRate 排版查询结果。1 个币换法币时只写一行价格；其余写换算结果，再按类型补一行汇率说明。
+func renderRate(p *ratePricer, source, target rateCurrency, amount, price, converted float64) string {
+	shanghai, _ := time.LoadLocation("Asia/Shanghai")
+	updated := time.Now().In(shanghai).Format("2006/1/2 15:04:05")
+	var b strings.Builder
+	b.WriteString("💱 <b>汇率</b>\n\n")
+	switch {
+	case !source.Fiat && target.Fiat && amount == 1:
+		b.WriteString(command.Code(fmt.Sprintf("1 %s = %s %s", source.Symbol, formatPrice(price), target.Symbol)) + "\n\n")
+	default:
+		b.WriteString(command.Code(fmt.Sprintf("%s %s ≈", formatAmount(amount), source.Symbol)) + "\n" + command.Code(fmt.Sprintf("%s %s", formatAmount(converted), target.Symbol)) + "\n\n")
+		switch {
+		case source.Fiat && target.Fiat:
+			b.WriteString("📊 <b>汇率:</b> " + command.Code(fmt.Sprintf("1 %s = %s %s", source.Symbol, formatAmount(price), target.Symbol)) + "\n")
+		case !source.Fiat && !target.Fiat:
+			first, _ := p.cryptoFiat(source.Symbol, "USD")
+			second, _ := p.cryptoFiat(target.Symbol, "USD")
+			b.WriteString("💎 <b>兑换比率:</b> " + command.Code(fmt.Sprintf("1 %s = %s %s", source.Symbol, formatAmount(price), target.Symbol)) + "\n")
+			b.WriteString("📊 <b>基准价格:</b> " + command.Code(fmt.Sprintf("%s $%s • %s $%s", source.Symbol, formatPrice(first), target.Symbol, formatPrice(second))) + "\n")
+		default:
+			if source.Fiat {
+				b.WriteString("💎 <b>当前汇率:</b> " + command.Code(fmt.Sprintf("1 %s = %s %s", target.Symbol, formatPrice(1/price), source.Symbol)) + "\n")
+			} else {
+				b.WriteString("💎 <b>当前汇率:</b> " + command.Code(fmt.Sprintf("1 %s = %s %s", source.Symbol, formatPrice(price), target.Symbol)) + "\n")
+			}
+		}
+	}
+	label := "数据更新"
+	if source.Fiat && target.Fiat {
+		label = "更新时间"
+	}
+	b.WriteString("⏰ <b>" + label + ":</b> " + updated)
+	return b.String()
+}
+
+func rateHandle(ctx context.Context, inv *command.Invocation, service *rateService) error {
+	if !service.enter() {
+		return inv.Edit(ctx, feedback("error", "汇率查询繁忙", "请稍后重试"))
+	}
+	defer service.leave()
+
+	first := strings.ToLower(inv.Arg(0))
+	if first == "" || first == "help" || first == "h" {
+		return inv.Edit(ctx, rateHelp(inv.Prefix))
+	}
+	base, quote, amount, err := parseRateArgs(inv.Args)
+	if err != nil {
+		return inv.Edit(ctx, feedback("error", "操作失败", rateReason(err)))
+	}
+	query := url.QueryEscape(fmt.Sprintf("%s %s to %s", strconv.FormatFloat(amount, 'f', -1, 64), strings.ToUpper(base), strings.ToUpper(quote)))
+	fallback := "\n\n🔎 <b>谷歌兜底:</b> <a href=\"https://www.google.com/search?q=" + query + "\">点击查看</a>"
+	get := &rateGetter{fetch: service.fetch}
+	if err := inv.Edit(ctx, feedback("working", "正在查询汇率", "")); err != nil {
+		return err
+	}
+	source := service.currency(ctx, base, get)
+	target := service.currency(ctx, quote, get)
+	pricer := &ratePricer{ctx: ctx, service: service, get: get, tickers: map[string]float64{}}
+	price, err := pricer.price(source, target)
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return inv.Edit(ctx, renderPriceFailure(err, source, target, fallback))
+	}
+	converted := amount * price
+	if math.IsInf(converted, 0) || math.IsNaN(converted) {
+		return inv.Edit(ctx, feedback("error", "操作失败", "换算结果超出有限数值范围")+fallback)
+	}
+	return inv.Edit(ctx, renderRate(pricer, source, target, amount, price, converted))
+}
+
 // Rate registers .rate.
 func Rate(a *app.App) {
 	service := newRateService()
-	help := func(prefix string) string {
-		line := func(args, detail string) string {
-			return "• " + command.Code(prefix+"rate "+args) + " - " + detail + "\n"
-		}
-		return "🚀 <b>智能汇率查询助手</b>\n\n📊 <b>使用示例</b>\n" + line("BTC", "比特币美元价") + line("ETH CNY", "以太坊人民币价") +
-			line("CNY TRY", "人民币兑土耳其里拉") + line("BTC CNY 0.5", "0.5个BTC换算") + line("CNY USDT 7000", "7000元换USDT")
-	}
-	a.Registry.Register(&command.Command{Name: "rate", Description: "智能汇率查询与数量换算", Usage: "货币 [目标货币] [数量]", Help: help, Timeout: 2 * time.Minute,
-		Handle: func(ctx context.Context, inv *command.Invocation) error {
-			service.mu.Lock()
-			if service.active >= 4 {
-				service.mu.Unlock()
-				return inv.Edit(ctx, feedback("error", "汇率查询繁忙", "请稍后重试"))
-			}
-			service.active++
-			service.mu.Unlock()
-			defer func() { service.mu.Lock(); service.active--; service.mu.Unlock() }()
-
-			first := strings.ToLower(inv.Arg(0))
-			if first == "" || first == "help" || first == "h" {
-				return inv.Edit(ctx, help(inv.Prefix))
-			}
-			base, quote, amount, err := parseRateArgs(inv.Args)
-			if err != nil {
-				return inv.Edit(ctx, feedback("error", "操作失败", rateReason(err)))
-			}
-			query := url.QueryEscape(fmt.Sprintf("%s %s to %s", strconv.FormatFloat(amount, 'f', -1, 64), strings.ToUpper(base), strings.ToUpper(quote)))
-			fallback := "\n\n🔎 <b>谷歌兜底:</b> <a href=\"https://www.google.com/search?q=" + query + "\">点击查看</a>"
-			get := &rateGetter{}
-			if err := inv.Edit(ctx, feedback("working", "正在查询汇率", "")); err != nil {
-				return err
-			}
-			source := service.currency(ctx, base, get)
-			target := service.currency(ctx, quote, get)
-
-			tickers := map[string]float64{}
-			binance := func(pair string) (float64, error) {
-				if cached, ok := tickers[pair]; ok {
-					return cached, nil
-				}
-				data, err := get.get(ctx, "https://api.binance.com/api/v3/ticker/price?symbol="+url.QueryEscape(pair), 5*time.Second)
-				if err != nil {
-					return 0, err
-				}
-				object, _ := asObject(data)
-				var price float64
-				switch value := object["price"].(type) {
-				case float64:
-					price = value
-				case string:
-					price, err = strconv.ParseFloat(value, 64)
-					if err != nil {
-						return 0, rateFail("币安交易对价格无效")
-					}
-				default:
-					return 0, rateFail("币安交易对价格无效")
-				}
-				price, err = positiveRate(price)
-				if err != nil {
-					return 0, err
-				}
-				tickers[pair] = price
-				return price, nil
-			}
-			cryptoFiat := func(crypto, fiat string) (float64, error) {
-				last := "交易对不可用"
-				for _, bridge := range rateBridges {
-					price, err := binance(crypto + bridge)
-					if err != nil {
-						if ctx.Err() != nil {
-							return 0, err
-						}
-						last = rateReason(err)
-						continue
-					}
-					rates, err := service.fiatRates(ctx, "usd", get)
-					if err != nil {
-						if ctx.Err() != nil {
-							return 0, err
-						}
-						last = rateReason(err)
-						continue
-					}
-					rate, err := positiveRate(rates[strings.ToLower(fiat)])
-					if err != nil {
-						last = rateReason(err)
-						continue
-					}
-					return positiveRate(price * rate)
-				}
-				return 0, rateFail(fmt.Sprintf("无法获取 %s 对 %s 的价格。最后错误: %s", crypto, fiat, last))
-			}
-			cryptoCrypto := func(first, second string) (float64, error) {
-				if price, err := binance(first + second); err == nil {
-					return price, nil
-				} else if ctx.Err() != nil {
-					return 0, err
-				}
-				if price, err := binance(second + first); err == nil {
-					return positiveRate(1 / price)
-				} else if ctx.Err() != nil {
-					return 0, err
-				}
-				for _, bridge := range rateBridges {
-					a, err := binance(first + bridge)
-					if err != nil {
-						if ctx.Err() != nil {
-							return 0, err
-						}
-						continue
-					}
-					b, err := binance(second + bridge)
-					if err != nil {
-						if ctx.Err() != nil {
-							return 0, err
-						}
-						continue
-					}
-					return positiveRate(a / b)
-				}
-				return 0, rateFail(fmt.Sprintf("无法找到 %s 和 %s 之间的交易对", first, second))
-			}
-
-			var price float64
-			switch {
-			case !source.Fiat && !target.Fiat:
-				price, err = cryptoCrypto(source.Symbol, target.Symbol)
-			case !source.Fiat:
-				price, err = cryptoFiat(source.Symbol, target.Symbol)
-			case !target.Fiat:
-				var reverse float64
-				reverse, err = cryptoFiat(target.Symbol, source.Symbol)
-				if err == nil {
-					price, err = positiveRate(1 / reverse)
-				} else if ctx.Err() == nil {
-					err = rateFail(fmt.Sprintf("无法获取 %s 对 %s 的价格来计算反向汇率", target.Symbol, source.Symbol))
-				}
-			default:
-				var rates map[string]float64
-				rates, err = service.fiatRates(ctx, source.Symbol, get)
-				if err == nil {
-					if rates[strings.ToLower(target.Symbol)] == 0 {
-						err = rateFail(fmt.Sprintf("无法获取 %s 到 %s 的汇率", source.Symbol, target.Symbol))
-					} else {
-						price, err = positiveRate(rates[strings.ToLower(target.Symbol)])
-					}
-				}
-			}
-			if err != nil {
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-				kind := func(c rateCurrency) string {
-					if c.Fiat {
-						return "fiat"
-					}
-					return "crypto"
-				}
-				return inv.Edit(ctx, feedback("error", "获取价格失败", rateReason(err))+"\n\n<b>🔍 调试信息:</b>\n• "+command.Code(source.Symbol)+" ("+kind(source)+")\n• "+command.Code(target.Symbol)+" ("+kind(target)+")"+fallback)
-			}
-			converted := amount * price
-			if math.IsInf(converted, 0) || math.IsNaN(converted) {
-				return inv.Edit(ctx, feedback("error", "操作失败", "换算结果超出有限数值范围")+fallback)
-			}
-			shanghai, _ := time.LoadLocation("Asia/Shanghai")
-			updated := time.Now().In(shanghai).Format("2006/1/2 15:04:05")
-			var b strings.Builder
-			b.WriteString("💱 <b>汇率</b>\n\n")
-			switch {
-			case !source.Fiat && target.Fiat && amount == 1:
-				b.WriteString(command.Code(fmt.Sprintf("1 %s = %s %s", source.Symbol, formatPrice(price), target.Symbol)) + "\n\n")
-			default:
-				b.WriteString(command.Code(fmt.Sprintf("%s %s ≈", formatAmount(amount), source.Symbol)) + "\n" + command.Code(fmt.Sprintf("%s %s", formatAmount(converted), target.Symbol)) + "\n\n")
-				switch {
-				case source.Fiat && target.Fiat:
-					b.WriteString("📊 <b>汇率:</b> " + command.Code(fmt.Sprintf("1 %s = %s %s", source.Symbol, formatAmount(price), target.Symbol)) + "\n")
-				case !source.Fiat && !target.Fiat:
-					first, _ := cryptoFiat(source.Symbol, "USD")
-					second, _ := cryptoFiat(target.Symbol, "USD")
-					b.WriteString("💎 <b>兑换比率:</b> " + command.Code(fmt.Sprintf("1 %s = %s %s", source.Symbol, formatAmount(price), target.Symbol)) + "\n")
-					b.WriteString("📊 <b>基准价格:</b> " + command.Code(fmt.Sprintf("%s $%s • %s $%s", source.Symbol, formatPrice(first), target.Symbol, formatPrice(second))) + "\n")
-				default:
-					if source.Fiat {
-						b.WriteString("💎 <b>当前汇率:</b> " + command.Code(fmt.Sprintf("1 %s = %s %s", target.Symbol, formatPrice(1/price), source.Symbol)) + "\n")
-					} else {
-						b.WriteString("💎 <b>当前汇率:</b> " + command.Code(fmt.Sprintf("1 %s = %s %s", source.Symbol, formatPrice(price), target.Symbol)) + "\n")
-					}
-				}
-			}
-			label := "数据更新"
-			if source.Fiat && target.Fiat {
-				label = "更新时间"
-			}
-			b.WriteString("⏰ <b>" + label + ":</b> " + updated)
-			return inv.Edit(ctx, b.String())
-		}})
+	a.Registry.Register(&command.Command{Name: "rate", Description: "智能汇率查询与数量换算", Usage: "货币 [目标货币] [数量]", Help: rateHelp, Timeout: 2 * time.Minute,
+		Handle: func(ctx context.Context, inv *command.Invocation) error { return rateHandle(ctx, inv, service) }})
 }

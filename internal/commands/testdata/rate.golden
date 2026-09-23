@@ -1,0 +1,80 @@
+## ""
+edit 1000 text=true:"🚀 智能汇率查询助手\n\n📊 使用示例\n• .rate BTC - 比特币美元价\n• .rate ETH CNY - 以太坊人民币价\n• .rate CNY TRY - 人民币兑土耳其里拉\n• .rate BTC CNY 0.5 - 0.5个BTC换算\n• .rate CNY USDT 7000 - 7000元换USDT\n" media=false
+
+## "help"
+edit 1000 text=true:"🚀 智能汇率查询助手\n\n📊 使用示例\n• .rate BTC - 比特币美元价\n• .rate ETH CNY - 以太坊人民币价\n• .rate CNY TRY - 人民币兑土耳其里拉\n• .rate BTC CNY 0.5 - 0.5个BTC换算\n• .rate CNY USDT 7000 - 7000元换USDT\n" media=false
+
+## "BTC"
+edit 1000 text=true:"⏳ 正在查询汇率" media=false
+edit 1000 text=true:"💱 汇率\n\n1 BTC = 65,000.50 USD\n\n⏰ 数据更新: #time" media=false
+https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT
+https://api.exchangerate.host/latest?base=usd
+https://open.er-api.com/v6/latest/usd
+
+## "ETH CNY"
+edit 1000 text=true:"⏳ 正在查询汇率" media=false
+edit 1000 text=true:"💱 汇率\n\n1 ETH = 21,301.77 CNY\n\n⏰ 数据更新: #time" media=false
+https://api.binance.com/api/v3/ticker/price?symbol=ETHUSDT
+https://api.exchangerate.host/latest?base=usd
+https://open.er-api.com/v6/latest/usd
+
+## "CNY TRY"
+edit 1000 text=true:"⏳ 正在查询汇率" media=false
+edit 1000 text=true:"💱 汇率\n\n1.00 CNY ≈\n4.58 TRY\n\n📊 汇率: 1 CNY = 4.58 TRY\n⏰ 更新时间: #time" media=false
+https://api.exchangerate.host/latest?base=cny
+https://open.er-api.com/v6/latest/cny
+
+## "BTC CNY 0.5"
+edit 1000 text=true:"⏳ 正在查询汇率" media=false
+edit 1000 text=true:"💱 汇率\n\n0.500000 BTC ≈\n230,751.77 CNY\n\n💎 当前汇率: 1 BTC = 461,503.55 CNY\n⏰ 数据更新: #time" media=false
+https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT
+https://api.exchangerate.host/latest?base=usd
+https://open.er-api.com/v6/latest/usd
+
+## "CNY USDT 7000"
+edit 1000 text=true:"⏳ 正在查询汇率" media=false
+edit 1000 text=true:"❌ 获取价格失败\n无法获取 USDT 对 CNY 的价格来计算反向汇率\n\n🔍 调试信息:\n• CNY (fiat)\n• USDT (crypto)\n\n🔎 谷歌兜底: 点击查看" media=false
+https://api.binance.com/api/v3/ticker/price?symbol=USDTUSDT
+https://api.binance.com/api/v3/ticker/price?symbol=USDTBUSD
+https://api.binance.com/api/v3/ticker/price?symbol=USDTUSDC
+
+## "BTC ETH"
+edit 1000 text=true:"⏳ 正在查询汇率" media=false
+edit 1000 text=true:"💱 汇率\n\n1.00 BTC ≈\n21.67 ETH\n\n💎 兑换比率: 1 BTC = 21.67 ETH\n📊 基准价格: BTC $65,000.50 • ETH $3,000.25\n⏰ 数据更新: #time" media=false
+https://api.binance.com/api/v3/ticker/price?symbol=BTCETH
+https://api.binance.com/api/v3/ticker/price?symbol=ETHBTC
+https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT
+https://api.binance.com/api/v3/ticker/price?symbol=ETHUSDT
+https://api.exchangerate.host/latest?base=usd
+https://open.er-api.com/v6/latest/usd
+
+## "XYZ CNY"
+edit 1000 text=true:"⏳ 正在查询汇率" media=false
+edit 1000 text=true:"❌ 获取价格失败\n无法获取 XYZ 对 CNY 的价格。最后错误: 汇率服务 HTTP 400\n\n🔍 调试信息:\n• XYZ (crypto)\n• CNY (fiat)\n\n🔎 谷歌兜底: 点击查看" media=false
+https://api.coingecko.com/api/v3/simple/supported_vs_currencies
+https://api.binance.com/api/v3/ticker/price?symbol=XYZUSDT
+https://api.binance.com/api/v3/ticker/price?symbol=XYZBUSD
+https://api.binance.com/api/v3/ticker/price?symbol=XYZUSDC
+
+## "CNY ABC"
+edit 1000 text=true:"⏳ 正在查询汇率" media=false
+edit 1000 text=true:"❌ 获取价格失败\n无法获取 ABC 对 CNY 的价格来计算反向汇率\n\n🔍 调试信息:\n• CNY (fiat)\n• ABC (crypto)\n\n🔎 谷歌兜底: 点击查看" media=false
+https://api.coingecko.com/api/v3/simple/supported_vs_currencies
+https://api.binance.com/api/v3/ticker/price?symbol=ABCUSDT
+https://api.binance.com/api/v3/ticker/price?symbol=ABCBUSD
+https://api.binance.com/api/v3/ticker/price?symbol=ABCUSDC
+
+## "BTC CNY abc"
+edit 1000 text=true:"⏳ 正在查询汇率" media=false
+edit 1000 text=true:"💱 汇率\n\n1 BTC = 461,503.55 CNY\n\n⏰ 数据更新: #time" media=false
+https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT
+https://api.exchangerate.host/latest?base=usd
+https://open.er-api.com/v6/latest/usd
+
+## "BTC CNY 0"
+edit 1000 text=true:"⏳ 正在查询汇率" media=false
+edit 1000 text=true:"💱 汇率\n\n0.000000 BTC ≈\n0.000000 CNY\n\n💎 当前汇率: 1 BTC = 461,503.55 CNY\n⏰ 数据更新: #time" media=false
+https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT
+https://api.exchangerate.host/latest?base=usd
+https://open.er-api.com/v6/latest/usd
+

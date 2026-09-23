@@ -23,6 +23,7 @@ import (
 
 	"github.com/MiCat-S/mibot-lite/internal/app"
 	"github.com/MiCat-S/mibot-lite/internal/command"
+	"github.com/MiCat-S/mibot-lite/internal/store"
 )
 
 // Speed is measured by Ookla's official Speedtest CLI: it picks a nearby
@@ -543,182 +544,204 @@ func render(result *reading, elapsed time.Duration, note string) string {
 	return strings.Join(lines, "\n")
 }
 
-// speedtestDocument remembers a pinned server between runs.
+// speedtestDocument 记住固定的测速服务器。
 type speedtestDocument struct {
 	Server int `json:"server,omitempty"`
 }
 
-// Speedtest registers .speedtest and its short form.
-func Speedtest(a *app.App) {
-	var running sync.Mutex
-	settings := newStore(a, "speedtest.json", func() speedtestDocument { return speedtestDocument{} })
-	pinnedServer := func() int {
-		current, err := settings.Read()
-		if err != nil {
-			return 0
-		}
-		return current.Server
+// speedtester 放 .speedtest 各个子命令共用的东西。
+type speedtester struct {
+	dataDir  string
+	settings *store.Store[speedtestDocument]
+	// running 保证同一时间只跑一次测速：两次同时跑会互相抢带宽，测出来的都不准。
+	running sync.Mutex
+}
+
+// home 是给 CLI 当 HOME 用的目录，它要在里面记授权状态。
+func (s *speedtester) home() string { return filepath.Join(s.dataDir, "speedtest") }
+
+func (s *speedtester) pinned() int {
+	current, err := s.settings.Read()
+	if err != nil {
+		return 0
 	}
-	help := func(prefix string) string { return speedtestHelp(a.DataDir(), prefix, pinnedServer()) }
+	return current.Server
+}
 
-	// ensureTool finds the CLI, installing it the first time.
-	ensureTool := func(ctx context.Context, inv *command.Invocation) (string, string, error) {
-		if tool, kind := externalTool(a.DataDir()); tool != "" {
-			return tool, kind, nil
-		}
-		if err := inv.Edit(ctx, "🚀 <b>网络测速</b>\n\n首次运行，正在下载 Ookla 官方 CLI…"); err != nil {
-			return "", "", err
-		}
-		installed, err := installOokla(ctx, a.DataDir())
-		if err != nil {
-			inv.Log.Warn("speedtest.install_failed", "error", err.Error())
-			return "", "", err
-		}
-		return installed, "ookla", nil
+func (s *speedtester) help(prefix string) string {
+	return speedtestHelp(s.dataDir, prefix, s.pinned())
+}
+
+// ensureTool 找到 CLI，第一次用时顺手装上。
+func (s *speedtester) ensureTool(ctx context.Context, inv *command.Invocation) (string, string, error) {
+	if tool, kind := externalTool(s.dataDir); tool != "" {
+		return tool, kind, nil
 	}
-	installProblem := func(ctx context.Context, inv *command.Invocation, err error) error {
-		detail, ok := isUserError(err)
-		if !ok {
-			detail = "网络不通或构件无法校验"
-		}
-		return inv.EditText(ctx, "❌ 无法安装 Speedtest CLI："+detail+"\n手动装好 speedtest 后再试")
+	if err := inv.Edit(ctx, "🚀 <b>网络测速</b>\n\n首次运行，正在下载 Ookla 官方 CLI…"); err != nil {
+		return "", "", err
 	}
+	installed, err := installOokla(ctx, s.dataDir)
+	if err != nil {
+		inv.Log.Warn("speedtest.install_failed", "error", err.Error())
+		return "", "", err
+	}
+	return installed, "ookla", nil
+}
 
-	handle := func(ctx context.Context, inv *command.Invocation) error {
-		dataDir := a.DataDir()
-		home := filepath.Join(dataDir, "speedtest")
-		first := strings.ToLower(inv.Arg(0))
+func installProblem(ctx context.Context, inv *command.Invocation, err error) error {
+	detail, ok := isUserError(err)
+	if !ok {
+		detail = "网络不通或构件无法校验"
+	}
+	return inv.EditText(ctx, "❌ 无法安装 Speedtest CLI："+detail+"\n手动装好 speedtest 后再试")
+}
 
-		switch first {
-		case "help", "h":
-			return inv.Edit(ctx, help(inv.Prefix))
-		case "debug", "level":
-			// Reserved by .log; here it would only confuse.
-		case "config":
-			return inv.Edit(ctx, help(inv.Prefix))
-		case "clear", "auto", "自动":
-			if err := settings.Update(func(value *speedtestDocument) error {
-				value.Server = 0
-				return nil
-			}); err != nil {
-				return err
-			}
-			return inv.Edit(ctx, "✅ 已恢复自动挑选服务器\n<i>想再固定一台，"+
-				command.Escape(inv.Prefix+"speedtest list")+" 看有哪些</i>")
-		case "set":
-			id, err := strconv.Atoi(inv.Arg(1))
-			if err != nil || id <= 0 {
-				return inv.EditText(ctx, "用法：set 后面跟服务器 ID，ID 用 list 查")
-			}
-			if err := settings.Update(func(value *speedtestDocument) error {
-				value.Server = id
-				return nil
-			}); err != nil {
-				return err
-			}
-			return inv.Edit(ctx, "✅ 默认服务器已设为 "+command.Code(strconv.Itoa(id))+
-				"\n<i>测不通会自动退回自动挑选；取消固定用 "+
-				command.Escape(inv.Prefix+"speedtest clear")+"</i>")
+// setting 处理 help、config、clear、set。第一个返回值表示参数是不是这几个之一。
+func (s *speedtester) setting(ctx context.Context, inv *command.Invocation) (bool, error) {
+	switch strings.ToLower(inv.Arg(0)) {
+	case "help", "h", "config":
+		return true, inv.Edit(ctx, s.help(inv.Prefix))
+	case "clear", "auto", "自动":
+		if err := s.settings.Update(func(value *speedtestDocument) error { value.Server = 0; return nil }); err != nil {
+			return true, err
 		}
+		return true, inv.Edit(ctx, "✅ 已恢复自动挑选服务器\n<i>想再固定一台，"+
+			command.Escape(inv.Prefix+"speedtest list")+" 看有哪些</i>")
+	case "set":
+		id, err := strconv.Atoi(inv.Arg(1))
+		if err != nil || id <= 0 {
+			return true, inv.EditText(ctx, "用法：set 后面跟服务器 ID，ID 用 list 查")
+		}
+		if err := s.settings.Update(func(value *speedtestDocument) error { value.Server = id; return nil }); err != nil {
+			return true, err
+		}
+		return true, inv.Edit(ctx, "✅ 默认服务器已设为 "+command.Code(strconv.Itoa(id))+
+			"\n<i>测不通会自动退回自动挑选；取消固定用 "+command.Escape(inv.Prefix+"speedtest clear")+"</i>")
+	}
+	return false, nil
+}
 
-		// Running two at once would have them measure each other.
-		if !running.TryLock() {
-			return inv.EditText(ctx, "已有一个测速在进行，请稍候")
-		}
-		defer running.Unlock()
+// list 列出 CLI 能看到的测速服务器。
+func (s *speedtester) list(ctx context.Context, inv *command.Invocation) error {
+	if err := inv.Edit(ctx, "🌐 正在取服务器列表…"); err != nil {
+		return err
+	}
+	tool, kind, err := s.ensureTool(ctx, inv)
+	if err != nil {
+		return installProblem(ctx, inv, err)
+	}
+	if kind != "ookla" {
+		return inv.EditText(ctx, "只有 Ookla 官方 CLI 能列出服务器，当前用的是 speedtest-cli")
+	}
+	servers, err := listServers(ctx, tool, s.home())
+	if detail, ok := isUserError(err); ok {
+		return inv.EditText(ctx, "❌ "+detail)
+	}
+	if err != nil {
+		return err
+	}
+	return inv.Edit(ctx, renderServers(servers, s.pinned(), inv.Prefix))
+}
 
-		if first == "list" || first == "servers" || first == "列表" {
-			if err := inv.Edit(ctx, "🌐 正在取服务器列表…"); err != nil {
-				return err
-			}
-			tool, kind, err := ensureTool(ctx, inv)
-			if err != nil {
-				return installProblem(ctx, inv, err)
-			}
-			if kind != "ookla" {
-				return inv.EditText(ctx, "只有 Ookla 官方 CLI 能列出服务器，当前用的是 speedtest-cli")
-			}
-			servers, err := listServers(ctx, tool, home)
-			if err != nil {
-				if detail, ok := isUserError(err); ok {
-					return inv.EditText(ctx, "❌ "+detail)
-				}
-				return err
-			}
-			return inv.Edit(ctx, renderServers(servers, pinnedServer(), inv.Prefix))
-		}
+// measure 跑一次测速，失败了重试一次。
+//
+// CLI 偶尔会中途丢掉服务器（报 "Latency test failed"，这台机器上见过两次），
+// 固定的服务器也可能已经下线，所以重试时顺便放弃固定、改用自动挑选，
+// 而不是因为几天前选的服务器不在了就整个失败。返回的 note 说明发生过这种退回。
+func (s *speedtester) measure(ctx context.Context, inv *command.Invocation, tool, kind string, server int) (*reading, string, error) {
+	result, err := runExternal(ctx, tool, kind, s.home(), server)
+	if err == nil {
+		return result, "", nil
+	}
+	inv.Log.Warn("speedtest.retrying", "tool", kind, "server", server, "error", err.Error())
+	note := ""
+	if server > 0 {
+		note = "服务器 " + strconv.Itoa(server) + " 没测通，已改用自动挑选。换一台用 " +
+			inv.Prefix + "speedtest list，取消固定用 " + inv.Prefix + "speedtest clear"
+	}
+	result, err = runExternal(ctx, tool, kind, s.home(), 0)
+	return result, note, err
+}
 
-		// A bare number picks a server for this run only.
-		request := pinnedServer()
-		once := false
-		if first != "" {
-			id, err := strconv.Atoi(first)
-			if err != nil || id <= 0 {
-				return inv.Edit(ctx, help(inv.Prefix))
-			}
-			request, once = id, true
-		}
-
-		started := time.Now()
-		tool, kind, err := ensureTool(ctx, inv)
-		if err != nil {
-			return installProblem(ctx, inv, err)
-		}
-		where := "，约需一分钟…"
-		if request > 0 {
-			where = "（服务器 " + strconv.Itoa(request) + "），约需一分钟…"
-		}
-		if err := inv.Edit(ctx, "🚀 <b>网络测速</b>\n\n正在通过 "+command.Escape(kind)+" 测速"+command.Escape(where)); err != nil {
-			return err
-		}
-		note := ""
-		result, err := runExternal(ctx, tool, kind, home, request)
-		if err != nil {
-			// One retry. The CLI occasionally loses its server part way
-			// through — "Latency test failed", seen twice here — and a
-			// pinned server may simply be gone, so the retry also drops
-			// the pin rather than failing on a choice made days ago.
-			inv.Log.Warn("speedtest.retrying", "tool", kind, "server", request, "error", err.Error())
-			if request > 0 {
-				note = "服务器 " + strconv.Itoa(request) + " 没测通，已改用自动挑选。换一台用 " +
-					inv.Prefix + "speedtest list，取消固定用 " + inv.Prefix + "speedtest clear"
-				request = 0
-			}
-			result, err = runExternal(ctx, tool, kind, home, request)
-		}
-		if err != nil {
-			inv.Log.Warn("speedtest.external_failed", "tool", kind, "error", err.Error())
-			if detail, ok := isUserError(err); ok {
-				return inv.EditText(ctx, "❌ "+detail)
-			}
-			return inv.EditText(ctx, "❌ 测速失败，请稍后再试")
-		}
-		if once && note == "" {
-			note = "本次指定了服务器，未改动默认设置"
-		}
-		text := render(result, time.Since(started), note)
-		// Speedtest publishes a picture of every result; sending it is what
-		// people expect to see, and the numbers ride along as the caption.
-		if image := resultImage(ctx, result.Link); image != nil {
-			// Both failures carry their reason. A bare "photo_failed" was
-			// logged once from a group and said nothing at all: a chat
-			// that forbids media, a peer that will not resolve and a
-			// network error are three different problems.
-			peer, peerErr := inv.Client.InputPeer(inv.Message.Peer)
-			if peerErr != nil {
-				inv.Log.Info("speedtest.peer_unresolved", "error", peerErr.Error())
-			} else if sendErr := inv.Client.SendPhoto(ctx, peer, "speedtest.png", image, text, 0); sendErr != nil {
-				inv.Log.Info("speedtest.photo_failed", "error", sendErr.Error())
-			} else {
-				return inv.Client.DeleteMessage(ctx, inv.Message)
-			}
-		}
+// deliver 把结果连同 Speedtest 的结果图一起发出去，数字作为图说明；
+// 图发不出去就退回成改文字。
+//
+// 两种失败各记各的原因：聊天禁止发媒体、对话解析不出来、网络出错是三种不同的问题，
+// 群里出现过一条什么原因都没带的 photo_failed，那条日志什么也回答不了。
+func deliver(ctx context.Context, inv *command.Invocation, text, link string) error {
+	image := resultImage(ctx, link)
+	if image == nil {
 		return inv.Edit(ctx, text)
 	}
+	peer, err := inv.Client.InputPeer(inv.Message.Peer)
+	if err != nil {
+		inv.Log.Info("speedtest.peer_unresolved", "error", err.Error())
+		return inv.Edit(ctx, text)
+	}
+	if err := inv.Client.SendPhoto(ctx, peer, "speedtest.png", image, text, 0); err != nil {
+		inv.Log.Info("speedtest.photo_failed", "error", err.Error())
+		return inv.Edit(ctx, text)
+	}
+	return inv.Client.DeleteMessage(ctx, inv.Message)
+}
+
+func (s *speedtester) handle(ctx context.Context, inv *command.Invocation) error {
+	if handled, err := s.setting(ctx, inv); handled {
+		return err
+	}
+	if !s.running.TryLock() {
+		return inv.EditText(ctx, "已有一个测速在进行，请稍候")
+	}
+	defer s.running.Unlock()
+
+	first := strings.ToLower(inv.Arg(0))
+	if first == "list" || first == "servers" || first == "列表" {
+		return s.list(ctx, inv)
+	}
+	// 单独一个数字表示只这一次用那台服务器，不改默认设置。
+	server, once := s.pinned(), false
+	if first != "" {
+		id, err := strconv.Atoi(first)
+		if err != nil || id <= 0 {
+			return inv.Edit(ctx, s.help(inv.Prefix))
+		}
+		server, once = id, true
+	}
+
+	started := time.Now()
+	tool, kind, err := s.ensureTool(ctx, inv)
+	if err != nil {
+		return installProblem(ctx, inv, err)
+	}
+	where := "，约需一分钟…"
+	if server > 0 {
+		where = "（服务器 " + strconv.Itoa(server) + "），约需一分钟…"
+	}
+	if err := inv.Edit(ctx, "🚀 <b>网络测速</b>\n\n正在通过 "+command.Escape(kind)+" 测速"+command.Escape(where)); err != nil {
+		return err
+	}
+	result, note, err := s.measure(ctx, inv, tool, kind, server)
+	if err != nil {
+		inv.Log.Warn("speedtest.external_failed", "tool", kind, "error", err.Error())
+		if detail, ok := isUserError(err); ok {
+			return inv.EditText(ctx, "❌ "+detail)
+		}
+		return inv.EditText(ctx, "❌ 测速失败，请稍后再试")
+	}
+	if once && note == "" {
+		note = "本次指定了服务器，未改动默认设置"
+	}
+	return deliver(ctx, inv, render(result, time.Since(started), note), result.Link)
+}
+
+// Speedtest 注册 .speedtest 和它的简写 .st。
+func Speedtest(a *app.App) {
+	tester := &speedtester{dataDir: a.DataDir(),
+		settings: newStore(a, "speedtest.json", func() speedtestDocument { return speedtestDocument{} })}
 	a.Registry.Register(
 		&command.Command{Name: "speedtest", Description: "测量服务器网络速度", Usage: "[list|set ID|clear|ID]",
-			Help: help, Timeout: 5 * time.Minute, Handle: handle},
+			Help: tester.help, Timeout: 5 * time.Minute, Handle: tester.handle},
 		&command.Command{Name: "st", Description: "speedtest 的简写", Hidden: true,
-			Help: help, Timeout: 5 * time.Minute, Handle: handle},
+			Help: tester.help, Timeout: 5 * time.Minute, Handle: tester.handle},
 	)
 }

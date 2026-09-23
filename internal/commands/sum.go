@@ -798,6 +798,11 @@ func (s *sumService) handle(ctx context.Context, inv *command.Invocation) error 
 	return sendPages(ctx, inv, command.HTMLPages(html, 3800))
 }
 
+// sumTypes 是服务商接口类型的可选值；auto 表示按 BaseURL 自动判断。
+var sumTypes = []string{"auto", "chat", "responses", "gemini", "anthropic"}
+
+// config 处理 .sum config：list、add、del、set。改动成功统一回一句「已更新」；
+// 出错时返回 fail，由调用方原样显示。
 func (s *sumService) config(ctx context.Context, inv *command.Invocation) error {
 	action, name, property := strings.ToLower(inv.Arg(1)), inv.Arg(2), inv.Arg(3)
 	if action == "" {
@@ -811,173 +816,192 @@ func (s *sumService) config(ctx context.Context, inv *command.Invocation) error 
 	if err != nil {
 		return err
 	}
+	replied := false
 	switch action {
 	case "list":
-		names := make([]string, 0, len(db.AIConfig.Providers))
-		for key := range db.AIConfig.Providers {
-			names = append(names, key)
-		}
-		sort.Strings(names)
-		var rows []string
-		for _, key := range names {
-			marker := ""
-			if db.AIConfig.DefaultProvider == key {
-				marker = "（默认）"
-			}
-			rows = append(rows, "• "+command.Code(key)+marker+" · "+sumProviderView(db.AIConfig.Providers[key]))
-		}
-		body := strings.Join(rows, "\n")
-		if body == "" {
-			body = "• 尚未配置 AI"
-		}
-		promptState := "自定义"
-		if db.AIConfig.DefaultPrompt == "" || db.AIConfig.DefaultPrompt == sumDefaultPrompt {
-			promptState = "内置"
-		}
-		return inv.Edit(ctx, "<b>摘要 AI 配置</b>\n"+body+"\n\n提示词："+promptState+"\n链接预览："+onOffText(db.AIConfig.LinkPreview))
+		return s.configList(ctx, inv, db)
 	case "add":
-		if !inv.Message.Saved {
-			return fail("涉及 API Key 的配置命令只能在收藏夹使用")
-		}
-		base, key := property, ""
-		model, kind := "", "auto"
-		if len(rest) > 0 {
-			key = rest[0]
-		}
-		if len(rest) > 1 {
-			model = rest[1]
-		}
-		if len(rest) > 2 {
-			kind = strings.ToLower(rest[2])
-		}
-		if name == "" || base == "" || key == "" || model == "" {
-			return fail("用法：sum config add 名称 BaseURL API_KEY 模型 [type]")
-		}
-		if parsed, err := url.Parse(base); err != nil || parsed.Host == "" {
-			return fail("BaseURL 无效")
-		}
-		if err := assertAllowedModel(model); err != nil {
-			return err
-		}
-		if !containsString([]string{"auto", "chat", "responses", "gemini", "anthropic"}, kind) {
-			return fail("无效接口类型")
-		}
-		if err := s.update(func(db *sumDB) error {
-			db.AIConfig.Providers[name] = sumProvider{Name: name, BaseURL: base, APIKey: key, Model: model, Type: kind}
-			if db.AIConfig.DefaultProvider == "" {
-				db.AIConfig.DefaultProvider = name
-			}
-			return nil
-		}); err != nil {
-			return err
-		}
+		err = s.configAdd(inv, name, property, rest)
 	case "del":
-		if _, ok := db.AIConfig.Providers[name]; name == "" || !ok {
-			return fail("AI 配置不存在")
-		}
-		if err := s.update(func(db *sumDB) error {
-			delete(db.AIConfig.Providers, name)
-			if db.AIConfig.DefaultProvider == name {
-				db.AIConfig.DefaultProvider = ""
-			}
-			return nil
-		}); err != nil {
-			return err
-		}
+		err = s.configDelete(db, name)
 	case "set":
-		value := strings.TrimSpace(strings.Join(rest, " "))
-		switch name {
-		case "default":
-			if _, ok := db.AIConfig.Providers[property]; !ok {
-				return fail("AI 配置不存在")
-			}
-			if err := s.update(func(db *sumDB) error { db.AIConfig.DefaultProvider = property; return nil }); err != nil {
-				return err
-			}
-		case "preview", "spoiler":
-			enabled, err := onOff(property)
-			if err != nil {
-				return err
-			}
-			if err := s.update(func(db *sumDB) error {
-				if name == "preview" {
-					db.AIConfig.LinkPreview = enabled
-				} else {
-					db.AIConfig.DefaultSpoiler = enabled
-				}
-				return nil
-			}); err != nil {
-				return err
-			}
-		case "reasoning", "service":
-			values := aiReasoningValues
-			if name == "service" {
-				values = aiTierValues
-			}
-			if !containsString(values, property) {
-				return fail("无效选项")
-			}
-			if err := s.update(func(db *sumDB) error {
-				if name == "reasoning" {
-					db.AIConfig.DefaultReasoningEffort = property
-				} else {
-					db.AIConfig.DefaultServiceTier = property
-				}
-				return nil
-			}); err != nil {
-				return err
-			}
-		case "prompt":
-			if property == "show" {
-				prompt := db.AIConfig.DefaultPrompt
-				if prompt == "" {
-					prompt = sumDefaultPrompt
-				}
-				return inv.Edit(ctx, "<b>当前摘要提示词</b>\n\n"+command.Code(prompt))
-			}
-			prompt := strings.TrimSpace(strings.Join(append([]string{property}, rest...), " "))
-			if property == "reset" {
-				prompt = sumDefaultPrompt
-			}
-			if prompt == "" {
-				return fail("提示词不能为空")
-			}
-			if err := s.update(func(db *sumDB) error { db.AIConfig.DefaultPrompt = prompt; return nil }); err != nil {
-				return err
-			}
-		default:
-			provider, ok := db.AIConfig.Providers[name]
-			if !ok || !containsString([]string{"model", "url", "key", "type"}, property) || value == "" {
-				return fail("用法：sum config set 名称 model|url|key|type 值")
-			}
-			if property == "key" && !inv.Message.Saved {
-				return fail("涉及 API Key 的配置命令只能在收藏夹使用")
-			}
-			switch property {
-			case "model":
-				if err := assertAllowedModel(value); err != nil {
-					return err
-				}
-				provider.Model = value
-			case "url":
-				if parsed, err := url.Parse(value); err != nil || parsed.Host == "" {
-					return fail("BaseURL 无效")
-				}
-				provider.BaseURL = value
-			case "key":
-				provider.APIKey = value
-			default:
-				if !containsString([]string{"auto", "chat", "responses", "gemini", "anthropic"}, value) {
-					return fail("无效接口类型")
-				}
-				provider.Type = value
-			}
-			if err := s.update(func(db *sumDB) error { db.AIConfig.Providers[name] = provider; return nil }); err != nil {
-				return err
-			}
-		}
+		replied, err = s.configSet(ctx, inv, db, name, property, rest)
 	default:
 		return fail("未知 config 子命令")
 	}
+	if err != nil || replied {
+		return err
+	}
 	return inv.EditText(ctx, "✅ 摘要配置已更新")
+}
+
+// configList 列出所有服务商、默认用哪个，以及提示词和链接预览的状态。
+func (s *sumService) configList(ctx context.Context, inv *command.Invocation, db sumDB) error {
+	names := make([]string, 0, len(db.AIConfig.Providers))
+	for key := range db.AIConfig.Providers {
+		names = append(names, key)
+	}
+	sort.Strings(names)
+	var rows []string
+	for _, key := range names {
+		marker := ""
+		if db.AIConfig.DefaultProvider == key {
+			marker = "（默认）"
+		}
+		rows = append(rows, "• "+command.Code(key)+marker+" · "+sumProviderView(db.AIConfig.Providers[key]))
+	}
+	body := strings.Join(rows, "\n")
+	if body == "" {
+		body = "• 尚未配置 AI"
+	}
+	promptState := "自定义"
+	if db.AIConfig.DefaultPrompt == "" || db.AIConfig.DefaultPrompt == sumDefaultPrompt {
+		promptState = "内置"
+	}
+	return inv.Edit(ctx, "<b>摘要 AI 配置</b>\n"+body+"\n\n提示词："+promptState+"\n链接预览："+onOffText(db.AIConfig.LinkPreview))
+}
+
+// configAdd 添加一个服务商：名称 BaseURL API_KEY 模型 [类型]。第一个添加的自动成为默认。
+// 命令里带着 API Key，只允许在收藏夹里发，免得密钥留在别的对话里。
+func (s *sumService) configAdd(inv *command.Invocation, name, base string, rest []string) error {
+	if !inv.Message.Saved {
+		return fail("涉及 API Key 的配置命令只能在收藏夹使用")
+	}
+	key, model, kind := "", "", "auto"
+	if len(rest) > 0 {
+		key = rest[0]
+	}
+	if len(rest) > 1 {
+		model = rest[1]
+	}
+	if len(rest) > 2 {
+		kind = strings.ToLower(rest[2])
+	}
+	if name == "" || base == "" || key == "" || model == "" {
+		return fail("用法：sum config add 名称 BaseURL API_KEY 模型 [type]")
+	}
+	if parsed, err := url.Parse(base); err != nil || parsed.Host == "" {
+		return fail("BaseURL 无效")
+	}
+	if err := assertAllowedModel(model); err != nil {
+		return err
+	}
+	if !containsString(sumTypes, kind) {
+		return fail("无效接口类型")
+	}
+	return s.update(func(db *sumDB) error {
+		db.AIConfig.Providers[name] = sumProvider{Name: name, BaseURL: base, APIKey: key, Model: model, Type: kind}
+		if db.AIConfig.DefaultProvider == "" {
+			db.AIConfig.DefaultProvider = name
+		}
+		return nil
+	})
+}
+
+// configDelete 删掉一个服务商；删的正好是默认的话，默认清空。
+func (s *sumService) configDelete(db sumDB, name string) error {
+	if _, ok := db.AIConfig.Providers[name]; name == "" || !ok {
+		return fail("AI 配置不存在")
+	}
+	return s.update(func(db *sumDB) error {
+		delete(db.AIConfig.Providers, name)
+		if db.AIConfig.DefaultProvider == name {
+			db.AIConfig.DefaultProvider = ""
+		}
+		return nil
+	})
+}
+
+// configSet 改一项设置。第一个返回值表示已经自己回复过了（只有 prompt show 这样），
+// 调用方就不要再回「已更新」。
+func (s *sumService) configSet(ctx context.Context, inv *command.Invocation, db sumDB, name, property string, rest []string) (bool, error) {
+	switch name {
+	case "default":
+		if _, ok := db.AIConfig.Providers[property]; !ok {
+			return false, fail("AI 配置不存在")
+		}
+		return false, s.update(func(db *sumDB) error { db.AIConfig.DefaultProvider = property; return nil })
+	case "preview", "spoiler":
+		enabled, err := onOff(property)
+		if err != nil {
+			return false, err
+		}
+		return false, s.update(func(db *sumDB) error {
+			if name == "preview" {
+				db.AIConfig.LinkPreview = enabled
+			} else {
+				db.AIConfig.DefaultSpoiler = enabled
+			}
+			return nil
+		})
+	case "reasoning", "service":
+		values := aiReasoningValues
+		if name == "service" {
+			values = aiTierValues
+		}
+		if !containsString(values, property) {
+			return false, fail("无效选项")
+		}
+		return false, s.update(func(db *sumDB) error {
+			if name == "reasoning" {
+				db.AIConfig.DefaultReasoningEffort = property
+			} else {
+				db.AIConfig.DefaultServiceTier = property
+			}
+			return nil
+		})
+	case "prompt":
+		return s.configPrompt(ctx, inv, db, property, rest)
+	}
+	return false, s.configProvider(inv, db, name, property, strings.TrimSpace(strings.Join(rest, " ")))
+}
+
+// configPrompt 查看、修改或还原摘要提示词。
+func (s *sumService) configPrompt(ctx context.Context, inv *command.Invocation, db sumDB, property string, rest []string) (bool, error) {
+	if property == "show" {
+		prompt := db.AIConfig.DefaultPrompt
+		if prompt == "" {
+			prompt = sumDefaultPrompt
+		}
+		return true, inv.Edit(ctx, "<b>当前摘要提示词</b>\n\n"+command.Code(prompt))
+	}
+	prompt := strings.TrimSpace(strings.Join(append([]string{property}, rest...), " "))
+	if property == "reset" {
+		prompt = sumDefaultPrompt
+	}
+	if prompt == "" {
+		return false, fail("提示词不能为空")
+	}
+	return false, s.update(func(db *sumDB) error { db.AIConfig.DefaultPrompt = prompt; return nil })
+}
+
+// configProvider 改某个服务商的一个字段：model、url、key、type。改 key 同样只允许在收藏夹里。
+func (s *sumService) configProvider(inv *command.Invocation, db sumDB, name, property, value string) error {
+	provider, ok := db.AIConfig.Providers[name]
+	if !ok || !containsString([]string{"model", "url", "key", "type"}, property) || value == "" {
+		return fail("用法：sum config set 名称 model|url|key|type 值")
+	}
+	if property == "key" && !inv.Message.Saved {
+		return fail("涉及 API Key 的配置命令只能在收藏夹使用")
+	}
+	switch property {
+	case "model":
+		if err := assertAllowedModel(value); err != nil {
+			return err
+		}
+		provider.Model = value
+	case "url":
+		if parsed, err := url.Parse(value); err != nil || parsed.Host == "" {
+			return fail("BaseURL 无效")
+		}
+		provider.BaseURL = value
+	case "key":
+		provider.APIKey = value
+	default:
+		if !containsString(sumTypes, value) {
+			return fail("无效接口类型")
+		}
+		provider.Type = value
+	}
+	return s.update(func(db *sumDB) error { db.AIConfig.Providers[name] = provider; return nil })
 }

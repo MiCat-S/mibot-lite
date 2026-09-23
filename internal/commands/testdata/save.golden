@@ -1,0 +1,93 @@
+## 回复一条消息保存
+get [3]
+edit 1000 text=true:"💾 1/1" media=false
+forward [3] to self
+edit 1000 text=true:"✅ 已保存 1 条到收藏夹" media=false
+
+## 按链接批量
+get [2]
+get [4]
+edit 1000 text=true:"💾 1/2" media=false
+forward [2] to self
+forward [4] to self
+edit 1000 text=true:"✅ 已保存 2 条到收藏夹" media=false
+
+## 按范围，缺号跳过，带禁止转发标记的改成复制
+edit 1000 text=true:"💾 正在读取 8 个编号…" media=false
+get [1 2 3 4 5 6 7 8]
+edit 1000 text=true:"💾 1/6" media=false
+forward [1] to self
+forward [2] to self
+forward [3] to self
+forward [4] to self
+send-self "第6条"
+forward [8] to self
+edit 1000 text=true:"✅ 已保存 6 条到收藏夹\n其中 1 条来自禁止转发的对话，已重新上传" media=false
+
+## 范围超过上限
+edit 1000 text=true:"❌ 范围有 600 条，一次最多 500 条，分几段来" media=false
+
+## 对话禁止转发就复制，格式保留
+get [2]
+get [3]
+edit 1000 text=true:"💾 1/2" media=false
+forward [2] to self
+send-self "第2条"
+forward [3] to self
+send-self "第3条"
+edit 1000 text=true:"✅ 已保存 2 条到收藏夹\n其中 2 条来自禁止转发的对话，已重新上传" media=false
+
+## 链接指向不存在的消息
+get [7]
+edit 1000 text=true:"❌ t.me/c/5000/7 这条消息不存在或已删除" media=false
+
+## 指定目标
+get [2]
+edit 1000 text=true:"💾 1/1" media=false
+forward [2] to channel5000
+edit 1000 text=true:"✅ 已保存 1 条到-1005000" media=false
+
+## 本地模式跳过纯文本
+get [2]
+edit 1000 text=true:"💾 1/1" media=false
+edit 1000 text=true:"✅ 已保存 0 条到服务器本地 save/ 目录\n跳过 1 条纯文本（本地模式只存媒体）" media=false
+
+## 打开来源行
+edit 1000 text=true:"💾 保存设置\n\n默认目标：收藏夹\n来源链接：开\n\n.save to 目标 修改默认目标" media=false
+get [2]
+edit 1001 text=true:"💾 1/1" media=false
+forward [2] to self
+send-self "📎 来源：https://t.me/c/5000/2"
+edit 1001 text=true:"✅ 已保存 1 条到收藏夹" media=false
+edit 1002 text=true:"💾 正在读取 3 个编号…" media=false
+get [1 2 3]
+edit 1002 text=true:"💾 1/3" media=false
+forward [1] to self
+forward [2] to self
+forward [3] to self
+send-self "📎 来源：https://t.me/c/5000/1 等 3 条"
+edit 1002 text=true:"✅ 已保存 3 条到收藏夹" media=false
+-- 存下的配置 --
+{
+ "source": true
+}
+
+
+## 设置和出错
+edit 1000 text=true:"💾 保存消息\n\n转发消息；遇到禁止转发的对话，就下载后重新发一份，文字格式和媒体属性都保留。\n\n保存\n• 回复一条消息发 .save\n• .save 链接 [链接…] 按链接批量保存\n• .save 链接1|链接2 保存两条之间的所有消息，缺号自动跳过，一次最多 500 条\n• 末尾加一个目标只这一次发到那里：.save 链接 @某人、.save 链接 local\n\n设置\n• .save to 目标 默认目标：me（收藏夹）、@用户名、对话 ID、local（存到服务器）\n• .save target 看当前设置\n• .save source on|off 在保存的内容后附上来源链接\n\n链接\n支持 t.me/用户名/编号、t.me/c/数字/编号，以及带话题的形式。私密对话要求账号是成员。\n\n本地模式\n只存媒体，纯文本跳过。文件放在部署目录的 save/对话/ 下，旁边有同名 .json 记录来源。" media=false
+edit 1001 text=true:"💾 保存设置\n\n默认目标：收藏夹\n来源链接：关\n\n.save to 目标 修改默认目标" media=false
+edit 1002 text=true:"💾 保存设置\n\n默认目标：收藏夹\n来源链接：关\n\n.save to 目标 修改默认目标" media=false
+edit 1003 text=true:"用法：.save to me / @用户名 / 对话ID / local" media=false
+edit 1004 text=true:"💾 保存设置\n\n默认目标：-1005000\n来源链接：关\n\n.save to 目标 修改默认目标" media=false
+edit 1005 text=true:"💾 保存设置\n\n默认目标：-1005000\n来源链接：关\n\n.save to 目标 修改默认目标" media=false
+edit 1006 text=true:"💾 保存设置\n\n默认目标：服务器本地 save/ 目录\n来源链接：关\n\n.save to 目标 修改默认目标" media=false
+edit 1007 text=true:"💾 保存设置\n\n默认目标：收藏夹\n来源链接：关\n\n.save to 目标 修改默认目标" media=false
+edit 1008 text=true:"💾 保存消息\n\n转发消息；遇到禁止转发的对话，就下载后重新发一份，文字格式和媒体属性都保留。\n\n保存\n• 回复一条消息发 .save\n• .save 链接 [链接…] 按链接批量保存\n• .save 链接1|链接2 保存两条之间的所有消息，缺号自动跳过，一次最多 500 条\n• 末尾加一个目标只这一次发到那里：.save 链接 @某人、.save 链接 local\n\n设置\n• .save to 目标 默认目标：me（收藏夹）、@用户名、对话 ID、local（存到服务器）\n• .save target 看当前设置\n• .save source on|off 在保存的内容后附上来源链接\n\n链接\n支持 t.me/用户名/编号、t.me/c/数字/编号，以及带话题的形式。私密对话要求账号是成员。\n\n本地模式\n只存媒体，纯文本跳过。文件放在部署目录的 save/对话/ 下，旁边有同名 .json 记录来源。" media=false
+edit 1009 text=true:"❌ 看不懂 @a @b：链接之外只能跟一个目标" media=false
+edit 1010 text=true:"❌ 范围两头都得是消息链接：链接1|链接2" media=false
+edit 1011 text=true:"❌ 范围的两个链接必须在同一个对话里" media=false
+edit 1012 text=true:"❌ 范围和单独的链接不能混在一起" media=false
+-- 存下的配置 --
+{}
+
+

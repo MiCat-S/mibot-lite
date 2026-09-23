@@ -106,12 +106,10 @@ func (s *daService) progress(ctx context.Context, client *bot.Client, task *daTa
 	_ = s.save(task)
 }
 
-// Da registers .da.
-func Da(a *app.App) {
-	service := &daService{a: a, store: newStore(a, "da.json", func() daDB { return daDB{Tasks: []daTask{}} }), active: map[string]*daSlot{}}
-	// Persisted tasks that were running when the process stopped resume
-	// only on an explicit `da true`.
-	_ = service.store.Update(func(db *daDB) error {
+// pauseInterrupted 在启动时处理上次没跑完的任务：一律改成暂停，
+// 要等有人明确发 .da true 才继续，不会因为进程重启就自己又删起来。
+func (s *daService) pauseInterrupted() {
+	_ = s.store.Update(func(db *daDB) error {
 		for index := range db.Tasks {
 			task := &db.Tasks[index]
 			if task.IsRunning {
@@ -126,103 +124,132 @@ func Da(a *app.App) {
 		}
 		return nil
 	})
+}
+
+// current 找到这个群的任务：正在跑的取运行中的副本，否则从存档里读。
+func (s *daService) current(id string, slot *daSlot) *daTask {
+	if slot != nil {
+		slot.mu.Lock()
+		running := slot.task
+		var copied daTask
+		if running != nil {
+			copied = *running
+		}
+		slot.mu.Unlock()
+		if running != nil {
+			return &copied
+		}
+	}
+	db, _ := s.store.Read()
+	var task *daTask
+	for index := range db.Tasks {
+		if db.Tasks[index].ChatID == id {
+			task = &db.Tasks[index]
+		}
+	}
+	return task
+}
+
+// report 处理 .da stop 和 .da status：停掉正在跑的任务，并把状态发到收藏夹。
+func (s *daService) report(ctx context.Context, inv *command.Invocation, sub string) {
+	id := inv.Message.ChatID
+	s.mu.Lock()
+	slot := s.active[id]
+	s.mu.Unlock()
+	if sub == "stop" && slot != nil {
+		slot.cancel()
+	}
+	task := s.current(id, slot)
+	if task == nil {
+		return
+	}
+	if sub == "stop" && slot == nil {
+		task.IsRunning, task.IsPaused = false, true
+		_ = s.save(task)
+	}
+	status := "状态查询"
+	if sub == "stop" {
+		status = "已手动停止"
+		if slot != nil {
+			status = "正在停止，等待当前请求结束"
+		}
+	}
+	s.progress(ctx, inv.Client, task, status)
+}
+
+// start 启动删除任务，返回是否真的启动了；同一个群已经有任务在跑就不启动。
+//
+// 删除会比命令本身活得久，所以跑在一个脱离了命令超时的 context 上，
+// 只有 .da stop 或者进程退出才会取消它。
+func (s *daService) start(ctx context.Context, inv *command.Invocation) bool {
+	id, message, client := inv.Message.ChatID, inv.Message, inv.Client
+	s.mu.Lock()
+	if _, running := s.active[id]; running {
+		s.mu.Unlock()
+		return false
+	}
+	taskCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	slot := &daSlot{cancel: cancel}
+	s.active[id] = slot
+	s.mu.Unlock()
+	go func() {
+		defer cancel()
+		defer func() {
+			s.mu.Lock()
+			delete(s.active, id)
+			s.mu.Unlock()
+		}()
+		s.run(taskCtx, client, slot, id, message)
+	}()
+	return true
+}
+
+// Da 注册 .da。
+func Da(a *app.App) {
+	service := &daService{a: a, store: newStore(a, "da.json", func() daDB { return daDB{Tasks: []daTask{}} }), active: map[string]*daSlot{}}
+	service.pauseInterrupted()
 	a.Registry.Register(&command.Command{Name: "da", Description: "批量删除群组消息", Usage: "true|stop|status", Help: daHelp, Timeout: 2 * time.Minute,
 		Handle: func(ctx context.Context, inv *command.Invocation) error {
-			message := inv.Message
-			if !strings.HasPrefix(message.ChatID, "-") {
+			if !strings.HasPrefix(inv.Message.ChatID, "-") {
 				return inv.EditText(ctx, "仅群组可用")
 			}
-			sub := strings.ToLower(inv.Arg(0))
-			if sub == "" || sub == "help" || sub == "h" {
+			switch sub := strings.ToLower(inv.Arg(0)); sub {
+			case "", "help", "h":
 				return inv.Edit(ctx, daHelp(inv.Prefix))
-			}
-			if sub != "true" && sub != "stop" && sub != "status" {
+			case "stop", "status":
+				service.report(ctx, inv, sub)
+			case "true":
+				// 启动了的话，命令消息由任务在查完权限之后自己删。
+				if service.start(ctx, inv) {
+					return nil
+				}
+			default:
 				return inv.EditText(ctx, "未知命令")
 			}
-			id := message.ChatID
-			removeCommand := func() { _ = inv.Client.DeleteMessage(ctx, message) }
-			if sub != "true" {
-				service.mu.Lock()
-				slot := service.active[id]
-				service.mu.Unlock()
-				if sub == "stop" && slot != nil {
-					slot.cancel()
-				}
-				var task *daTask
-				if slot != nil {
-					slot.mu.Lock()
-					if slot.task != nil {
-						copied := *slot.task
-						task = &copied
-					}
-					slot.mu.Unlock()
-				}
-				if task == nil {
-					db, _ := service.store.Read()
-					for index := range db.Tasks {
-						if db.Tasks[index].ChatID == id {
-							task = &db.Tasks[index]
-						}
-					}
-				}
-				if task != nil {
-					if sub == "stop" && slot == nil {
-						task.IsRunning, task.IsPaused = false, true
-						_ = service.save(task)
-					}
-					status := "状态查询"
-					if sub == "stop" {
-						status = "已手动停止"
-						if slot != nil {
-							status = "正在停止，等待当前请求结束"
-						}
-					}
-					service.progress(ctx, inv.Client, task, status)
-				}
-				removeCommand()
-				return nil
-			}
-
-			service.mu.Lock()
-			if _, running := service.active[id]; running {
-				service.mu.Unlock()
-				removeCommand()
-				return nil
-			}
-			// The deletion outlives the command invocation, so it runs on a
-			// context detached from the handler's timeout and cancelled only
-			// by `da stop` or by shutdown.
-			taskCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-			slot := &daSlot{cancel: cancel}
-			service.active[id] = slot
-			service.mu.Unlock()
-			client := inv.Client
-			go func() {
-				defer cancel()
-				defer func() {
-					service.mu.Lock()
-					delete(service.active, id)
-					service.mu.Unlock()
-				}()
-				service.run(taskCtx, client, slot, id, message)
-			}()
+			_ = inv.Client.DeleteMessage(ctx, inv.Message)
 			return nil
 		}})
 }
 
-// run deletes the chat's messages until it finishes, fails or is stopped.
-//
-// An admin deletes everything in the chat; anyone else can only delete
-// their own messages, which is what the search branch does.
-func (s *daService) run(ctx context.Context, client *bot.Client, slot *daSlot, id string, message *bot.Message) {
-	logger := client.Logger().With(slog.String("command", "da"), slog.String("chat", id))
+// daRun 是一次删除任务运行时要用到的东西。
+type daRun struct {
+	ctx    context.Context
+	client *bot.Client
+	api    *tg.Client
+	peer   tg.InputPeerClass
+	task   *daTask
+	save   func(*daTask) error
+	logger *slog.Logger
+}
+
+// loadTask 取出这个群上次的任务接着做，没有就新建一个，并标记为运行中。
+func (s *daService) loadTask(id string) (*daTask, error) {
 	db, err := s.store.Read()
 	if err != nil {
-		logger.Error("da.store_failed", slog.String("error", err.Error()))
-		return
+		return nil, err
 	}
-	task := &daTask{ChatID: id, ChatName: id, StartTime: time.Now().UnixMilli(), LastUpdate: time.Now().UnixMilli(),
-		LastLogTime: time.Now().UnixMilli(), Errors: []string{}}
+	now := time.Now().UnixMilli()
+	task := &daTask{ChatID: id, ChatName: id, StartTime: now, LastUpdate: now, LastLogTime: now, Errors: []string{}}
 	for index := range db.Tasks {
 		if db.Tasks[index].ChatID == id {
 			copied := db.Tasks[index]
@@ -230,40 +257,56 @@ func (s *daService) run(ctx context.Context, client *bot.Client, slot *daSlot, i
 		}
 	}
 	task.IsRunning, task.IsPaused, task.SleepUntil = true, false, nil
+	return task, nil
+}
+
+// finish 在任务结束时收尾：存盘、报告最终状态；顺利跑完且没有失败的任务从存档里删掉。
+func (s *daService) finish(ctx context.Context, client *bot.Client, task *daTask, id string, completed bool) {
+	task.IsRunning = false
+	task.IsPaused = ctx.Err() != nil
+	task.SleepUntil = nil
+	_ = s.save(task)
+	status := "执行失败"
+	switch {
+	case ctx.Err() != nil:
+		status = "已停止"
+	case completed && len(task.Errors) > 0:
+		status = "完成，存在删除失败"
+	case completed:
+		status = "任务完成"
+	}
+	s.progress(context.WithoutCancel(ctx), client, task, status)
+	if completed && len(task.Errors) == 0 {
+		_ = s.store.Update(func(db *daDB) error {
+			var kept []daTask
+			for _, item := range db.Tasks {
+				if item.ChatID != id {
+					kept = append(kept, item)
+				}
+			}
+			db.Tasks = kept
+			return nil
+		})
+	}
+}
+
+// run 删这个群的消息，直到删完、出错或者被停下。
+//
+// 管理员删全部消息；其他人只能删自己的，走搜索那一支。
+func (s *daService) run(ctx context.Context, client *bot.Client, slot *daSlot, id string, message *bot.Message) {
+	logger := client.Logger().With(slog.String("command", "da"), slog.String("chat", id))
+	task, err := s.loadTask(id)
+	if err != nil {
+		logger.Error("da.store_failed", slog.String("error", err.Error()))
+		return
+	}
 	slot.mu.Lock()
 	slot.task = task
 	slot.mu.Unlock()
 	_ = s.save(task)
 
 	completed := false
-	defer func() {
-		task.IsRunning = false
-		task.IsPaused = ctx.Err() != nil
-		task.SleepUntil = nil
-		_ = s.save(task)
-		status := "执行失败"
-		switch {
-		case ctx.Err() != nil:
-			status = "已停止"
-		case completed && len(task.Errors) > 0:
-			status = "完成，存在删除失败"
-		case completed:
-			status = "任务完成"
-		}
-		s.progress(context.WithoutCancel(ctx), client, task, status)
-		if completed && len(task.Errors) == 0 {
-			_ = s.store.Update(func(db *daDB) error {
-				var kept []daTask
-				for _, item := range db.Tasks {
-					if item.ChatID != id {
-						kept = append(kept, item)
-					}
-				}
-				db.Tasks = kept
-				return nil
-			})
-		}
-	}()
+	defer func() { s.finish(ctx, client, task, id, completed) }()
 
 	peer, err := client.InputPeer(message.Peer)
 	if err != nil {
@@ -271,168 +314,178 @@ func (s *daService) run(ctx context.Context, client *bot.Client, slot *daSlot, i
 		return
 	}
 	task.ChatName = client.Peers().Title(message.Peer)
-	api := client.API()
-
-	admin := false
-	if channel, ok := bot.InputChannel(peer); ok {
-		result, err := api.ChannelsGetParticipant(ctx, &tg.ChannelsGetParticipantRequest{Channel: channel, Participant: &tg.InputPeerSelf{}})
-		if err != nil {
-			logger.Warn("da.permission", slog.String("error", err.Error()))
-		} else {
-			client.Peers().RememberUsers(result.Users)
-			switch result.Participant.(type) {
-			case *tg.ChannelParticipantAdmin, *tg.ChannelParticipantCreator:
-				admin = true
-			}
-		}
-	}
+	run := &daRun{ctx: ctx, client: client, api: client.API(), peer: peer, task: task, save: s.save, logger: logger}
+	admin := run.isAdmin()
 	_ = client.Delete(ctx, peer, []int{message.ID})
 	s.progress(ctx, client, task, "任务已启动")
+	if admin {
+		completed = run.sweepAll()
+	} else {
+		completed = run.sweepOwn()
+	}
+}
 
-	deleteIDs := func(ids []int) {
-		for {
-			if ctx.Err() != nil {
-				return
-			}
-			err := client.Delete(ctx, peer, ids)
-			if err == nil {
-				task.DeletedMessages += len(ids)
-				_ = s.save(task)
-				return
-			}
-			if wait, ok := tgerr.AsFloodWait(err); ok {
-				until := time.Now().Add(wait).UnixMilli()
-				task.SleepUntil = &until
-				_ = s.save(task)
-				if sleepCtx(ctx, wait) != nil {
-					return
-				}
-				task.SleepUntil = nil
-				continue
-			}
-			logger.Error("da.delete", slog.Int("count", len(ids)), slog.String("error", err.Error()))
-			task.Errors = appendBounded(task.Errors, "部分消息删除失败", 20)
-			if len(ids) > 1 {
-				// One bad id must not sink the whole batch.
-				for _, single := range ids {
-					if ctx.Err() != nil {
-						return
-					}
-					if err := client.Delete(ctx, peer, []int{single}); err == nil {
-						task.DeletedMessages++
-					}
-					_ = sleepCtx(ctx, 50*time.Millisecond)
-				}
-			}
-			_ = s.save(task)
+// isAdmin 判断自己在这个群里能不能删别人的消息。普通群（非超级群）一律按不能处理。
+func (r *daRun) isAdmin() bool {
+	channel, ok := bot.InputChannel(r.peer)
+	if !ok {
+		return false
+	}
+	result, err := r.api.ChannelsGetParticipant(r.ctx, &tg.ChannelsGetParticipantRequest{Channel: channel, Participant: &tg.InputPeerSelf{}})
+	if err != nil {
+		r.logger.Warn("da.permission", slog.String("error", err.Error()))
+		return false
+	}
+	r.client.Peers().RememberUsers(result.Users)
+	switch result.Participant.(type) {
+	case *tg.ChannelParticipantAdmin, *tg.ChannelParticipantCreator:
+		return true
+	}
+	return false
+}
+
+// deleteIDs 删一批。遇到限流就等；别的错误就改成一条一条删，
+// 免得一个删不掉的编号拖累整批。
+func (r *daRun) deleteIDs(ids []int) {
+	for {
+		if r.ctx.Err() != nil {
 			return
 		}
-	}
-
-	if admin {
-		offsetID := 0
-		var batch []int
-		for {
-			if ctx.Err() != nil {
+		err := r.client.Delete(r.ctx, r.peer, ids)
+		if err == nil {
+			r.task.DeletedMessages += len(ids)
+			_ = r.save(r.task)
+			return
+		}
+		if wait, ok := tgerr.AsFloodWait(err); ok {
+			until := time.Now().Add(wait).UnixMilli()
+			r.task.SleepUntil = &until
+			_ = r.save(r.task)
+			if sleepCtx(r.ctx, wait) != nil {
 				return
 			}
-			history, err := api.MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{Peer: peer, OffsetID: offsetID, Limit: 100, MinID: 0})
-			if err != nil {
-				if wait, ok := tgerr.AsFloodWait(err); ok {
-					if sleepCtx(ctx, wait) != nil {
-						return
-					}
-					continue
+			r.task.SleepUntil = nil
+			continue
+		}
+		r.logger.Error("da.delete", slog.Int("count", len(ids)), slog.String("error", err.Error()))
+		r.task.Errors = appendBounded(r.task.Errors, "部分消息删除失败", 20)
+		if len(ids) > 1 {
+			for _, single := range ids {
+				if r.ctx.Err() != nil {
+					return
 				}
-				logger.Error("da.history", slog.String("error", err.Error()))
-				task.Errors = appendBounded(task.Errors, "读取历史消息失败", 20)
-				return
-			}
-			messages, _ := client.Unpack(history)
-			if len(messages) == 0 {
-				break
-			}
-			next := 0
-			for _, item := range messages {
-				candidate := messageID(item)
-				if candidate <= 0 {
-					continue
+				if err := r.client.Delete(r.ctx, r.peer, []int{single}); err == nil {
+					r.task.DeletedMessages++
 				}
-				if next == 0 || candidate < next {
-					next = candidate
-				}
-				if _, ok := item.(*tg.Message); ok {
-					batch = append(batch, candidate)
-				}
-			}
-			if next == 0 || (offsetID > 0 && next >= offsetID) {
-				break
-			}
-			offsetID = next
-			for len(batch) >= 100 {
-				deleteIDs(batch[:100])
-				batch = batch[100:]
-			}
-			if sleepCtx(ctx, 100*time.Millisecond) != nil {
-				return
+				_ = sleepCtx(r.ctx, 50*time.Millisecond)
 			}
 		}
-		if len(batch) > 0 {
-			deleteIDs(batch)
-		}
-		completed = true
+		_ = r.save(r.task)
 		return
 	}
+}
 
-	// Not an admin: only this account's own messages, found by search.
-	offsetID := 0
-	for {
-		if ctx.Err() != nil {
-			return
+// collectPage 从一页消息里取出能删的编号，以及下一页的游标（这一页最小的编号）。
+// 服务消息（入群、改名这类）不删，但要算进游标，否则会卡在同一页。
+func collectPage(messages []tg.MessageClass) (next int, ids []int) {
+	for _, item := range messages {
+		candidate := messageID(item)
+		if candidate <= 0 {
+			continue
 		}
-		request := &tg.MessagesSearchRequest{Peer: peer, Q: "", Filter: &tg.InputMessagesFilterEmpty{}, OffsetID: offsetID, Limit: 100}
-		request.SetFromID(&tg.InputPeerSelf{})
-		result, err := api.MessagesSearch(ctx, request)
+		if next == 0 || candidate < next {
+			next = candidate
+		}
+		if _, ok := item.(*tg.Message); ok {
+			ids = append(ids, candidate)
+		}
+	}
+	return next, ids
+}
+
+// retryAfter 处理取页出错：限流就等完再试（返回 true）；别的错误记下来，任务到此为止。
+func (r *daRun) retryAfter(err error, event, failure string) bool {
+	if wait, ok := tgerr.AsFloodWait(err); ok {
+		return sleepCtx(r.ctx, wait) == nil
+	}
+	r.logger.Error(event, slog.String("error", err.Error()))
+	r.task.Errors = appendBounded(r.task.Errors, failure, 20)
+	return false
+}
+
+// sweepAll 是管理员的做法：从新到旧翻完整个历史，攒满 100 条删一批。
+// 返回是否完整跑完。
+func (r *daRun) sweepAll() bool {
+	offsetID := 0
+	var batch []int
+	for {
+		if r.ctx.Err() != nil {
+			return false
+		}
+		history, err := r.api.MessagesGetHistory(r.ctx, &tg.MessagesGetHistoryRequest{Peer: r.peer, OffsetID: offsetID, Limit: 100, MinID: 0})
 		if err != nil {
-			if wait, ok := tgerr.AsFloodWait(err); ok {
-				if sleepCtx(ctx, wait) != nil {
-					return
-				}
+			if r.retryAfter(err, "da.history", "读取历史消息失败") {
 				continue
 			}
-			logger.Error("da.search", slog.String("error", err.Error()))
-			task.Errors = appendBounded(task.Errors, "搜索自己的消息失败", 20)
-			return
+			return false
 		}
-		messages, _ := client.Unpack(result)
+		messages, _ := r.client.Unpack(history)
 		if len(messages) == 0 {
 			break
 		}
-		next, ids := 0, []int(nil)
-		for _, item := range messages {
-			candidate := messageID(item)
-			if candidate <= 0 {
+		next, ids := collectPage(messages)
+		batch = append(batch, ids...)
+		if next == 0 || (offsetID > 0 && next >= offsetID) {
+			break
+		}
+		offsetID = next
+		for len(batch) >= 100 {
+			r.deleteIDs(batch[:100])
+			batch = batch[100:]
+		}
+		if sleepCtx(r.ctx, 100*time.Millisecond) != nil {
+			return false
+		}
+	}
+	if len(batch) > 0 {
+		r.deleteIDs(batch)
+	}
+	return true
+}
+
+// sweepOwn 是普通成员的做法：只搜自己发的，搜到一页删一页。返回是否完整跑完。
+func (r *daRun) sweepOwn() bool {
+	offsetID := 0
+	for {
+		if r.ctx.Err() != nil {
+			return false
+		}
+		request := &tg.MessagesSearchRequest{Peer: r.peer, Q: "", Filter: &tg.InputMessagesFilterEmpty{}, OffsetID: offsetID, Limit: 100}
+		request.SetFromID(&tg.InputPeerSelf{})
+		result, err := r.api.MessagesSearch(r.ctx, request)
+		if err != nil {
+			if r.retryAfter(err, "da.search", "搜索自己的消息失败") {
 				continue
 			}
-			if next == 0 || candidate < next {
-				next = candidate
-			}
-			if _, ok := item.(*tg.Message); ok {
-				ids = append(ids, candidate)
-			}
+			return false
 		}
+		messages, _ := r.client.Unpack(result)
+		if len(messages) == 0 {
+			break
+		}
+		next, ids := collectPage(messages)
 		if next == 0 || (offsetID > 0 && next >= offsetID) {
 			break
 		}
 		offsetID = next
 		if len(ids) > 0 {
-			deleteIDs(ids)
+			r.deleteIDs(ids)
 		}
-		if sleepCtx(ctx, 200*time.Millisecond) != nil {
-			return
+		if sleepCtx(r.ctx, 200*time.Millisecond) != nil {
+			return false
 		}
 	}
-	completed = true
+	return true
 }
 
 // appendBounded appends and keeps at most limit entries.
