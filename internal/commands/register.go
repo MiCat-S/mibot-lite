@@ -22,6 +22,7 @@ func RegisterAll(a *app.App) {
 	Translate(a)
 	Speedtest(a)
 	Log(a)
+	Backup(a)
 	Sum(a)
 	Re(a)
 	Dme(a)
@@ -30,6 +31,7 @@ func RegisterAll(a *app.App) {
 	Acn(a)
 	Yvlu(a)
 	Eatgif(a)
+	Alias(a)
 }
 
 // miboxFiles maps MiBox plugin data files to their names under data/. The

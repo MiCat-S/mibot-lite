@@ -95,3 +95,67 @@ func TestBriefPrefersRPCCode(t *testing.T) {
 type errTest string
 
 func (e errTest) Error() string { return string(e) }
+
+// withCommands is a registry holding a few real commands and an alias
+// table, the way .alias leaves it.
+func withCommands(t *testing.T, aliases map[string]string) *Registry {
+	t.Helper()
+	built := registry()
+	for _, name := range []string{"ping", "version", "speedtest", "gt"} {
+		built.Register(&Command{Name: name})
+	}
+	built.SetAliases(aliases)
+	return built
+}
+
+func TestAliasExpandsAndKeepsTheArguments(t *testing.T) {
+	registry := withCommands(t, map[string]string{"测速": "speedtest 48463"})
+	route, ok := registry.Parse(".测速 now")
+	if !ok || route.Command != "speedtest" || strings.Join(route.Args, " ") != "48463 now" {
+		t.Fatalf("got %+v, want speedtest with 48463 now", route)
+	}
+}
+
+// The words after an alias are the command's input, and some commands
+// read that input from the raw text: .gt translates it line by line.
+func TestAliasKeepsTheRestOfTheTextExactly(t *testing.T) {
+	registry := withCommands(t, map[string]string{"译": "gt"})
+	route, ok := registry.Parse(".译 hello\n  world\n")
+	if !ok || route.Text != ".gt hello\n  world\n" {
+		t.Fatalf("Text = %q, want the newlines and indentation kept", route.Text)
+	}
+}
+
+func TestLongestAliasWins(t *testing.T) {
+	registry := withCommands(t, map[string]string{"a": "version", "a b": "ping"})
+	if route, _ := registry.Parse(".a b c"); route.Command != "ping" || strings.Join(route.Args, " ") != "c" {
+		t.Errorf("got %+v, want the two-word alias", route)
+	}
+	if route, _ := registry.Parse(".a c"); route.Command != "version" || strings.Join(route.Args, " ") != "c" {
+		t.Errorf("got %+v, want the one-word alias", route)
+	}
+}
+
+// A one-word alias named like a real command is dead, not a hijack; a
+// longer alias may still start with a command's name.
+func TestRealCommandsOutrankOneWordAliases(t *testing.T) {
+	registry := withCommands(t, map[string]string{"ping": "version", "ping now": "speedtest"})
+	if route, _ := registry.Parse(".ping"); route.Command != "ping" {
+		t.Errorf(".ping went to %q", route.Command)
+	}
+	if route, _ := registry.Parse(".ping now"); route.Command != "speedtest" {
+		t.Errorf(".ping now went to %q, want the two-word alias", route.Command)
+	}
+}
+
+func TestUnknownWordsStillDoNotParse(t *testing.T) {
+	registry := withCommands(t, map[string]string{"测速": "speedtest"})
+	for _, text := range []string{".你好", ".测", ". "} {
+		if _, ok := registry.Parse(text); ok {
+			t.Errorf("%q parsed as a command", text)
+		}
+	}
+	if route, ok := registry.Parse(".ping hi"); !ok || route.Text != ".ping hi" {
+		t.Errorf("a plain command lost its text: %+v", route)
+	}
+}

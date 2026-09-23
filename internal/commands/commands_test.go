@@ -2,8 +2,10 @@ package commands
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -616,5 +618,67 @@ func TestSpeedtestHelpDocumentsEverySubcommand(t *testing.T) {
 	}
 	if pinned := speedtestHelp(t.TempDir(), ".", 48463); !strings.Contains(pinned, "48463") {
 		t.Error("the help does not show the pinned server")
+	}
+}
+
+// The alias ends where the first real command begins, which is what lets
+// an alias be several words and the target carry its own arguments.
+func TestSplitAlias(t *testing.T) {
+	known := map[string]bool{"speedtest": true, "ping": true, "version": true}
+	isCommand := func(name string) bool { return known[name] }
+	cases := []struct {
+		tokens        []string
+		alias, target string
+		ok            bool
+	}{
+		{[]string{"测速", "speedtest", "48463"}, "测速", "speedtest 48463", true},
+		{[]string{"ping", "now", "version"}, "ping now", "version", true},
+		{[]string{"a", "b", "c"}, "", "", false},
+		{[]string{"测速", ".speedtest"}, "", "", false},
+	}
+	for _, c := range cases {
+		alias, target, ok := splitAlias(c.tokens, isCommand)
+		if alias != c.alias || target != c.target || ok != c.ok {
+			t.Errorf("splitAlias(%v) = %q %q %v", c.tokens, alias, target, ok)
+		}
+	}
+}
+
+func TestRenderAliases(t *testing.T) {
+	empty := renderAliases(nil, ".")
+	if !strings.Contains(empty, ".alias set 测速 speedtest") {
+		t.Errorf("an empty list should show how to add one:\n%s", empty)
+	}
+	listed := renderAliases(map[string]string{"译": "gt", "测速": "speedtest 48463"}, ".")
+	if !strings.Contains(listed, ".测速") || !strings.Contains(listed, ".speedtest 48463") {
+		t.Errorf("the list lost an alias:\n%s", listed)
+	}
+}
+
+// The caption rides on the backup itself and must fit Telegram's 1024
+// characters however many command files there are.
+func TestBackupCaptionFits(t *testing.T) {
+	names := []string{"config.json", "gotd-session.json", ".env"}
+	for i := 0; i < 40; i++ {
+		names = append(names, fmt.Sprintf("data/command%02d.json", i))
+	}
+	caption := backupCaption("0.1.12", names, 48000)
+	plain := regexp.MustCompile(`<[^>]+>`).ReplaceAllString(caption, "")
+	if n := len([]rune(plain)); n > 1024 {
+		t.Errorf("caption is %d characters, over Telegram's 1024", n)
+	}
+	for _, wanted := range []string{"--restore", "不要转发", "43 个文件"} {
+		if !strings.Contains(caption, wanted) {
+			t.Errorf("caption is missing %q:\n%s", wanted, plain)
+		}
+	}
+}
+
+func TestBackupHelpSaysWhereItGoesAndHowToRestore(t *testing.T) {
+	text := backupHelp(".")
+	for _, wanted := range []string{"收藏夹", "--restore", "--force", ".log"} {
+		if !strings.Contains(text, wanted) {
+			t.Errorf("the help never mentions %q", wanted)
+		}
 	}
 }

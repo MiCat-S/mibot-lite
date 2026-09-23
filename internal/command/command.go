@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/MiCat-S/mibot-lite/internal/bot"
 )
@@ -85,6 +86,9 @@ type Job func(ctx context.Context, client *bot.Client)
 type Registry struct {
 	mu       sync.RWMutex
 	commands map[string]*Command
+	// aliases maps a name the operator chose to the command line it
+	// stands for, arguments included. .alias edits it.
+	aliases  map[string]string
 	prefixes []string
 	jobs     []Job
 	logger   *slog.Logger
@@ -158,6 +162,28 @@ func (r *Registry) Prefixes() []string {
 	return append([]string(nil), r.prefixes...)
 }
 
+// SetAliases replaces the alias table.
+func (r *Registry) SetAliases(aliases map[string]string) {
+	copied := make(map[string]string, len(aliases))
+	for name, target := range aliases {
+		copied[name] = target
+	}
+	r.mu.Lock()
+	r.aliases = copied
+	r.mu.Unlock()
+}
+
+// Aliases returns a copy of the alias table.
+func (r *Registry) Aliases() map[string]string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	copied := make(map[string]string, len(r.aliases))
+	for name, target := range r.aliases {
+		copied[name] = target
+	}
+	return copied
+}
+
 // Prefix returns the primary prefix, for help text.
 func (r *Registry) Prefix() string { return r.Prefixes()[0] }
 
@@ -168,10 +194,19 @@ type Route struct {
 	Prefix  string
 	Command string
 	Args    []string
+	// Text is the message as the command should read it. For an alias it
+	// is the expansion followed by whatever came after the alias, kept
+	// exactly as typed: .gt and .yvlu read their input from the raw text,
+	// newlines included, and re-joining split words would lose them.
+	Text string
 }
 
 // Parse resolves a message's text to a route: the longest matching prefix
-// wins, the first token is the command, the rest are arguments.
+// wins, then the longest matching alias, then the first token is the
+// command and the rest are arguments.
+//
+// A single-word alias never shadows a real command of the same name, the
+// same rule MiBox applied; an alias of several words can start with one.
 func (r *Registry) Parse(text string) (Route, bool) {
 	prefixes := r.Prefixes()
 	prefix, matched := "", false
@@ -183,11 +218,58 @@ func (r *Registry) Parse(text string) (Route, bool) {
 	if !matched {
 		return Route{}, false
 	}
-	parts := strings.FieldsFunc(strings.TrimFunc(text[len(prefix):], isSpace), isSpace)
-	if len(parts) == 0 || !commandName.MatchString(parts[0]) {
+	body := text[len(prefix):]
+	parts := strings.FieldsFunc(strings.TrimFunc(body, isSpace), isSpace)
+	if len(parts) == 0 {
 		return Route{}, false
 	}
-	return Route{Prefix: prefix, Command: parts[0], Args: append([]string{}, parts[1:]...)}, true
+	r.mu.RLock()
+	aliases := r.aliases
+	_, isCommand := r.commands[parts[0]]
+	r.mu.RUnlock()
+	for length := len(parts); length > 0 && len(aliases) > 0; length-- {
+		if length == 1 && isCommand {
+			break
+		}
+		expansion, ok := aliases[strings.Join(parts[:length], " ")]
+		if !ok {
+			continue
+		}
+		expanded := strings.FieldsFunc(expansion, isSpace)
+		if len(expanded) == 0 || !commandName.MatchString(expanded[0]) {
+			return Route{}, false
+		}
+		args := append(append([]string{}, expanded[1:]...), parts[length:]...)
+		return Route{Prefix: prefix, Command: expanded[0], Args: args,
+			Text: prefix + strings.Join(expanded, " ") + afterTokens(body, length)}, true
+	}
+	if !commandName.MatchString(parts[0]) {
+		return Route{}, false
+	}
+	return Route{Prefix: prefix, Command: parts[0], Args: append([]string{}, parts[1:]...), Text: text}, true
+}
+
+// afterTokens drops the first n whitespace-separated tokens of s and
+// returns the rest exactly as written, leading whitespace included.
+func afterTokens(s string, n int) string {
+	index := 0
+	for count := 0; count < n; count++ {
+		for index < len(s) {
+			r, size := utf8.DecodeRuneInString(s[index:])
+			if !isSpace(r) {
+				break
+			}
+			index += size
+		}
+		for index < len(s) {
+			r, size := utf8.DecodeRuneInString(s[index:])
+			if isSpace(r) {
+				break
+			}
+			index += size
+		}
+	}
+	return s[index:]
 }
 
 func isSpace(r rune) bool {
@@ -209,7 +291,7 @@ func (r *Registry) Dispatch(ctx context.Context, client *bot.Client, message *bo
 	if !ok {
 		return false
 	}
-	inv := &Invocation{Prefix: route.Prefix, Command: route.Command, Args: route.Args, Text: message.Text,
+	inv := &Invocation{Prefix: route.Prefix, Command: route.Command, Args: route.Args, Text: route.Text,
 		Message: message, Client: client, Log: r.logger.With(slog.String("command", route.Command))}
 	r.inFlight.Add(1)
 	go func() {

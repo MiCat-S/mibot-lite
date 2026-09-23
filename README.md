@@ -48,7 +48,7 @@ Go 函数。代价是装新命令要重新编译；换来的是一个更小的�
 ## 命令
 
 ```text
-.ping .status .sysinfo .memory .version .ver .help .h .restart .update .log
+.ping .status .sysinfo .memory .version .ver .help .h .restart .update .log .bf .alias
 .calc .rate .whois .tr .speedtest .ai .gt .sum .re .dme .da
 .ban .unban .kick .mute .unmute .sb .unsb .refresh .aban
 .acn .autochangename .yvlu .eatgif
@@ -68,6 +68,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 ```sh
 ./mibot-lite --import-mibox /root/mibot --root /root/mibot-lite
 ```
+
+重装系统或换机器：在 Telegram 里发 `.bf`，配置会备份到收藏夹；新机器上给安装脚本加
+`--restore 备份文件` 就能原样恢复，不用重新登录。详见 [INSTALL.md 第 10 节](INSTALL.md#10-备份与恢复重装系统换机器)。
 
 登录、会话和 `config.json` 的格式与 MiBox 完全一致，所以同一个账号在两套
 程序之间可以来回切——但**不能同时跑**，Telegram 的同账号并发会互相顶掉。
