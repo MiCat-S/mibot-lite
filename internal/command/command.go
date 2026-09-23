@@ -182,6 +182,17 @@ func (r *Registry) Aliases() map[string]string {
 	return copied
 }
 
+// SetPrefixes 在运行中换掉前缀，之后收到的消息立刻按新前缀解析。
+// 空列表会被忽略：没有前缀，就再也发不出能改回来的命令了。
+func (r *Registry) SetPrefixes(prefixes []string) {
+	if len(prefixes) == 0 {
+		return
+	}
+	r.mu.Lock()
+	r.prefixes = append([]string(nil), prefixes...)
+	r.mu.Unlock()
+}
+
 // Prefix 返回主前缀，供帮助文本使用。
 func (r *Registry) Prefix() string { return r.Prefixes()[0] }
 

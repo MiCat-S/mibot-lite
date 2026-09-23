@@ -155,6 +155,55 @@ func ReadEnv(root string, environ []string) Env {
 	return env
 }
 
+// SetEnv 把 <root>/.env 里的 key 改成 value：已有这一行就原地替换（出现多次的都换掉），
+// 没有就追加到末尾。其他行，包括注释和空行，原样保留；文件不存在就新建。
+// 写入是原子的，权限 0600——.env 里可能有别的密钥。
+//
+// value 里不能有换行，也不能首尾是一对引号：ReadEnv 读的时候会把那对引号剥掉，
+// 写进去的就不是读出来的了。调用方负责先检查。
+func SetEnv(root, key, value string) error {
+	path := filepath.Join(root, ".env")
+	raw, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+	if len(raw) == 0 {
+		lines = nil
+	}
+	replaced := false
+	for index, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if name, _, ok := strings.Cut(trimmed, "="); ok && strings.TrimSpace(name) == key {
+			lines[index] = key + "=" + value
+			replaced = true
+		}
+	}
+	if !replaced {
+		lines = append(lines, key+"="+value)
+	}
+	temporary, err := os.CreateTemp(root, ".env-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(temporary.Name())
+	if _, err := temporary.WriteString(strings.Join(lines, "\n") + "\n"); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Chmod(0o600); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporary.Name(), path)
+}
+
 // Prefixes 返回命令前缀：优先用 MIBOT_PREFIX（以空格分隔），
 // 没有设置就用 MiBox 的默认值。
 func (e Env) Prefixes() []string {

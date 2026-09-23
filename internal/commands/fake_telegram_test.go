@@ -1,8 +1,12 @@
 package commands
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
 	"log/slog"
 	"sort"
@@ -187,6 +191,15 @@ func (f *fakeTelegram) Invoke(_ context.Context, input bin.Encoder, output bin.D
 			return tgerr.New(400, "CHAT_FORWARDS_RESTRICTED")
 		}
 		return respond(output, &tg.Updates{})
+	case *tg.UploadGetFileRequest:
+		// 头像下载：记下是谁的头像，返回一张小 PNG。
+		if location, ok := request.Location.(*tg.InputPeerPhotoFileLocation); ok && request.Offset == 0 {
+			f.log("avatar %s big=%v", describePeer(location.Peer), location.Big)
+		}
+		if request.Offset > 0 {
+			return respond(output, &tg.UploadFile{Type: &tg.StorageFilePng{}, Bytes: []byte{}})
+		}
+		return respond(output, &tg.UploadFile{Type: &tg.StorageFilePng{}, Bytes: tinyPNG()})
 	case *tg.AccountUpdateProfileRequest:
 		first, _ := request.GetFirstName()
 		last, _ := request.GetLastName()
@@ -268,4 +281,17 @@ func describePeer(peer tg.InputPeerClass) string {
 		return fmt.Sprintf("chat%d", value.ChatID)
 	}
 	return fmt.Sprintf("%T", peer)
+}
+
+// tinyPNG 是一张 8×8 的纯色 PNG，够头像解码用。
+func tinyPNG() []byte {
+	canvas := image.NewRGBA(image.Rect(0, 0, 8, 8))
+	for y := 0; y < 8; y++ {
+		for x := 0; x < 8; x++ {
+			canvas.Set(x, y, color.RGBA{R: 200, G: 80, B: 40, A: 255})
+		}
+	}
+	var buffer bytes.Buffer
+	_ = png.Encode(&buffer, canvas)
+	return buffer.Bytes()
 }

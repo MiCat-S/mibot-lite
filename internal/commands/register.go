@@ -34,6 +34,7 @@ func RegisterAll(a *app.App) {
 	Acn(a)
 	Yvlu(a)
 	Eatgif(a)
+	Prefix(a)
 	Alias(a)
 }
 

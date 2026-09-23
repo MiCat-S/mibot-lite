@@ -171,7 +171,7 @@ func clampFloat(value, low, high float64) float64 {
 
 func eatgifHelp(prefix string) string {
 	p := command.Escape(prefix)
-	return "🎬 <b>头像动图表情</b>\n\n回复一个用户的消息，把双方头像合成为动画贴纸。\n\n• <code>" + p + "eatgif 名称</code> 生成\n• <code>" + p +
+	return "🎬 <b>头像动图表情</b>\n\n回复一条消息（用户或频道发的都可以），把双方头像合成为动画贴纸。\n\n• <code>" + p + "eatgif 名称</code> 生成\n• <code>" + p +
 		"eatgif list</code> 列出全部可用动画\n• <code>" + p + "eatgif clear</code> 清空素材缓存\n\n素材首次使用时从远程下载并缓存，需要主机装有 ffmpeg。"
 }
 
@@ -215,7 +215,7 @@ func Eatgif(a *app.App) {
 				return err
 			}
 			if reply == nil {
-				return inv.EditText(ctx, "请回复一个用户的消息后再生成")
+				return inv.EditText(ctx, "请回复一条消息后再生成，用户或频道发的都可以")
 			}
 
 			// 一次只跑一个：每次运行都要解码几十帧、再 fork 一个 ffmpeg，
@@ -322,33 +322,55 @@ func Eatgif(a *app.App) {
 type avatarPair struct{ me, you image.Image }
 
 // faces 下载并解码双方的头像。
+//
+// 「对方」是被回复消息的发送者，用户、频道、群都可以：以频道身份发言、
+// 频道推到讨论组的消息、匿名管理员，发送者都不是用户，以前一律被拒。
+// 「自己」是发命令那条消息的发送者：戴着皮套（以频道身份）发命令时用那个频道的
+// 头像，这和 MiBox 一致；其余情况用账号本人的头像。
 func (s *eatgifService) faces(ctx context.Context, inv *command.Invocation, reply *bot.Message) (*avatarPair, error) {
-	load := func(peer tg.InputPeerClass, who string) (image.Image, error) {
-		data, err := inv.Client.DownloadProfilePhoto(ctx, peer, false, 2<<20)
-		if err != nil || len(data) == 0 {
-			return nil, failf("无法获取%s的头像", who)
-		}
-		decoded, err := imaging.Decode(data)
-		if err != nil {
-			return nil, failf("无法解析%s的头像", who)
-		}
-		return decoded, nil
-	}
-	me, err := load(&tg.InputPeerSelf{}, "你")
+	me, err := loadFace(ctx, inv.Client, speakerOf(inv.Client, inv.Message), "你")
 	if err != nil {
 		return nil, err
 	}
-	sender, ok := reply.Sender.(*tg.PeerUser)
-	if !ok {
-		return nil, fail("请回复一个用户的消息")
+	if reply.Sender == nil {
+		return nil, fail("看不出被回复的消息是谁发的")
 	}
-	peer, err := inv.Client.InputPeer(sender)
+	peer, err := inv.Client.InputPeer(reply.Sender)
 	if err != nil {
 		return nil, fail("无法解析对方的身份")
 	}
-	you, err := load(peer, "对方")
+	you, err := loadFace(ctx, inv.Client, peer, "对方")
 	if err != nil {
 		return nil, err
 	}
 	return &avatarPair{me: me, you: you}, nil
+}
+
+// speakerOf 是一条自己发的消息以谁的身份发出：以频道身份发言时是那个频道，否则是本人。
+func speakerOf(client *bot.Client, message *bot.Message) tg.InputPeerClass {
+	if channel, ok := message.Sender.(*tg.PeerChannel); ok {
+		if peer, err := client.InputPeer(channel); err == nil {
+			return peer
+		}
+	}
+	return &tg.InputPeerSelf{}
+}
+
+// loadFace 下载并解码一个头像。先下小图，下不了再下大图：小图拿不到的对象，往往还能拿到大图。
+func loadFace(ctx context.Context, client *bot.Client, peer tg.InputPeerClass, who string) (image.Image, error) {
+	data, err := client.DownloadProfilePhoto(ctx, peer, false, 2<<20)
+	if err != nil || len(data) == 0 {
+		data, err = client.DownloadProfilePhoto(ctx, peer, true, 2<<20)
+	}
+	if err != nil {
+		return nil, failf("无法获取%s的头像", who)
+	}
+	if len(data) == 0 {
+		return nil, failf("%s没有公开头像，合成不了", who)
+	}
+	decoded, err := imaging.Decode(data)
+	if err != nil {
+		return nil, failf("无法解析%s的头像", who)
+	}
+	return decoded, nil
 }

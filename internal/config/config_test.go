@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -65,5 +66,46 @@ func TestEnvFileAndPrefixes(t *testing.T) {
 	}
 	if got := ReadEnv(t.TempDir(), nil).Prefixes(); len(got) != 3 || got[0] != "." {
 		t.Fatalf("default prefixes %v", got)
+	}
+}
+
+// SetEnv 只动那一行：注释、空行、别的设置原样保留，改完 ReadEnv 读出来的就是写进去的。
+func TestSetEnvChangesOnlyThatLine(t *testing.T) {
+	root := t.TempDir()
+	original := "# 部署设置\nMIBOT_SERVICE=\"custom.service\"\n\nMIBOT_PREFIX=. 。\nOTHER=1\n"
+	if err := os.WriteFile(filepath.Join(root, ".env"), []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetEnv(root, "MIBOT_PREFIX", "! ！ ~"); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(filepath.Join(root, ".env"))
+	want := "# 部署设置\nMIBOT_SERVICE=\"custom.service\"\n\nMIBOT_PREFIX=! ！ ~\nOTHER=1\n"
+	if string(raw) != want {
+		t.Fatalf(".env 变成了：\n%s\n应为：\n%s", raw, want)
+	}
+	if got := strings.Join(ReadEnv(root, nil).Prefixes(), " "); got != "! ！ ~" {
+		t.Errorf("读回来的前缀是 %q", got)
+	}
+	info, _ := os.Stat(filepath.Join(root, ".env"))
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf(".env 权限是 %v，应为 0600", info.Mode().Perm())
+	}
+}
+
+func TestSetEnvAppendsOrCreates(t *testing.T) {
+	root := t.TempDir()
+	if err := SetEnv(root, "MIBOT_PREFIX", "!"); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(filepath.Join(root, ".env")); string(raw) != "MIBOT_PREFIX=!\n" {
+		t.Errorf("新建的 .env 是 %q", raw)
+	}
+	os.WriteFile(filepath.Join(root, ".env"), []byte("OTHER=1"), 0o600)
+	if err := SetEnv(root, "MIBOT_PREFIX", "$"); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(filepath.Join(root, ".env")); string(raw) != "OTHER=1\nMIBOT_PREFIX=$\n" {
+		t.Errorf("追加后的 .env 是 %q", raw)
 	}
 }
