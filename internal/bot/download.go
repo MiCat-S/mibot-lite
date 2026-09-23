@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"time"
 
 	"github.com/gotd/td/telegram/downloader"
@@ -277,4 +278,97 @@ func DocumentOf(message *tg.Message) (*tg.InputDocument, bool) {
 		return nil, false
 	}
 	return &tg.InputDocument{ID: document.ID, AccessHash: document.AccessHash, FileReference: document.FileReference}, true
+}
+
+// MediaSource is where a message's photo or document lives, with what is
+// needed to send the same thing again from a fresh upload.
+type MediaSource struct {
+	Location tg.InputFileLocationClass
+	DCID     int
+	Size     int64
+	Photo    bool
+	MimeType string
+	FileName string
+	// Attributes are the document's own: duration and size for a video,
+	// the voice flag, the sticker set, the animated-GIF marker. Reusing
+	// them on the re-upload is what keeps a round video round and a voice
+	// note a voice note instead of a file called audio.ogg.
+	Attributes []tg.DocumentAttributeClass
+}
+
+// SourceOf finds the downloadable photo or document in a message.
+func SourceOf(message *tg.Message) (*MediaSource, bool) {
+	media, ok := message.GetMedia()
+	if !ok {
+		return nil, false
+	}
+	switch value := media.(type) {
+	case *tg.MessageMediaPhoto:
+		photo, ok := value.Photo.(*tg.Photo)
+		if !ok {
+			return nil, false
+		}
+		size := largestPhotoSize(photo.Sizes)
+		if size == "" {
+			return nil, false
+		}
+		return &MediaSource{
+			Location: &tg.InputPhotoFileLocation{ID: photo.ID, AccessHash: photo.AccessHash, FileReference: photo.FileReference, ThumbSize: size},
+			DCID:     photo.DCID, Photo: true, MimeType: "image/jpeg",
+		}, true
+	case *tg.MessageMediaDocument:
+		document, ok := value.Document.(*tg.Document)
+		if !ok {
+			return nil, false
+		}
+		source := &MediaSource{
+			Location: &tg.InputDocumentFileLocation{ID: document.ID, AccessHash: document.AccessHash, FileReference: document.FileReference},
+			DCID:     document.DCID, Size: document.Size, MimeType: document.MimeType, Attributes: document.Attributes,
+		}
+		for _, attribute := range document.Attributes {
+			if name, ok := attribute.(*tg.DocumentAttributeFilename); ok {
+				source.FileName = name.FileName
+			}
+		}
+		return source, true
+	}
+	return nil, false
+}
+
+// DownloadTo streams a file straight to disk.
+//
+// DownloadFile holds the whole file in memory, which is right for an
+// avatar and wrong for a two-gigabyte video. This writes as it goes, four
+// parts at a time, and follows FILE_MIGRATE the same way.
+func (c *Client) DownloadTo(ctx context.Context, source *MediaSource, file *os.File) error {
+	err := parallel(ctx, c.api, source.Location, file)
+	if err == nil {
+		return nil
+	}
+	migrate, isMigrate := tgerr.AsType(err, "FILE_MIGRATE")
+	if !isMigrate {
+		return err
+	}
+	target := migrate.Argument
+	if target == 0 {
+		target = source.DCID
+	}
+	if target == 0 {
+		return err
+	}
+	api, dcErr := c.mediaDC(ctx, target)
+	if dcErr != nil {
+		return dcErr
+	}
+	// A migrate error arrives before any part does, but the file is
+	// rewound regardless: a retry must never land on top of a half.
+	if err := file.Truncate(0); err != nil {
+		return err
+	}
+	return parallel(ctx, api, source.Location, file)
+}
+
+func parallel(ctx context.Context, api *tg.Client, location tg.InputFileLocationClass, file *os.File) error {
+	_, err := downloader.NewDownloader().Download(api, location).WithThreads(4).Parallel(ctx, file)
+	return err
 }
