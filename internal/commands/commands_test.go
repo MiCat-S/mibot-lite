@@ -2,7 +2,9 @@ package commands
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"github.com/MiCat-S/mibot-lite/internal/bot"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -680,5 +682,189 @@ func TestBackupHelpSaysWhereItGoesAndHowToRestore(t *testing.T) {
 		if !strings.Contains(text, wanted) {
 			t.Errorf("the help never mentions %q", wanted)
 		}
+	}
+}
+
+// The four link shapes Telegram hands out, and things that only look
+// like links.
+func TestParseLink(t *testing.T) {
+	cases := map[string]messageLink{
+		"https://t.me/c/1234567890/42":        {ChatID: "-1001234567890", ID: 42},
+		"t.me/c/1234567890/5/42":              {ChatID: "-1001234567890", ID: 42},
+		"https://t.me/durov/123":              {Username: "durov", ID: 123},
+		"https://t.me/some_group/7/88?single": {Username: "some_group", ID: 88},
+		"telegram.me/durov/9":                 {Username: "durov", ID: 9},
+	}
+	for text, want := range cases {
+		got, ok := parseLink(text)
+		if !ok || got.ChatID != want.ChatID || got.Username != want.Username || got.ID != want.ID {
+			t.Errorf("parseLink(%q) = %+v %v, want %+v", text, got, ok, want)
+		}
+	}
+	for _, text := range []string{"https://t.me/durov", "https://example.com/c/1/2", "t.me/c/abc/1", "hello", "t.me/ab/1"} {
+		if _, ok := parseLink(text); ok {
+			t.Errorf("%q parsed as a message link", text)
+		}
+	}
+}
+
+func TestParseSaveArgs(t *testing.T) {
+	request, err := parseSaveArgs([]string{"https://t.me/durov/1", "https://t.me/durov/2", "@friend"})
+	if err != nil || len(request.Links) != 2 || request.Target != "@friend" {
+		t.Errorf("links and a target: %+v %v", request, err)
+	}
+	request, err = parseSaveArgs([]string{"t.me/c/123/100|t.me/c/123/5"})
+	if err != nil || request.Range == nil || request.Range[0].ID != 5 || request.Range[1].ID != 100 {
+		t.Errorf("a reversed range should be put in order: %+v %v", request, err)
+	}
+	for label, args := range map[string][]string{
+		"two chats":      {"t.me/c/1/1|t.me/c/2/9"},
+		"half a range":   {"t.me/c/1/1|nope"},
+		"two targets":    {"t.me/durov/1", "@a", "@b"},
+		"range and link": {"t.me/c/1/1|t.me/c/1/9", "t.me/durov/1"},
+	} {
+		if _, err := parseSaveArgs(args); err == nil {
+			t.Errorf("%s: accepted", label)
+		}
+	}
+}
+
+// A private chat with a person has no t.me address; making one up would
+// print a link that goes nowhere.
+func TestLinkURL(t *testing.T) {
+	if got := (messageLink{ChatID: "-1001234", ID: 5}).url(); got != "https://t.me/c/1234/5" {
+		t.Errorf("channel url = %q", got)
+	}
+	if got := (messageLink{Username: "durov", ID: 5}).url(); got != "https://t.me/durov/5" {
+		t.Errorf("public url = %q", got)
+	}
+	if got := (messageLink{ChatID: "777", ID: 5}).url(); got != "" {
+		t.Errorf("a private chat got a url: %q", got)
+	}
+}
+
+// Local saves name files after what the sender called them, which must
+// not be able to leave the directory.
+func TestSanitizeSegment(t *testing.T) {
+	for input, want := range map[string]string{
+		"../../etc/passwd": "etc_passwd",
+		"视频 2024.mp4":      "视频_2024.mp4",
+		"...":              "file",
+		"a/b\\c":           "a_b_c",
+	} {
+		if got := sanitizeSegment(input); got != want {
+			t.Errorf("sanitizeSegment(%q) = %q, want %q", input, got, want)
+		}
+	}
+	if got := localExtension(&bot.MediaSource{MimeType: "video/mp4"}); got != ".mp4" {
+		t.Errorf("video/mp4 saved as %q", got)
+	}
+}
+
+func TestFindAddress(t *testing.T) {
+	for text, want := range map[string]string{
+		"连不上 8.8.8.8 了":                 "8.8.8.8",
+		"看这个 https://example.com/a?b=1": "example.com",
+		"example.org 挂了吗":               "example.org",
+		"2001:4860:4860::8888":          "2001:4860:4860::8888",
+		"没有地址":                          "",
+	} {
+		if got := findAddress(text); got != want {
+			t.Errorf("findAddress(%q) = %q, want %q", text, got, want)
+		}
+	}
+}
+
+// Only the issuer prefix is looked up; the rest of a pasted card number
+// must never reach the request.
+func TestBINDigitsNeverSendsMoreThanEight(t *testing.T) {
+	if got, ok := binDigits("4150 4212 3456 7890"); !ok || got != "41504212" {
+		t.Errorf("a full card number became %q", got)
+	}
+	if got, ok := binDigits("415042"); !ok || got != "415042" {
+		t.Errorf("six digits became %q", got)
+	}
+	if _, ok := binDigits("41504"); ok {
+		t.Error("five digits were accepted")
+	}
+}
+
+// The response below is what binlist.net returned for 415042 from the
+// deployment, kept so the rendering is checked against the real shape.
+func TestRenderBINFromARealResponse(t *testing.T) {
+	var result binResult
+	raw := `{"number":{},"scheme":"visa","type":"credit","brand":"Visa Rewards","country":{"numeric":"643","alpha2":"RU","name":"Russian Federation (the)","emoji":"🇷🇺","currency":"RUB"},"bank":{"name":"(Ofac Sanctioned) Vtb Bank Pjsc"}}`
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatal(err)
+	}
+	text := renderBIN("415042", result)
+	for _, wanted := range []string{"Visa", "贷记卡", "REWARDS", "Russian Federation", "卢布（RUB）", "Vtb Bank", "预付卡：未知"} {
+		if !strings.Contains(text, wanted) {
+			t.Errorf("rendering lost %q:\n%s", wanted, text)
+		}
+	}
+	if strings.Contains(text, "(the)") {
+		t.Errorf("the country kept binlist's article:\n%s", text)
+	}
+}
+
+// Likewise the real ip-api answer for 8.8.8.8.
+func TestRenderIPFromARealResponse(t *testing.T) {
+	var result ipResult
+	raw := `{"status":"success","country":"美国","regionName":"弗吉尼亚州","city":"Ashburn","timezone":"America/New_York","isp":"Google LLC","org":"Google Public DNS","as":"AS15169 Google LLC","proxy":false,"hosting":true,"query":"8.8.8.8"}`
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatal(err)
+	}
+	text := renderIP(result)
+	for _, wanted := range []string{"8.8.8.8", "美国 · 弗吉尼亚州 · Ashburn", "Google LLC", "数据中心", "bgp.he.net/AS15169"} {
+		if !strings.Contains(text, wanted) {
+			t.Errorf("rendering lost %q:\n%s", wanted, text)
+		}
+	}
+	if strings.Contains(text, "代理") {
+		t.Errorf("a non-proxy was flagged as one:\n%s", text)
+	}
+}
+
+func TestEstimateCreation(t *testing.T) {
+	now := time.Date(2026, 9, 23, 0, 0, 0, 0, time.UTC)
+	if got := estimateCreation(215959394, now).Year(); got != 2016 {
+		t.Errorf("id 215959394 estimated in %d, want 2016", got)
+	}
+	// Later ids are never estimated earlier.
+	previous := time.Time{}
+	for id := int64(0); id <= 8_000_000_000; id += 250_000_000 {
+		got := estimateCreation(id, now)
+		if got.Before(previous) {
+			t.Fatalf("id %d went back in time", id)
+		}
+		previous = got
+	}
+	// Past the table the estimate keeps moving forward and stops at now.
+	if got := estimateCreation(8_600_000_000, now); !got.After(time.Unix(1767225600, 0)) && !got.Equal(now) {
+		t.Errorf("an id past the table landed at %v", got)
+	}
+	if got := estimateCreation(99_000_000_000, now); !got.Equal(now) {
+		t.Errorf("a far future id was not clamped to now: %v", got)
+	}
+}
+
+func TestRenderIDs(t *testing.T) {
+	now := time.Date(2026, 9, 23, 0, 0, 0, 0, time.UTC)
+	user := renderIDs(&entityInfo{kind: "user", id: 215959394, name: "Cat", username: "cat", dc: 5, common: 3,
+		flags: []string{"⭐ Premium"}}, time.Date(2024, 1, 2, 3, 4, 0, 0, time.Local), now)
+	for _, wanted := range []string{"215959394", "@cat", "DC5（新加坡）", "2024-01-02 03:04", "tg://user?id=215959394", "t.me/cat", "⭐ Premium"} {
+		if !strings.Contains(user, wanted) {
+			t.Errorf("user card lost %q:\n%s", wanted, user)
+		}
+	}
+	channel := renderIDs(&entityInfo{kind: "supergroup", id: 1771725356, name: "群", members: 42}, time.Time{}, now)
+	for _, wanted := range []string{"超级群", "-1001771725356", "42", "看不出"} {
+		if !strings.Contains(channel, wanted) {
+			t.Errorf("channel card lost %q:\n%s", wanted, channel)
+		}
+	}
+	if strings.Contains(channel, "注册时间") || strings.Contains(channel, "tg://user") {
+		t.Errorf("a channel was described like a person:\n%s", channel)
 	}
 }
