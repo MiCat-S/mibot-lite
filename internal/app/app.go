@@ -102,6 +102,27 @@ func sleepFor(ctx context.Context, d time.Duration) error {
 // SessionFile is gotd's session file, shared with MiBox's Go host.
 const SessionFile = "gotd-session.json"
 
+// ErrRunning reports that another process holds a deployment directory.
+var ErrRunning = errors.New("another mibot-lite instance already runs on this directory")
+
+// LockRoot takes the single-instance lock on a deployment directory.
+//
+// Serving takes it so two processes never answer for one account. Restoring
+// a backup takes it too, for the opposite reason: rewriting config.json
+// under a running service would leave it holding a session the file no
+// longer describes.
+func LockRoot(root string) (*os.File, error) {
+	lock, err := os.OpenFile(filepath.Join(root, "mibot-lite.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		lock.Close()
+		return nil, ErrRunning
+	}
+	return lock, nil
+}
+
 // DataDir is where the commands keep their JSON files.
 func (a *App) DataDir() string { return filepath.Join(a.Root, "data") }
 
@@ -129,13 +150,8 @@ func Prepare(ctx context.Context, options Options) (*App, error) {
 
 	var lock *os.File
 	if !options.ReadOnly {
-		lock, err = os.OpenFile(filepath.Join(root, "mibot-lite.lock"), os.O_CREATE|os.O_RDWR, 0o600)
-		if err != nil {
+		if lock, err = LockRoot(root); err != nil {
 			return nil, err
-		}
-		if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-			lock.Close()
-			return nil, errors.New("another mibot-lite instance already runs on this directory")
 		}
 	}
 	if err := os.MkdirAll(filepath.Join(root, "data"), 0o700); err != nil {

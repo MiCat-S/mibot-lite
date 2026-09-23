@@ -15,7 +15,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 **用 `bash <(curl …)` 而不是 `curl … | bash`**：登录要输手机号和验证码，
 管道进来的脚本没有键盘。拿不到终端时它会装好二进制并告诉你下一步命令。
 
-常用选项：`--root 目录`（默认 `/root/mibot-lite`）、`--no-service`（只装二进制不碰 systemd）。
+常用选项：`--root 目录`（默认 `/root/mibot-lite`）、`--no-service`（只装二进制不碰 systemd）、
+`--restore 备份文件`（用 `.bf` 的备份装，不用重新登录，见第 10 节）。
 
 下面是手动分步的流程，想清楚每一步做了什么再看。
 
@@ -175,3 +176,40 @@ AI、汇率等命令的配置在 Telegram 里用命令完成，见 `.help ai`、
 ```sh
 systemctl show mibot-lite -p MemoryCurrent -p MemoryPeak
 ```
+
+## 10. 备份与恢复（重装系统、换机器）
+
+**备份**：在 Telegram 里发 `.bf`。配置会打成一个 `.tar.gz` 发到本账号的收藏夹，
+无论在哪个对话里执行都只发到收藏夹。机器连不上 Telegram 时，也可以在服务器上：
+
+```sh
+/root/mibot-lite/mibot-lite --backup /root/backup.tar.gz --root /root/mibot-lite
+```
+
+备份里有：`config.json` 和 `gotd-session.json`（登录会话）、`.env`、`data/` 下每个命令的
+JSON 配置。没有：eatgif 素材和测速 CLI 这类缓存（用到时自己重新下载）、`updates.json`
+（这台机器的连接状态，换机器没有意义）、程序本身。
+
+**这个文件等同于你的账号**，拿到它的人能直接登录。不要转发给别人；要给别人看问题，
+发 `.log`，那个是脱敏的。
+
+**恢复到新机器**：先把旧机器上的服务停掉（同一账号不能两处同时在线），把备份文件
+传到新服务器上，然后：
+
+```sh
+bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scripts/install.sh) --restore /root/backup.tar.gz
+```
+
+安装脚本会先恢复配置，看到已有会话就跳过登录，直接装服务启动。
+
+`--restore` 只用于全新的目录。目录里已经有账号时它会拒绝，并告诉你怎么覆盖：
+
+```sh
+systemctl stop mibot-lite
+/root/mibot-lite/mibot-lite --restore /root/backup.tar.gz --root /root/mibot-lite --force
+systemctl start mibot-lite
+```
+
+恢复前会把整个文件读完并校验：不是 mibot-lite 的备份、文件被截断、里面有备份不该
+有的路径，都会在写入任何东西之前拒绝。覆盖时如果备份里没有 `gotd-session.json`，
+旧的那个会被删掉——否则启动时它会压过 `config.json`，悄悄继续用旧账号。

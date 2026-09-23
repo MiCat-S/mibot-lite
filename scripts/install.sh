@@ -20,23 +20,37 @@ SERVICE=mibot-lite.service
 UNIT=/etc/systemd/system/$SERVICE
 WITH_SERVICE=1
 
-for argument in "$@"; do
-  case "$argument" in
-    --root) shift; ROOT=${1:?--root needs a directory}; shift || true ;;
-    --root=*) ROOT=${argument#*=} ;;
-    --repo=*) REPO=${argument#*=} ;;
+RESTORE=
+
+# A while loop, not `for argument in "$@"`: shifting inside a for loop does
+# not move it, so `--root DIR` only worked when it came first and DIR was
+# then read again as an argument of its own.
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --root) ROOT=${2:?--root needs a directory}; shift ;;
+    --root=*) ROOT=${1#*=} ;;
+    --repo=*) REPO=${1#*=} ;;
+    --restore) RESTORE=${2:?--restore needs a backup file}; shift ;;
+    --restore=*) RESTORE=${1#*=} ;;
     # Everything except the systemd unit: for trying the installer out
     # without touching a running deployment.
     --no-service) WITH_SERVICE=0 ;;
     --help|-h)
       printf '%s\n' \
-        'Usage: install.sh [--root DIR] [--repo OWNER/NAME] [--no-service]' \
+        'Usage: install.sh [--root DIR] [--repo OWNER/NAME] [--restore FILE] [--no-service]' \
         '' \
         'Downloads the latest release for this machine, verifies its SHA-256,' \
         'signs in when needed, and installs the service. Safe to re-run: it' \
-        'upgrades the binary and leaves config.json and data/ untouched.'
+        'upgrades the binary and leaves config.json and data/ untouched.' \
+        '' \
+        '--restore FILE  set the new install up from a backup made with .bf,' \
+        '                instead of signing in. For a fresh directory only.'
       exit 0 ;;
+    # A mistyped option used to be ignored, which for --restore meant a
+    # fresh sign-in instead of the restore that was asked for.
+    *) printf 'Unknown option: %s (see --help)\n' "$1" >&2; exit 2 ;;
   esac
+  shift
 done
 
 say() { printf '\033[1m==>\033[0m %s\n' "$*"; }
@@ -48,6 +62,19 @@ for tool in curl install systemctl; do
   command -v "$tool" > /dev/null || die "missing required command: $tool"
 done
 command -v sha256sum > /dev/null || command -v shasum > /dev/null || die "need sha256sum or shasum to verify the download"
+
+# Checked before anything is downloaded, so a wrong path costs nothing.
+if [ -n "$RESTORE" ]; then
+  [ -f "$RESTORE" ] && [ -r "$RESTORE" ] || die "cannot read the backup file: $RESTORE"
+  RESTORE=$(cd "$(dirname "$RESTORE")" && pwd -P)/$(basename "$RESTORE")
+  if grep -q '"session"' "$ROOT/config.json" 2>/dev/null; then
+    die "$ROOT already has an account, and --restore is for a fresh install.
+  To replace that account with the backup, stop the service and run:
+    systemctl stop mibot-lite
+    $ROOT/mibot-lite --restore $RESTORE --root $ROOT --force
+  then run this installer again without --restore."
+  fi
+fi
 
 case "$(uname -m)" in
   x86_64|amd64) ARCH=amd64 ;;
@@ -101,6 +128,14 @@ say "SHA-256 verified"
 
 mkdir -p "$ROOT"
 chmod 700 "$ROOT"
+
+# A restore brings the account with it, which is what makes the sign-in
+# below find a session and step aside.
+if [ -n "$RESTORE" ]; then
+  say "Restoring the configuration from $(basename "$RESTORE")"
+  chmod 755 "$WORK/$ASSET"
+  "$WORK/$ASSET" --restore "$RESTORE" --root "$ROOT" || die "the backup could not be restored; nothing was installed"
+fi
 
 # Sign in before anything is installed: a deployment with no account is
 # not worth starting, and the prompts need a keyboard.
