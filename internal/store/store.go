@@ -1,5 +1,5 @@
-// Package store is the persistence layer: one JSON file per command family,
-// written atomically, guarded by a mutex. No database.
+// Package store 是持久化层：每类命令一个 JSON 文件，原子写入，
+// 用互斥锁保护。不用数据库。
 package store
 
 import (
@@ -11,7 +11,7 @@ import (
 	"sync"
 )
 
-// Store keeps one JSON document of type T on disk.
+// Store 在磁盘上保存一个类型为 T 的 JSON 文档。
 type Store[T any] struct {
 	path     string
 	defaults func() T
@@ -19,13 +19,13 @@ type Store[T any] struct {
 	cached   *T
 }
 
-// New builds a store. defaults produces the document a missing or empty file
-// stands for; it must return a fresh value each call.
+// New 创建一个 store。defaults 生成文件不存在或为空时所代表的文档；
+// 每次调用都必须返回一个新值。
 func New[T any](path string, defaults func() T) *Store[T] {
 	return &Store[T]{path: path, defaults: defaults}
 }
 
-// Path is where the document lives.
+// Path 是文档所在的路径。
 func (s *Store[T]) Path() string { return s.path }
 
 func (s *Store[T]) load() (*T, error) {
@@ -47,7 +47,7 @@ func (s *Store[T]) load() (*T, error) {
 	return s.cached, nil
 }
 
-// Read returns a copy of the document.
+// Read 返回文档的一份副本。
 func (s *Store[T]) Read() (T, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -59,8 +59,7 @@ func (s *Store[T]) Read() (T, error) {
 	return clone(*value)
 }
 
-// Update applies mutate to the document and writes it back. An error from
-// mutate leaves the file untouched.
+// Update 用 mutate 修改文档再写回。mutate 返回错误时，文件保持不动。
 func (s *Store[T]) Update(mutate func(value *T) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

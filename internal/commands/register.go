@@ -9,7 +9,7 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/app"
 )
 
-// RegisterAll wires every command family into the app.
+// RegisterAll 把所有命令组接入应用。
 func RegisterAll(a *app.App) {
 	Core(a)
 	Restart(a)
@@ -37,8 +37,8 @@ func RegisterAll(a *app.App) {
 	Alias(a)
 }
 
-// miboxFiles maps MiBox plugin data files to their names under data/. The
-// JSON shapes are the ones the MiBox plugins wrote, so the copy is verbatim.
+// miboxFiles 把 MiBox 插件的数据文件映射到 data/ 下的文件名。JSON 结构
+// 和 MiBox 插件写的一样，所以原样复制即可。
 var miboxFiles = map[string]string{
 	"assets/ai/config.json":                     "ai.json",
 	"assets/sum/database.json":                  "sum.json",
@@ -50,7 +50,7 @@ var miboxFiles = map[string]string{
 	"assets/yvlu/config.json":                   "yvlu.json",
 }
 
-// ImportMiBox copies the plugin data files from a MiBox deployment.
+// ImportMiBox 从 MiBox 部署中复制插件数据文件。
 func ImportMiBox(miboxRoot, dataDir string, out io.Writer) error {
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return err

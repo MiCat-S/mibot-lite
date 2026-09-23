@@ -13,15 +13,14 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/logtail"
 )
 
-// The log leaves as a file rather than as a message. It is meant to be
-// forwarded to whoever is helping, and a file can be read, searched and
-// attached to a report; a wall of text in a chat can only be scrolled.
+// 日志以文件而不是消息的形式发出。它本来就是要转给帮忙排查的人的，
+// 文件可以阅读、搜索、附到问题报告里；聊天里的一大段文字只能来回翻。
 const (
 	logDefaultLines = 200
 	logMimeType     = "text/plain"
 )
 
-// logFilter turns the arguments into a line count and a predicate.
+// logFilter 把参数解析成行数和一个过滤条件。
 func logFilter(inv *command.Invocation) (int, func(string) bool, string) {
 	count := logDefaultLines
 	var terms []string
@@ -51,8 +50,8 @@ func logFilter(inv *command.Invocation) (int, func(string) bool, string) {
 	}, "包含 " + needle
 }
 
-// logHeader explains the file to whoever ends up reading it, and says
-// what was taken out so nobody assumes the gaps are a malfunction.
+// logHeader 向最终读到这个文件的人说明它是什么，并写明删掉了哪些内容，
+// 免得有人把缺的部分当成故障。
 func logHeader(a *app.App, shown, held int, filter string) string {
 	level := "INFO"
 	if a.Level != nil {
@@ -101,10 +100,10 @@ func logHelp(prefix string) string {
 		"日志只留在进程里，重启就没了。要看重启之前的，得上服务器翻 journalctl。"
 }
 
-// setLogLevel raises or lowers the live level.
+// setLogLevel 在运行中调高或调低日志级别。
 //
-// Raising it used to mean editing the unit and restarting the account,
-// which loses the very moment being chased.
+// 以前要调高级别，得改服务单元再重启账号，而一重启，正在追查的那个
+// 现场也就没了。
 func setLogLevel(ctx context.Context, a *app.App, inv *command.Invocation) error {
 	if a.Level == nil {
 		return inv.EditText(ctx, "这个构建不支持在线改日志级别")
@@ -120,8 +119,8 @@ func setLogLevel(ctx context.Context, a *app.App, inv *command.Invocation) error
 	default:
 		return inv.EditText(ctx, "只能是 on 或 off")
 	}
-	// Debug includes every update the server pushes and every message
-	// that goes past, so it is a setting to turn on for a minute.
+	// debug 级别会记下服务器推送的每条更新和经过的每条消息，所以只适合
+	// 临时开一会儿。
 	note := ""
 	if a.Level.Level() == slog.LevelDebug {
 		note = "\n\n<i>debug 很吵，查完记得关掉。</i>"
@@ -129,7 +128,7 @@ func setLogLevel(ctx context.Context, a *app.App, inv *command.Invocation) error
 	return inv.Edit(ctx, "日志级别已设为 "+command.Code(a.Level.Level().String())+note)
 }
 
-// Log registers .log.
+// Log 注册 .log。
 func Log(a *app.App) {
 	handle := func(ctx context.Context, inv *command.Invocation) error {
 		switch strings.ToLower(inv.Arg(0)) {

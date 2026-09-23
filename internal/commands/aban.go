@@ -17,7 +17,7 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/store"
 )
 
-// managedGroup is a chat this account can ban in.
+// managedGroup 是本账号能在其中封禁用户的群组。
 type managedGroup struct {
 	ID      int64  `json:"id"`
 	Title   string `json:"title"`
@@ -35,26 +35,25 @@ type abanService struct {
 	mu    sync.Mutex
 }
 
-// abanCacheTTL is how long a managed-group listing is reused; `.refresh`
-// discards it early.
+// abanCacheTTL 是管理群列表的缓存复用时长；`.refresh` 会提前丢弃缓存。
 const abanCacheTTL = 12 * time.Hour
 
-// banRights is a full ban: the target loses read and write.
+// banRights 是完全封禁：目标既不能看也不能发。
 func banRights(until int) tg.ChatBannedRights {
 	return tg.ChatBannedRights{UntilDate: until, ViewMessages: true, SendMessages: true, SendMedia: true,
 		SendStickers: true, SendGifs: true, SendGames: true, SendInline: true, EmbedLinks: true}
 }
 
-// muteRights silences a target without removing them.
+// muteRights 让目标无法发言，但不把人移出。
 func muteRights(until int) tg.ChatBannedRights {
 	return tg.ChatBannedRights{UntilDate: until, SendMessages: true, SendMedia: true, SendStickers: true,
 		SendGifs: true, SendGames: true, SendInline: true, EmbedLinks: true}
 }
 
-// clearRights lifts every restriction.
+// clearRights 解除所有限制。
 func clearRights() tg.ChatBannedRights { return tg.ChatBannedRights{} }
 
-// parseDuration reads 60s / 5m / 1h / 1d; anything else is permanent.
+// parseDuration 解析 60s / 5m / 1h / 1d；其他写法一律视为永久。
 func parseDuration(value string) time.Duration {
 	value = strings.ToLower(strings.TrimSpace(value))
 	if value == "" {
@@ -99,7 +98,7 @@ func untilDate(d time.Duration) int {
 	return int(time.Now().Add(d).Unix())
 }
 
-// isMetaFlag reports the confirmation tokens that are not targets.
+// isMetaFlag 识别那些用来确认、而不是指定目标的参数。
 func isMetaFlag(arg string) bool {
 	switch strings.ToLower(strings.TrimSpace(arg)) {
 	case "true", "false", "confirm":
@@ -108,8 +107,8 @@ func isMetaFlag(arg string) bool {
 	return false
 }
 
-// resolveTarget finds who a ban command is aimed at: an explicit argument
-// first, else the replied message's sender.
+// resolveTarget 找出封禁命令针对的是谁：优先用明确给出的参数，
+// 否则取被回复消息的发送者。
 func resolveTarget(ctx context.Context, inv *command.Invocation) (tg.InputPeerClass, int64, string, error) {
 	var targets []string
 	for _, arg := range inv.Args {
@@ -148,7 +147,7 @@ func resolveTarget(ctx context.Context, inv *command.Invocation) (tg.InputPeerCl
 	return peer, sender.UserID, info.DisplayName(), nil
 }
 
-// targetIsAdmin reports whether the target holds admin rights in a chat.
+// targetIsAdmin 判断目标在某个群组里是否有管理员权限。
 func targetIsAdmin(ctx context.Context, client *bot.Client, chat tg.InputPeerClass, target tg.InputPeerClass) bool {
 	channel, ok := bot.InputChannel(chat)
 	if !ok {
@@ -166,8 +165,8 @@ func targetIsAdmin(ctx context.Context, client *bot.Client, chat tg.InputPeerCla
 	return false
 }
 
-// applyRights bans, mutes or clears in one chat. A legacy group has no
-// banned-rights concept, so a ban there removes the member instead.
+// applyRights 在一个群组里封禁、禁言或解除限制。基本群没有封禁权限
+// 这个概念，所以在那里封禁就改成把成员移出。
 func applyRights(ctx context.Context, client *bot.Client, chat tg.InputPeerClass, target tg.InputPeerClass, rights tg.ChatBannedRights, remove bool) error {
 	if channel, ok := bot.InputChannel(chat); ok {
 		_, err := client.API().ChannelsEditBanned(ctx, &tg.ChannelsEditBannedRequest{Channel: channel, Participant: target, BannedRights: rights})
@@ -188,7 +187,7 @@ func applyRights(ctx context.Context, client *bot.Client, chat tg.InputPeerClass
 	return err
 }
 
-// deleteHistory removes every message the target left in a channel.
+// deleteHistory 删除目标在某个频道里留下的全部消息。
 func deleteHistory(ctx context.Context, client *bot.Client, chat tg.InputPeerClass, target tg.InputPeerClass) bool {
 	channel, ok := bot.InputChannel(chat)
 	if !ok {
@@ -198,8 +197,8 @@ func deleteHistory(ctx context.Context, client *bot.Client, chat tg.InputPeerCla
 	return err == nil
 }
 
-// managedGroups lists every chat this account can ban in, from the cache
-// when it is fresh.
+// managedGroups 列出本账号能在其中封禁用户的所有群组，缓存没过期时
+// 直接用缓存。
 func (s *abanService) managedGroups(ctx context.Context, client *bot.Client, refresh bool) ([]managedGroup, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -299,7 +298,7 @@ func (s *abanService) managedGroups(ctx context.Context, client *bot.Client, ref
 	return groups, nil
 }
 
-// input converts a managed group back into an addressable peer.
+// input 把管理群转回可以直接寻址的 peer。
 func (g managedGroup) input() tg.InputPeerClass {
 	if g.Channel {
 		return &tg.InputPeerChannel{ChannelID: g.ID, AccessHash: g.Hash}
@@ -314,7 +313,7 @@ func abanHelp(prefix string) string {
 		"refresh</code> 刷新管理群缓存\n目标：回复消息 / @用户名 / 用户ID；管理员目标需追加 <code>true</code>。\n基本群仅支持踢出；ban/sb 在基本群执行移出，不会阻止再次加入。"
 }
 
-// Aban registers the ban-management commands.
+// Aban 注册封禁管理相关的命令。
 func Aban(a *app.App) {
 	service := &abanService{store: newStore(a, "aban.json", func() abanCache { return abanCache{} })}
 	basic := func(action string) *command.Command {
@@ -383,8 +382,8 @@ func abanBasic(ctx context.Context, inv *command.Invocation, service *abanServic
 			return abanFailure(ctx, inv, label, err)
 		}
 		if isChannel {
-			// A channel kick is a ban followed by a lift, so the target
-			// can rejoin; a legacy group removal already is one.
+			// 频道里的踢出是先封禁再解封，这样目标还能重新加入；
+			// 基本群的移出本身就是踢出。
 			if err := applyRights(ctx, inv.Client, chat, target, clearRights(), false); err != nil {
 				return abanFailure(ctx, inv, label, err)
 			}
@@ -504,7 +503,7 @@ func abanBatch(ctx context.Context, inv *command.Invocation, service *abanServic
 			return err
 		}
 		if !group.Channel && !ban {
-			// A legacy group has nothing to lift: nobody was banned there.
+			// 基本群没有什么可解封的：那里从来没有人被封禁过。
 			skipped++
 			continue
 		}

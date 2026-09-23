@@ -1,8 +1,7 @@
-// Package tgstate persists what gotd's update engine needs across restarts:
-// the account's update position, each channel's pts, and the access hashes
-// of every peer the account has seen. One JSON file, written at most once
-// per second, so a restart resumes where it stopped and can still edit a
-// message in a chat that has not spoken since.
+// Package tgstate 保存 gotd 的更新引擎跨重启需要的东西：账号的更新位置、
+// 每个频道的 pts，以及账号见过的所有对象的 access hash。全放在一个 JSON
+// 文件里，每秒最多写一次。这样重启后能从停下的地方接着收更新；某个对话
+// 在那之后即使再没人说话，也还能编辑其中的消息。
 package tgstate
 
 import (
@@ -33,8 +32,8 @@ type document struct {
 	Users    map[string]int64 `json:"userHashes"`
 }
 
-// State implements updates.StateStorage, updates.ChannelAccessHasher and
-// updates.UserAccessHasher over one JSON file.
+// State 基于一个 JSON 文件实现 updates.StateStorage、
+// updates.ChannelAccessHasher 和 updates.UserAccessHasher。
 type State struct {
 	path  string
 	mu    sync.Mutex
@@ -43,7 +42,7 @@ type State struct {
 	timer *time.Timer
 }
 
-// Open loads the file, or starts empty when there is none.
+// Open 加载文件；文件不存在就从空状态开始。
 func Open(path string) (*State, error) {
 	state := &State{path: path, doc: document{Channels: map[string]int{}, Chans: map[string]int64{}, Users: map[string]int64{}}}
 	raw, err := os.ReadFile(path)
@@ -68,7 +67,7 @@ func Open(path string) (*State, error) {
 	return state, nil
 }
 
-// Close flushes pending changes.
+// Close 把尚未写入的改动写到磁盘。
 func (s *State) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -78,7 +77,7 @@ func (s *State) Close() error {
 	return s.flushLocked()
 }
 
-// Flush writes pending changes now.
+// Flush 立即写入尚未写入的改动。
 func (s *State) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -238,5 +237,5 @@ func (s *State) GetUserAccessHash(ctx context.Context, userID, targetUserID int6
 	return hash, ok, nil
 }
 
-// Dir returns the directory the file lives in.
+// Dir 返回文件所在的目录。
 func (s *State) Dir() string { return filepath.Dir(s.path) }

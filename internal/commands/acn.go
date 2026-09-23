@@ -19,8 +19,8 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/store"
 )
 
-// acnUser is one account's dynamic-nickname settings. The JSON names match
-// MiBox's autochangename.json so an imported file is read as it stands.
+// acnUser 是一个账号的动态昵称设置。JSON 字段名与 MiBox 的
+// autochangename.json 一致，导入的文件可以原样读取。
 type acnUser struct {
 	UserID            string `json:"user_id"`
 	Timezone          string `json:"timezone"`
@@ -62,7 +62,7 @@ func acnDefaults() acnState {
 
 func (u *acnUser) showTime() bool { return u.ShowTime == nil || *u.ShowTime }
 
-// validZone reports whether a timezone identifier loads.
+// validZone 判断一个时区标识符能否加载。
 func validZone(zone string) bool {
 	if strings.TrimSpace(zone) == "" {
 		return false
@@ -71,11 +71,11 @@ func validZone(zone string) bool {
 	return err == nil
 }
 
-// zoneLabel renders the timezone the way the chosen format asks.
+// zoneLabel 按所选的格式显示时区。
 //
-// MiBox carried a 200-entry abbreviation table for "simp"; Go's own zone
-// database already knows the abbreviation, so time.Format("MST") replaces
-// the whole table and stays correct across daylight saving.
+// MiBox 为 "simp" 带了一张 200 条的缩写表；Go 自带的时区数据库本来就
+// 知道缩写，所以 time.Format("MST") 一句就顶替了整张表，
+// 遇到夏令时切换也照样正确。
 func zoneLabel(zone, format string) string {
 	location, err := time.LoadLocation(zone)
 	if err != nil {
@@ -125,7 +125,7 @@ func pad2(value int) string {
 	return strconv.Itoa(value)
 }
 
-// clockEmoji is the 🕐-series face for the hour in a zone.
+// clockEmoji 返回该时区当前钟点对应的 🕐 系列钟面表情。
 func clockEmoji(zone string) string {
 	location, err := time.LoadLocation(zone)
 	if err != nil {
@@ -143,8 +143,7 @@ func zoneTime(zone string) string {
 	return time.Now().In(location).Format("15:04")
 }
 
-// styleRanges maps a text style to the Unicode block each character class
-// is shifted into.
+// styleRanges 给出每种文字样式下，各类字符要平移到的 Unicode 区段。
 var styleRanges = map[string][3]rune{
 	"italic":  {0x1D7CE, 0x1D400, 0x1D41A},
 	"double":  {0x1D7D8, 0, 0x1D552},
@@ -153,8 +152,7 @@ var styleRanges = map[string][3]rune{
 	"outline": {0x1D7E2, 0x1D5A0, 0x1D5BA},
 }
 
-// doubleStruckUpper holds the double-struck capitals that live outside the
-// contiguous block.
+// doubleStruckUpper 收录不在连续区段里的那几个双线体大写字母。
 var doubleStruckUpper = map[rune]rune{'C': 'ℂ', 'H': 'ℍ', 'N': 'ℕ', 'P': 'ℙ', 'Q': 'ℚ', 'R': 'ℝ', 'Z': 'ℤ'}
 
 func applyTextStyle(text, style string) string {
@@ -186,7 +184,7 @@ func applyTextStyle(text, style string) string {
 	return b.String()
 }
 
-// acnCities maps common Chinese city names to what the geocoder knows.
+// acnCities 把常见的中文城市名换成地理编码接口认识的名字。
 var acnCities = map[string]string{"北京": "Beijing", "上海": "Shanghai", "广州": "Guangzhou", "深圳": "Shenzhen",
 	"成都": "Chengdu", "杭州": "Hangzhou", "武汉": "Wuhan", "西安": "Xi'an", "重庆": "Chongqing", "南京": "Nanjing",
 	"天津": "Tianjin", "苏州": "Suzhou", "长沙": "Changsha", "郑州": "Zhengzhou", "青岛": "Qingdao", "大连": "Dalian",
@@ -199,7 +197,7 @@ var weatherIcons = map[int]string{0: "☀️", 1: "🌤️", 2: "⛅", 3: "☁�
 	55: "🌧️", 56: "🌨️", 57: "🌨️", 61: "🌧️", 63: "🌧️", 65: "🌧️", 66: "🌨️", 67: "🌨️", 71: "❄️", 73: "❄️",
 	75: "❄️", 77: "🌨️", 80: "🌦️", 81: "🌧️", 82: "⛈️", 85: "🌨️", 86: "🌨️", 95: "⛈️", 96: "⛈️", 99: "⛈️"}
 
-// fetchWeather reads the current conditions, or "" when anything fails.
+// fetchWeather 读取当前天气，任何一步失败都返回 ""。
 func fetchWeather(ctx context.Context, location string) (string, bool) {
 	city := strings.TrimSpace(location)
 	if mapped, ok := acnCities[city]; ok {
@@ -235,7 +233,7 @@ func fetchWeather(ctx context.Context, location string) (string, bool) {
 	return icon + " " + strconv.Itoa(int(*forecast.Current.Temperature+0.5)) + "°C", true
 }
 
-// apply rebuilds and pushes the nickname for one account.
+// apply 为一个账号重新拼出昵称并提交上去。
 func (s *acnService) apply(ctx context.Context, client *bot.Client, userID string, force bool) (bool, error) {
 	state, err := s.store.Read()
 	if err != nil {
@@ -314,8 +312,8 @@ func (s *acnService) apply(ctx context.Context, client *bot.Client, userID strin
 			return true, nil
 		}
 		if _, flood := tgerr.AsFloodWait(err); flood {
-			// Being rate-limited here means the account is pushing the
-			// profile far too often; stop rather than keep tripping it.
+			// 在这里被限流，说明这个账号改资料改得太频繁了；
+			// 与其一再触发限流，不如直接停掉。
 			_ = s.store.Update(func(state *acnState) error {
 				if current := state.Users[userID]; current != nil {
 					current.Enabled = false
@@ -343,7 +341,7 @@ func (s *acnService) apply(ctx context.Context, client *bot.Client, userID strin
 	})
 }
 
-// restore puts the saved original name back.
+// restore 把保存下来的原始昵称换回去。
 func (s *acnService) restore(ctx context.Context, client *bot.Client, user *acnUser) error {
 	request := &tg.AccountUpdateProfileRequest{}
 	request.SetFirstName(user.OriginalFirstName)
@@ -369,11 +367,11 @@ func acnHelp(prefix string) string {
 		"acn weather set 北京</code> 设置地点并开启\n• <code>" + p + "acn weather on</code> / <code>off</code>\n天气缓存 30 分钟。"
 }
 
-// Acn registers .acn and the per-minute refresh job.
+// Acn 注册 .acn 以及每分钟刷新一次的后台任务。
 func Acn(a *app.App) {
 	service := &acnService{store: newStore(a, "acn.json", acnDefaults)}
-	// A file written by MiBox may carry an unknown timezone or a missing
-	// users map; normalise once at startup rather than on every tick.
+	// MiBox 写出的文件可能带着无法识别的时区，也可能缺少 users 表；
+	// 启动时统一规整一次，而不是每次定时触发都做。
 	_ = service.store.Update(func(state *acnState) error {
 		state.SchemaVersion = 1
 		if state.Users == nil {
@@ -405,8 +403,8 @@ func Acn(a *app.App) {
 	)
 
 	a.Registry.AddJob(func(ctx context.Context, client *bot.Client) {
-		// Tick on the minute, so the displayed clock changes when the real
-		// one does rather than a random number of seconds later.
+		// 在整分钟触发，这样显示的时间和真实时钟同时跳变，
+		// 而不是晚上随机的几秒。
 		for {
 			now := time.Now()
 			if err := sleepCtx(ctx, now.Truncate(time.Minute).Add(time.Minute).Sub(now)); err != nil {
@@ -728,8 +726,8 @@ func acnText(ctx context.Context, inv *command.Invocation, service *acnService, 
 		}
 		return inv.EditText(ctx, "✅ 所有文本已清空")
 	case "add":
-		// Everything after "text add" is taken verbatim, one entry per
-		// line, so a multi-line message adds several at once.
+		// "text add" 之后的内容原样收下，每行一条，
+		// 所以一条多行消息能一次添加好几条。
 		body := inv.Text
 		if index := strings.Index(strings.ToLower(body), "add"); index >= 0 {
 			body = body[index+len("add"):]
@@ -827,8 +825,8 @@ func acnWeather(ctx context.Context, inv *command.Invocation, user *acnUser, mut
 	return inv.EditText(ctx, "✅ 天气配置已更新")
 }
 
-// cleanNickname strips a clock face and a HH:MM the previous run appended,
-// so re-saving does not bake yesterday's time into the base name.
+// cleanNickname 去掉上一次运行追加的钟面表情和 HH:MM，
+// 免得重新保存时把过去的时间固化进原始昵称里。
 func cleanNickname(name string) string {
 	runes := []rune(truncateRunes(name, 128))
 	var b strings.Builder
@@ -849,6 +847,5 @@ func orDefault(value, fallback string) string {
 	return value
 }
 
-// clockTimePattern matches a "9:30" or "09:30 PM" a previous nickname
-// carried.
+// clockTimePattern 匹配旧昵称里带着的 "9:30" 或 "09:30 PM"。
 var clockTimePattern = regexp.MustCompile(`(?i)\b\d{1,2}:\d{2}(\s?(AM|PM))?\b`)

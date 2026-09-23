@@ -14,13 +14,12 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/command"
 )
 
-// installURL is what the restore instructions tell people to run. It is
-// spelled out in the backup's own caption because the moment someone
-// needs it is on a fresh machine with nothing else to go on.
+// installURL 是恢复说明里让人运行的地址。它直接写在备份文件自己的说明
+// 文字里，因为真正用到它的时候，人在一台全新的机器上，手边没有别的线索。
 const installURL = "https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scripts/install.sh"
 
-// captionFileLimit keeps the file list inside Telegram's 1024-character
-// caption; past it the count says enough.
+// captionFileLimit 让文件列表不超出 Telegram 说明文字的 1024 字符上限；
+// 再多的话，给出总数就够了。
 const captionFileLimit = 12
 
 func backupCaption(version string, names []string, size int) string {
@@ -66,7 +65,7 @@ func backupHelp(prefix string) string {
 		"这个文件等同于你的账号，不要转发给别人——要给别人看问题，用 <code>" + p + "log</code>，那个是脱敏的。"
 }
 
-// Backup registers .bf.
+// Backup 注册 .bf。
 func Backup(a *app.App) {
 	handle := func(ctx context.Context, inv *command.Invocation) error {
 		switch strings.ToLower(inv.Arg(0)) {
@@ -80,18 +79,16 @@ func Backup(a *app.App) {
 		if err != nil {
 			return inv.EditText(ctx, "❌ 备份失败："+err.Error())
 		}
-		// Always Saved Messages, whatever chat the command came from. The
-		// archive is the account; sending it into a group because that is
-		// where someone happened to type .bf would hand it to everyone
-		// there.
+		// 不管命令是在哪个对话里发的，一律发到收藏夹。这个压缩包就等于
+		// 账号本身；只因为有人碰巧在群里敲了 .bf 就把它发进群，等于把
+		// 账号交给了群里所有人。
 		name := "mibot-lite-backup-" + time.Now().Format("20060102-1504") + ".tar.gz"
 		if err := inv.Client.SendDocument(ctx, &tg.InputPeerSelf{}, name, "application/gzip", archive,
 			backupCaption(a.Version, names, len(archive)), 0); err != nil {
 			return err
 		}
 		inv.Log.Info("backup.sent", "files", len(names), "bytes", len(archive))
-		// Outside Saved Messages the confirmation says where the file
-		// went and nothing about what is in it.
+		// 在收藏夹以外的对话里，确认消息只说文件去了哪，不提里面有什么。
 		return inv.Edit(ctx, "✅ 备份已发到收藏夹（"+strconv.Itoa(len(names))+" 个文件）")
 	}
 	a.Registry.Register(&command.Command{

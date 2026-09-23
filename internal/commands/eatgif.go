@@ -24,13 +24,12 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/media"
 )
 
-// The animation assets live in the TeleBox plugin repository: a catalog of
-// named animations, each a JSON spec listing frames, and for every frame a
-// canvas image plus the masks the two avatars are pasted through. Assets
-// are cached on disk after the first use.
+// 动画素材放在 TeleBox 插件仓库里：一份按名字列出各个动画的目录；每个动画
+// 有一份列出各帧的 JSON 定义；每一帧有一张底图，外加两个头像贴上去时要套的
+// 遮罩。素材第一次用过之后就缓存在磁盘上。
 const eatgifRoot = "https://raw.githubusercontent.com/TeleBoxOrg/TeleBox-Plugins/main/eatgif/"
 
-// eatgifRole places one avatar in one frame.
+// eatgifRole 描述一个头像在某一帧里的摆放方式。
 type eatgifRole struct {
 	X          int      `json:"x"`
 	Y          int      `json:"y"`
@@ -64,9 +63,8 @@ type eatgifService struct {
 	running bool
 }
 
-// safeRelative refuses an asset path that could escape the cache directory
-// or the asset root. Every path here comes from a remote JSON document, so
-// it is untrusted input.
+// safeRelative 拒绝可能跑出缓存目录或素材根路径的素材路径。这里的每个路径
+// 都来自远程的 JSON 文档，属于不可信输入。
 func safeRelative(value string) (string, error) {
 	if value == "" || strings.Contains(value, "\\") || strings.Contains(value, "://") {
 		return "", fail("素材路径无效")
@@ -79,7 +77,7 @@ func safeRelative(value string) (string, error) {
 	return value, nil
 }
 
-// asset fetches a remote asset, reusing the on-disk copy when there is one.
+// asset 获取远程素材，磁盘上已有副本时直接复用。
 func (s *eatgifService) asset(ctx context.Context, relative string, limit int64) ([]byte, error) {
 	clean, err := safeRelative(relative)
 	if err != nil {
@@ -100,8 +98,7 @@ func (s *eatgifService) asset(ctx context.Context, relative string, limit int64)
 	if err := os.MkdirAll(filepath.Dir(cache), 0o700); err != nil {
 		return nil, err
 	}
-	// Publish atomically: two simultaneous commands must never read a
-	// half-written asset.
+	// 以原子方式落盘：同时执行的两条命令绝不能读到写了一半的素材。
 	temporary := cache + ".tmp"
 	if err := os.WriteFile(temporary, response.Body, 0o600); err == nil {
 		_ = os.Rename(temporary, cache)
@@ -137,8 +134,7 @@ func (s *eatgifService) getCatalog(ctx context.Context) (map[string]eatgifEntry,
 	return catalog, nil
 }
 
-// paste renders one avatar through its mask and composites it onto the
-// canvas at the position the spec names.
+// paste 给一个头像套上它的遮罩，再按定义里指定的位置合成到画布上。
 func (s *eatgifService) paste(ctx context.Context, canvas *image.RGBA, role *eatgifRole, face image.Image) error {
 	maskData, err := s.asset(ctx, role.Mask, 5<<20)
 	if err != nil {
@@ -179,7 +175,7 @@ func eatgifHelp(prefix string) string {
 		"eatgif list</code> 列出全部可用动画\n• <code>" + p + "eatgif clear</code> 清空素材缓存\n\n素材首次使用时从远程下载并缓存，需要主机装有 ffmpeg。"
 }
 
-// Eatgif registers .eatgif.
+// Eatgif 注册 .eatgif。
 func Eatgif(a *app.App) {
 	service := &eatgifService{a: a}
 	a.Registry.Register(&command.Command{Name: "eatgif", Description: "将双方头像合成为动画贴纸", Usage: "名称", Help: eatgifHelp, Timeout: 5 * time.Minute,
@@ -222,8 +218,8 @@ func Eatgif(a *app.App) {
 				return inv.EditText(ctx, "请回复一个用户的消息后再生成")
 			}
 
-			// One at a time: each run decodes dozens of frames and forks
-			// ffmpeg, and the point of this program is to stay small.
+			// 一次只跑一个：每次运行都要解码几十帧、再 fork 一个 ffmpeg，
+			// 而这个程序的宗旨就是保持轻量。
 			service.mu.Lock()
 			if service.running {
 				service.mu.Unlock()
@@ -272,8 +268,7 @@ func Eatgif(a *app.App) {
 					return inv.EditText(ctx, "❌ 素材图片无效")
 				}
 				canvas := imaging.ToRGBA(decoded)
-				// The reply's avatar goes down first, then the account's,
-				// matching the order the specs are authored in.
+				// 先贴被回复者的头像，再贴本账号的，与素材定义编写时的顺序一致。
 				if entry.You != nil {
 					if err := service.paste(ctx, canvas, entry.You, faces.you); err != nil {
 						return inv.Edit(ctx, "❌ 合成失败："+command.Escape(httpx.Reason(err)))
@@ -323,10 +318,10 @@ func Eatgif(a *app.App) {
 		}})
 }
 
-// avatarPair is the two faces an animation composites.
+// avatarPair 是一个动画要合成的两张头像。
 type avatarPair struct{ me, you image.Image }
 
-// faces downloads and decodes both avatars.
+// faces 下载并解码双方的头像。
 func (s *eatgifService) faces(ctx context.Context, inv *command.Invocation, reply *bot.Message) (*avatarPair, error) {
 	load := func(peer tg.InputPeerClass, who string) (image.Image, error) {
 		data, err := inv.Client.DownloadProfilePhoto(ctx, peer, false, 2<<20)

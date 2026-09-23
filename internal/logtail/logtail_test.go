@@ -7,16 +7,16 @@ import (
 	"testing"
 )
 
-// ring builds a handler writing into a fresh ring, discarding the real
-// output, which is what the journal would have kept in full.
+// ring 构造一个写入新环形缓冲区的 handler，真正的输出直接丢弃，
+// 那部分本来是 journal 完整保存的。
 func ring(t *testing.T) (*slog.Logger, *Ring) {
 	t.Helper()
 	held := New()
 	return slog.New(Wrap(slog.NewTextHandler(io.Discard, nil), held)), held
 }
 
-// The point of the package: what goes into the ring is safe to forward.
-// This is the test that matters — everything else is detail.
+// 这个包存在的意义：进了环形缓冲区的内容可以放心转发。
+// 真正要紧的就是这个测试，其余都是细节。
 func TestNothingSensitiveReachesTheRing(t *testing.T) {
 	logger, held := ring(t)
 	logger.Info("dispatch.dropped",
@@ -34,7 +34,7 @@ func TestNothingSensitiveReachesTheRing(t *testing.T) {
 			t.Errorf("ring leaked %q:\n%s", secret, whole)
 		}
 	}
-	// It still has to be worth reading.
+	// 同时它还得留下值得看的内容。
 	for _, wanted := range []string{"dispatch.dropped", "refused", "https://api.example.com"} {
 		if !strings.Contains(whole, wanted) {
 			t.Errorf("ring lost %q, leaving nothing to diagnose:\n%s", wanted, whole)
@@ -42,8 +42,7 @@ func TestNothingSensitiveReachesTheRing(t *testing.T) {
 	}
 }
 
-// The same chat has to read as the same chat, or a log of a conversation
-// becomes impossible to follow.
+// 同一个聊天必须始终显示为同一个，否则一段对话的日志就没法读下去。
 func TestDigestIsStableAndDistinct(t *testing.T) {
 	if Digest("-100123") != Digest("-100123") {
 		t.Error("the same id digested differently twice")
@@ -56,9 +55,8 @@ func TestDigestIsStableAndDistinct(t *testing.T) {
 	}
 }
 
-// Attributes attached with WithAttrs go through the same redaction as
-// the ones on the record. They were a separate code path, which is
-// exactly where a leak would sit unnoticed.
+// 用 WithAttrs 附加的属性，和记录上的属性走同样的脱敏。它们走的是
+// 另一条代码路径，泄露恰恰最容易藏在这种地方不被发现。
 func TestWithAttrsIsRedactedToo(t *testing.T) {
 	logger, held := ring(t)
 	logger.With(slog.String("chat", "-1001771725356")).Info("command.handled")
@@ -96,7 +94,7 @@ func TestRingWrapsOldestFirst(t *testing.T) {
 	if held.Held() != Lines {
 		t.Fatalf("Held = %d, want %d", held.Held(), Lines)
 	}
-	// The last one added must be the last one returned.
+	// 最后加进去的一行必须排在返回结果的最后。
 	if lines[len(lines)-1] != "xxx"+string(rune('a'+(Lines+4)%26)) {
 		t.Errorf("the newest line is not last: %q", lines[len(lines)-1])
 	}

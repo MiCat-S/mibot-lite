@@ -29,7 +29,7 @@ type dmeConfig struct {
 
 func dmeDefaults() dmeConfig { return dmeConfig{BatchSize: 50, SearchLimit: 100, RetryAttempts: 3} }
 
-// placeholderPNG is the image anti-recall mode swaps media for.
+// placeholderPNG 是防撤回模式用来替换媒体的图片。
 var placeholderPNG = sync.OnceValue(func() []byte {
 	canvas := image.NewRGBA(image.Rect(0, 0, 256, 256))
 	for y := 0; y < 256; y++ {
@@ -48,7 +48,7 @@ func dmeHelp(prefix string) string {
 		"dme 999999</code> 删除全部可见的自己的消息\n普通数量单次最多 2000 条；仅处理命令之前的消息及当前话题。\n收藏夹直接删除；-f 模式下广播频道主直接按数量删除。\n防撤回编辑可能因消息类型、编辑时限或权限失败，不保证第三方副本被删除。"
 }
 
-// Dme registers .dme.
+// Dme 注册 .dme。
 func Dme(a *app.App) {
 	cfgStore := newStore(a, "dme.json", dmeDefaults)
 	var mu sync.Mutex

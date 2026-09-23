@@ -7,7 +7,7 @@ import (
 	"github.com/gotd/td/tg"
 )
 
-// ChatType classifies where a message lives.
+// ChatType 表示消息所在对话的类型。
 type ChatType string
 
 const (
@@ -17,7 +17,7 @@ const (
 	ChatBroadcast  ChatType = "broadcast"
 )
 
-// Message is one protocol message, normalised.
+// Message 是规整之后的一条协议消息。
 type Message struct {
 	ID       int
 	Peer     tg.PeerClass
@@ -29,21 +29,20 @@ type Message struct {
 	Forward  bool
 	Post     bool
 	Saved    bool
-	// Sender is the FromID peer when present, else the chat for incoming
-	// private messages, else the account itself for outgoing ones.
+	// Sender 有 FromID 时就是 FromID 对应的 peer；否则收到的私聊消息取
+	// 对话本身，发出的消息取本账号。
 	Sender      tg.PeerClass
 	ReplyToID   int
 	ReplyToPeer tg.PeerClass
 	TopicID     int
-	// QuoteText is the slice of the replied message the sender picked out,
-	// when they replied to part of it rather than the whole. .yvlu renders
-	// that selection instead of the full message.
+	// QuoteText 是发送者只回复原消息的一部分而不是整条时，选中的那一段。
+	// .yvlu 渲染的是这段选中的内容，而不是整条消息。
 	QuoteText     string
 	QuoteEntities []tg.MessageEntityClass
 	Raw           *tg.Message
 }
 
-// PeerID renders a peer the way teleproto marks decimal ids.
+// PeerID 按 teleproto 标记十进制 id 的方式渲染 peer。
 func PeerID(peer tg.PeerClass) string {
 	switch value := peer.(type) {
 	case *tg.PeerUser:
@@ -56,7 +55,7 @@ func PeerID(peer tg.PeerClass) string {
 	return ""
 }
 
-// PeerFromID is PeerID's inverse.
+// PeerFromID 是 PeerID 的逆操作。
 func PeerFromID(id string) (tg.PeerClass, bool) {
 	if id == "" {
 		return nil, false
@@ -78,7 +77,7 @@ func PeerFromID(id string) (tg.PeerClass, bool) {
 	return &tg.PeerUser{UserID: value}, true
 }
 
-// SenderID is the sender's plain numeric id (user id or channel id), or 0.
+// SenderID 是发送者的纯数字 id（用户 id 或频道 id），没有则为 0。
 func (m *Message) SenderID() int64 {
 	switch value := m.Sender.(type) {
 	case *tg.PeerUser:
@@ -91,10 +90,10 @@ func (m *Message) SenderID() int64 {
 	return 0
 }
 
-// IsGroup reports a group or supergroup.
+// IsGroup 判断是不是普通群或超级群。
 func (m *Message) IsGroup() bool { return m.ChatType == ChatGroup || m.ChatType == ChatSupergroup }
 
-// Channel returns the channel id when the chat is a channel or supergroup.
+// Channel 在对话是频道或超级群时返回频道 id。
 func (m *Message) Channel() (int64, bool) {
 	channel, ok := m.Peer.(*tg.PeerChannel)
 	if !ok {
@@ -103,8 +102,7 @@ func (m *Message) Channel() (int64, bool) {
 	return channel.ChannelID, true
 }
 
-// Envelope normalises a protocol message. It reports false when the peer
-// cannot be addressed at all.
+// Envelope 规整一条协议消息。peer 完全无法寻址时返回 false。
 func Envelope(message *tg.Message, selfID int64, edited bool, peers *PeerCache) (*Message, bool) {
 	chatID := PeerID(message.PeerID)
 	if chatID == "" {
@@ -138,9 +136,8 @@ func Envelope(message *tg.Message, selfID int64, edited bool, peers *PeerCache) 
 	if _, hasSaved := message.GetSavedPeerID(); hasSaved {
 		result.Saved = true
 	}
-	// Telegram leaves Out clear in a chat with oneself: there is no
-	// direction to record. The account is the only writer there, so the
-	// envelope says so rather than leaving callers to rediscover it.
+	// 在和自己的对话里，Telegram 不设 Out：没有方向可记。那里只有本账号
+	// 会写消息，所以 envelope 直接把这一点标出来，免得调用方各自再推一遍。
 	if result.Saved && result.SenderID() == selfID {
 		result.Out = true
 	}

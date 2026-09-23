@@ -1,6 +1,6 @@
-// Command mibot-lite is a small Telegram userbot: one static Go binary,
-// commands written in Go, JSON files for state. It reads the same
-// config.json MiBox writes, so an existing account carries over.
+// Command mibot-lite 是一个小巧的 Telegram userbot：单个静态 Go 二进制，
+// 命令用 Go 写，状态存在 JSON 文件里。它读的 config.json 和 MiBox 写的
+// 是同一个文件，所以已有的账号可以直接沿用。
 package main
 
 import (
@@ -27,7 +27,7 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/verify"
 )
 
-// version is injected at build time (scripts/build.sh).
+// version 在构建时注入（scripts/build.sh）。
 var version = ""
 
 func main() {
@@ -95,9 +95,8 @@ func main() {
 		os.Exit(2)
 	}
 
-	// A variable rather than a constant level: .log can raise it while
-	// the service runs, which is the difference between diagnosing a
-	// quiet failure and restarting the account to watch for it.
+	// 日志级别用变量而不是常量：服务运行中 .log 可以把它调高。
+	// 有了这一点，排查不声不响的故障时，就不必重启账号再守着它复现。
 	level := new(slog.LevelVar)
 	if *verbose {
 		level.Set(slog.LevelDebug)
@@ -105,9 +104,8 @@ func main() {
 	logs := logtail.New()
 	logger := slog.New(logtail.Wrap(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}), logs))
 
-	// A check reads; it does not serve. Asking for the single-instance
-	// lock would make it fail precisely when the service is up, which is
-	// when the self-updater runs it against a freshly downloaded build.
+	// --check 只读，不提供服务。要是它也去拿单实例锁，就恰好会在服务
+	// 运行时失败，而自更新正是在这个时候拿它检查刚下载的新版本。
 	options := app.Options{Root: *root, Version: version, Logger: logger, Debug: *verbose,
 		Logs: logs, Level: level, Register: commands.RegisterAll, ReadOnly: *check}
 	failures := 0
@@ -142,7 +140,7 @@ func main() {
 	}
 }
 
-// prefixOf reads the command prefix a deployment uses, for --verify.
+// prefixOf 读出部署所用的命令前缀，供 --verify 使用。
 func prefixOf(options app.Options) string {
 	return config.ReadEnv(options.Root, os.Environ()).Prefixes()[0]
 }
@@ -154,12 +152,11 @@ func displayVersion() string {
 	return version
 }
 
-// restore unpacks a backup into root.
+// restore 把备份解包到 root。
 //
-// It takes the same lock serving does. A running service holds a session
-// in memory and writes its state back as it goes; rewriting config.json
-// underneath it would leave the two disagreeing about which account this
-// directory is.
+// 它和运行服务时拿的是同一把锁。运行中的服务在内存里持有会话，
+// 还会随时把状态写回磁盘；这时从底下改写 config.json，两边对这个
+// 目录属于哪个账号的认识就会对不上。
 func restore(file, root string, overwrite bool) error {
 	archive, err := os.Open(file)
 	if err != nil {

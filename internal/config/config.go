@@ -1,6 +1,5 @@
-// Package config reads the deployment directory: config.json (the same file
-// MiBox writes, so an existing account carries over unchanged) and an
-// optional .env with a handful of MIBOT_* settings.
+// Package config 读取部署目录：config.json（和 MiBox 写的是同一个文件，
+// 已有的账号不用改就能直接用），以及可选的 .env，里面是几项 MIBOT_* 设置。
 package config
 
 import (
@@ -15,13 +14,13 @@ import (
 	"strings"
 )
 
-// MaxConfigBytes is the largest config.json the reader accepts.
+// MaxConfigBytes 是能接受的 config.json 的最大字节数。
 const MaxConfigBytes = 1 << 20
 
-// DefaultDeviceModel is used when config.json declares no app_name.
+// DefaultDeviceModel 在 config.json 没有写 app_name 时使用。
 const DefaultDeviceModel = "MiBot Lite"
 
-// Proxy is an optional SOCKS5 proxy for the transport.
+// Proxy 是连接时可选的 SOCKS5 代理。
 type Proxy struct {
 	IP       string
 	Port     int
@@ -29,7 +28,7 @@ type Proxy struct {
 	Password string
 }
 
-// Config is the account's startup configuration.
+// Config 是账号的启动配置。
 type Config struct {
 	APIID       int
 	APIHash     string
@@ -52,7 +51,7 @@ type rawConfig struct {
 	} `json:"proxy"`
 }
 
-// Parse validates a decoded config.json.
+// Parse 校验读进来的 config.json。
 func Parse(raw []byte) (*Config, error) {
 	var parsed rawConfig
 	decoder := json.NewDecoder(bytes.NewReader(raw))
@@ -101,7 +100,7 @@ func Parse(raw []byte) (*Config, error) {
 	return config, nil
 }
 
-// Read loads config.json from a deployment root.
+// Read 从部署根目录加载 config.json。
 func Read(root string) (*Config, error) {
 	file, err := os.Open(filepath.Join(root, "config.json"))
 	if err != nil {
@@ -119,12 +118,12 @@ func Read(root string) (*Config, error) {
 	return Parse(raw)
 }
 
-// Env holds the optional settings read from <root>/.env and the process
-// environment. Process environment wins.
+// Env 保存从 <root>/.env 和进程环境变量读到的可选设置。
+// 两边都有时以进程环境变量为准。
 type Env map[string]string
 
-// ReadEnv reads KEY=value lines from <root>/.env (missing file is fine) and
-// overlays the process environment for every MIBOT_* variable.
+// ReadEnv 读取 <root>/.env 里的 KEY=value 行（文件不存在也没关系），
+// 再用进程环境变量里的所有 MIBOT_* 变量覆盖上去。
 func ReadEnv(root string, environ []string) Env {
 	env := Env{}
 	if file, err := os.Open(filepath.Join(root, ".env")); err == nil {
@@ -156,8 +155,8 @@ func ReadEnv(root string, environ []string) Env {
 	return env
 }
 
-// Prefixes returns the command prefixes: MIBOT_PREFIX (space separated), else
-// the MiBox defaults.
+// Prefixes 返回命令前缀：优先用 MIBOT_PREFIX（以空格分隔），
+// 没有设置就用 MiBox 的默认值。
 func (e Env) Prefixes() []string {
 	if configured := strings.Fields(e["MIBOT_PREFIX"]); len(configured) > 0 {
 		return configured
@@ -165,7 +164,7 @@ func (e Env) Prefixes() []string {
 	return []string{".", "。", "$"}
 }
 
-// Get returns a setting or its default.
+// Get 返回某项设置，没有设置就返回默认值。
 func (e Env) Get(key, fallback string) string {
 	if value := strings.TrimSpace(e[key]); value != "" {
 		return value

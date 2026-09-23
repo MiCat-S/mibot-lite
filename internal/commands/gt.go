@@ -11,8 +11,7 @@ import (
 
 var leadingToken = regexp.MustCompile(`^\S+\s*`)
 
-// Gt registers .gt: translation through the ai command's current chat
-// model.
+// Gt 注册 .gt：借 ai 命令当前的对话模型来翻译。
 func Gt(a *app.App) {
 	help := func(prefix string) string {
 		p := command.Escape(prefix)

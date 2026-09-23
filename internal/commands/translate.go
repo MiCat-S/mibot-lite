@@ -16,33 +16,31 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/store"
 )
 
-// Translation goes through the endpoint Chrome's own translate extension
-// uses. It needs no key and no account, which is the point: .gt already
-// exists for translating through a configured model, and it is unusable
-// until someone has set one up and is paying for it.
+// 翻译走的是 Chrome 自带翻译扩展所用的接口。它不需要 key，也不需要
+// 账号，用它图的就是这个：.gt 已经能通过配置好的模型翻译，但在有人
+// 配好模型并为它付费之前，.gt 是用不了的。
 //
-// The obvious endpoint, translate.googleapis.com/translate_a/single,
-// answers 429 from a data-centre address — measured, not assumed. This one
-// answers normally from the same host, and does so under the program's own
-// user agent, so there is no browser to impersonate.
+// 最常见的接口 translate.googleapis.com/translate_a/single，从机房 IP
+// 请求会返回 429，这是实测结果，不是猜测。这个接口从同一台主机请求
+// 能正常返回，而且用的是程序自己的 user agent，不必冒充浏览器。
 const translateEndpoint = "https://clients5.google.com/translate_a/t?client=dict-chrome-ex"
 
-// translateLimit is the longest input accepted. The endpoint handles more,
-// but a Telegram message cannot exceed about 4096 characters anyway, and a
-// bound keeps one command from posting an essay.
+// translateLimit 是可接受的最大输入长度。接口能处理更长的文本，但一条
+// Telegram 消息本来就超不过约 4096 个字符，设个上限也能防止一条命令
+// 发出一大篇文章。
 const translateLimit = 5000
 
 type translateConfig struct {
-	// Target is where text goes when the command names no language.
+	// Target 是命令没有指定语言时的目标语言。
 	Target string `json:"target"`
 }
 
 func translateDefaults() translateConfig { return translateConfig{Target: "zh-CN"} }
 
-// languages are the codes the first argument may name. A curated list
-// rather than a pattern: "is" is Icelandic and also an English word, so
-// deciding by shape would eat the first word of "tr is this correct".
-// Everything here is a deliberate choice; anything else is text.
+// languages 是第一个参数可以指定的语言代码。这里用手工挑选的列表，
+// 而不是按模式匹配："is" 是冰岛语的代码，也是一个英文单词，按形状
+// 判断就会吞掉 "tr is this correct" 的第一个词。这里的每一项都是
+// 有意挑选的，其他的一律当作正文。
 var languages = map[string]string{
 	"ar": "阿拉伯语", "bg": "保加利亚语", "cs": "捷克语", "da": "丹麦语", "de": "德语",
 	"el": "希腊语", "en": "英语", "es": "西班牙语", "fa": "波斯语", "fi": "芬兰语",
@@ -53,7 +51,7 @@ var languages = map[string]string{
 	"zh-CN": "简体中文", "zh-TW": "繁体中文",
 }
 
-// languageName renders a code for display, falling back to the code.
+// languageName 把语言代码转成显示用的名称，找不到时直接用代码。
 func languageName(code string) string {
 	if name, ok := languages[canonicalLanguage(code)]; ok {
 		return name
@@ -61,7 +59,7 @@ func languageName(code string) string {
 	return code
 }
 
-// canonicalLanguage maps what a person types onto what the endpoint wants.
+// canonicalLanguage 把用户输入的写法换成接口要求的代码。
 func canonicalLanguage(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "zh", "cn", "zh-cn", "zh-hans", "chinese", "中文", "简体":
@@ -82,7 +80,7 @@ func canonicalLanguage(value string) string {
 	return value
 }
 
-// namedLanguage reports the target a first argument names, if it names one.
+// namedLanguage 返回第一个参数指定的目标语言，前提是它确实指定了一个。
 func namedLanguage(value string) (string, bool) {
 	if value == "" {
 		return "", false
@@ -92,11 +90,11 @@ func namedLanguage(value string) (string, bool) {
 	return code, ok
 }
 
-// hasHan reports whether text contains Chinese characters.
+// hasHan 判断文本里是否含有汉字。
 //
-// It decides which way an unqualified translation should go: asking for
-// Chinese on text that is already Chinese returns it unchanged, which is
-// never what anyone wanted. This costs nothing and needs no round trip.
+// 它决定没指定语言的翻译该往哪个方向走：把本来就是中文的文本翻成
+// 中文，只会原样返回，这从来不是用户想要的。这个判断没有开销，
+// 也不用多请求一次接口。
 func hasHan(text string) bool {
 	for _, r := range text {
 		if unicode.Is(unicode.Han, r) {
@@ -106,16 +104,15 @@ func hasHan(text string) bool {
 	return false
 }
 
-// translateResult is one answer.
+// translateResult 是一次翻译的结果。
 type translateResult struct {
 	Text string
-	// Source is the language the endpoint detected, empty when the request
-	// named one.
+	// Source 是接口检测出的源语言；请求里指定了源语言时为空。
 	Source string
 }
 
-// translateText sends one request. A named source is passed through; an
-// empty one asks the endpoint to detect.
+// translateText 发一次请求。指定了源语言就原样传过去；为空时让接口
+// 自动检测。
 func translateText(ctx context.Context, text, target string) (*translateResult, error) {
 	form := url.Values{"q": {text}}
 	endpoint := translateEndpoint + "&sl=auto&tl=" + url.QueryEscape(target)
@@ -139,9 +136,8 @@ func translateText(ctx context.Context, text, target string) (*translateResult, 
 	return parseTranslation(response.Body)
 }
 
-// parseTranslation reads the two shapes the endpoint answers with:
-// ["译文"] when the request named a source language, and
-// [["译文","检测到的语言"]] when it asked for detection.
+// parseTranslation 解析接口返回的两种格式：请求指定了源语言时是
+// ["译文"]，要求自动检测时是 [["译文","检测到的语言"]]。
 func parseTranslation(raw []byte) (*translateResult, error) {
 	var outer []json.RawMessage
 	if err := json.Unmarshal(raw, &outer); err != nil || len(outer) == 0 {
@@ -183,7 +179,7 @@ func translateHelp(prefix string) string {
 		command.Code(fmt.Sprint(translateLimit)) + " 字符，长译文自动分段。"
 }
 
-// Translate registers .tr.
+// Translate 注册 .tr。
 func Translate(a *app.App) {
 	settings := newStore(a, "translate.json", translateDefaults)
 	a.Registry.Register(&command.Command{
@@ -226,8 +222,7 @@ func runTranslate(ctx context.Context, inv *command.Invocation, settings *store.
 		return inv.Edit(ctx, feedback("success", "默认目标语言已设置", languageName(code)+"（"+code+"）"))
 	}
 
-	// A named language consumes the first argument; otherwise every word
-	// is text.
+	// 指定了语言就占掉第一个参数；否则每个词都是正文。
 	target, named := namedLanguage(first)
 	rest := 0
 	if named {
@@ -250,8 +245,7 @@ func runTranslate(ctx context.Context, inv *command.Invocation, settings *store.
 		return failf("文本过长，请保持在 %d 字符以内", translateLimit)
 	}
 	if !named {
-		// Asking for Chinese on Chinese returns it unchanged, so an
-		// unqualified translation goes the other way.
+		// 中文翻成中文只会原样返回，所以没指定语言时就反过来翻。
 		target = config.Target
 		if hasHan(text) && canonicalLanguage(target) == "zh-CN" {
 			target = "en"

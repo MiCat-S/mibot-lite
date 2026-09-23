@@ -1,21 +1,17 @@
-// Package backup packs a deployment's configuration into one file and
-// unpacks it into a fresh directory — for moving to a new machine, or
-// reinstalling this one.
+// Package backup 把一个部署的配置打成一个文件，再解到一个新目录里，
+// 用于搬到新机器，或者在本机重装。
 //
-// What counts as configuration is decided here and nowhere else:
+// 哪些算配置，只在这里决定，别处不再定义：
 //
-//   - config.json and gotd-session.json: the account. With them a restored
-//     deployment starts without signing in again.
-//   - .env: the prefix and the other MIBOT_* settings.
-//   - every *.json directly in data/: each command's settings, API keys
-//     included.
+//   - config.json 和 gotd-session.json：账号。有了它们，恢复出来的部署
+//     启动时不用重新登录。
+//   - .env：命令前缀和其他 MIBOT_* 设置。
+//   - data/ 下直接存放的每个 *.json：各个命令的设置，包括 API key。
 //
-// Everything else is left out on purpose. The subdirectories of data/ are
-// caches — eatgif's downloaded frames, the Speedtest CLI — and come back
-// by themselves the first time they are needed. updates.json is the update
-// state of one machine's connection; carried to another it would only ask
-// Telegram to replay a gap that is not there. The binary comes from the
-// release, not the backup.
+// 其余的都是有意不带的。data/ 的子目录是缓存（eatgif 下载的帧、
+// Speedtest CLI），第一次用到时会自己补回来。updates.json 是某一台机器
+// 上连接的更新状态，带到另一台机器，只会让 Telegram 去重放一段根本
+// 不存在的缺口。程序本身从发布版本获取，不从备份里来。
 package backup
 
 import (
@@ -37,32 +33,29 @@ import (
 )
 
 const (
-	// Manifest is the first entry of every archive. Restore refuses an
-	// archive without it: a tarball that merely happens to contain a
-	// config.json is not something to unpack over an account.
+	// Manifest 是每个归档的第一项。没有它的归档，Restore 一律拒绝：
+	// 一个碰巧含有 config.json 的 tar 包，不能拿来覆盖一个账号。
 	Manifest = "mibot-lite-backup.json"
 	format   = 1
 
-	// Bounds on what Restore reads. A real backup is tens of kilobytes;
-	// these exist so a hostile or mistaken file cannot fill the disk.
+	// Restore 读取量的上限。真实的备份只有几十 KB；设这些上限，
+	// 是为了不让恶意或传错的文件把磁盘写满。
 	maxTotal   = 32 << 20
 	maxEntries = 512
 )
 
-// The account and the settings, at the top of the deployment.
+// 部署根目录下的账号和设置文件。
 var rootFiles = []string{"config.json", "gotd-session.json", ".env"}
 
-// Stale is what Restore deletes when the archive does not replace it.
+// stale 列出的文件，如果归档里没有新的来替换，Restore 就把它删掉。
 //
-// gotd-session.json matters most. On start the session in config.json is
-// only imported when that file is missing; if an older one is lying
-// around, it wins. Restoring someone's config.json over a directory that
-// still holds another account's gotd-session.json would quietly go on
-// running as the other account.
+// 最要紧的是 gotd-session.json。启动时，只有这个文件不存在，才会导入
+// config.json 里的会话；如果留着一个旧的，就以旧的为准。把某人的
+// config.json 恢复到一个还放着另一个账号 gotd-session.json 的目录里，
+// 程序会悄无声息地继续以那个账号运行。
 var stale = []string{"gotd-session.json", "updates.json"}
 
-// ErrExists is returned when the target already holds an account and the
-// caller did not ask to replace it.
+// ErrExists 表示目标目录里已经有账号，而调用方没有要求替换。
 var ErrExists = errors.New("this directory already has an account; restoring would replace it")
 
 type manifest struct {
@@ -72,8 +65,8 @@ type manifest struct {
 	Files   []string  `json:"files"`
 }
 
-// Create packs the configuration under root. It returns the gzipped tar
-// and the names it holds, not counting the manifest.
+// Create 把 root 下的配置打包，返回 gzip 压缩的 tar 包，以及其中包含的
+// 文件名（不算清单文件）。
 func Create(root, version string, now time.Time) ([]byte, []string, error) {
 	var names []string
 	for _, name := range rootFiles {
@@ -143,9 +136,9 @@ func regular(name string) bool {
 	return err == nil && info.Mode().IsRegular()
 }
 
-// allowed reports whether a path inside an archive is one Create writes.
-// Restore holds every entry to it, so an archive can never place a file
-// anywhere else — not beside the binary, not above the directory.
+// allowed 判断归档里的某个路径是不是 Create 会写入的。Restore 每一项
+// 都用它检查，所以归档永远没法把文件放到别处：既放不到程序旁边，
+// 也跳不出部署目录。
 func allowed(name string) bool {
 	if name != path.Clean(name) || strings.HasPrefix(name, "/") || strings.Contains(name, "..") {
 		return false
@@ -160,12 +153,10 @@ func allowed(name string) bool {
 		strings.HasSuffix(rest, ".json") && !strings.HasPrefix(rest, ".")
 }
 
-// Restore unpacks an archive made by Create into root and returns the
-// names it wrote.
+// Restore 把 Create 生成的归档解到 root 下，返回写入的文件名。
 //
-// Nothing is written until the whole archive has been read and checked,
-// so a truncated download or a foreign file leaves the directory exactly
-// as it was.
+// 整个归档读完、检查完之前什么都不写，所以下载不完整，或者文件根本
+// 不是本程序的备份时，目录会原样保留。
 func Restore(archive io.Reader, root string, overwrite bool) ([]string, error) {
 	zipped, err := gzip.NewReader(archive)
 	if err != nil {

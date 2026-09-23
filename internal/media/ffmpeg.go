@@ -1,9 +1,8 @@
-// Package media shells out to ffmpeg for the one thing that cannot be done
-// in pure Go at a sane cost: encoding VP9, which is what a Telegram video
-// sticker must be.
+// Package media 调用外部的 ffmpeg，完成唯一一件用纯 Go 做代价过高的
+// 事：VP9 编码，Telegram 视频贴纸必须是这个格式。
 //
-// ffmpeg is a child process, so it costs nothing while idle — which is the
-// opposite of linking an encoder into the resident image.
+// ffmpeg 是子进程，空闲时没有任何开销；把编码器链接进常驻的程序则
+// 正好相反。
 package media
 
 import (
@@ -18,12 +17,12 @@ import (
 	"time"
 )
 
-// ErrUnavailable means no ffmpeg was found on this host.
+// ErrUnavailable 表示本机上找不到 ffmpeg。
 var ErrUnavailable = errors.New("ffmpeg 不可用，请先安装 ffmpeg")
 
 var candidates = []string{"/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/opt/homebrew/bin/ffmpeg"}
 
-// FFmpeg locates the ffmpeg binary.
+// FFmpeg 查找 ffmpeg 可执行文件。
 func FFmpeg() (string, error) {
 	for _, candidate := range candidates {
 		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
@@ -36,20 +35,19 @@ func FFmpeg() (string, error) {
 	return "", ErrUnavailable
 }
 
-// Frame is one still in a sequence, with how long it shows.
+// Frame 是序列中的一帧静态图，以及它的显示时长。
 type Frame struct {
-	// Path is a PNG on disk.
+	// Path 是磁盘上的一个 PNG 文件。
 	Path  string
 	Delay time.Duration
 }
 
-// StickerWebM encodes a frame sequence as the VP9 WebM a Telegram video
-// sticker requires, and returns the bytes.
+// StickerWebM 把帧序列编码成 Telegram 视频贴纸要求的 VP9 WebM，
+// 返回编码后的字节。
 //
-// The frames are fed through ffmpeg's concat demuxer rather than an
-// intermediate GIF: a GIF would quantise every frame to 256 colours on the
-// way to a codec that does not need it. MiBox encoded a GIF first because
-// its GIF encoder was the thing that could assemble the frames at all.
+// 帧通过 ffmpeg 的 concat demuxer 输入，而不是先转成中间 GIF：GIF 会把
+// 每一帧量化到 256 色，而最终的编码器根本不需要这一步。MiBox 先编码成
+// GIF，是因为在它那里，只有 GIF 编码器能把这些帧拼起来。
 func StickerWebM(ctx context.Context, directory string, frames []Frame, width, height int) ([]byte, error) {
 	binary, err := FFmpeg()
 	if err != nil {
@@ -68,18 +66,18 @@ func StickerWebM(ctx context.Context, directory string, frames []Frame, width, h
 		script.WriteString("file '" + filepath.Base(frame.Path) + "'\n")
 		script.WriteString("duration " + strconv.FormatFloat(seconds, 'f', 3, 64) + "\n")
 	}
-	// The concat demuxer ignores the final entry's duration, so the last
-	// frame is repeated to give it one.
+	// concat demuxer 会忽略最后一项的 duration，所以把最后一帧再写一遍，
+	// 让它的时长生效。
 	script.WriteString("file '" + filepath.Base(frames[len(frames)-1].Path) + "'\n")
 	if err := os.WriteFile(list, []byte(script.String()), 0o600); err != nil {
 		return nil, err
 	}
 
 	output := filepath.Join(directory, "sticker.webm")
-	// libvpx-vp9 at its default speed is far slower and hungrier than a
-	// 512-pixel sticker needs. cpu-used trades a quality nobody will see
-	// at this size for an encode that finishes, and capping the threads
-	// keeps the encoder's own memory in a range a small service can host.
+	// libvpx-vp9 在默认速度下，耗时和内存都远超一张 512 像素贴纸的需要。
+	// cpu-used 牺牲一点在这个尺寸下谁也看不出来的画质，换来一次能跑完的
+	// 编码；限制线程数则让编码器自身的内存占用保持在小服务承受得了的
+	// 范围内。
 	args := []string{
 		"-nostdin", "-v", "error",
 		"-f", "concat", "-safe", "0", "-i", "frames.txt",
@@ -95,7 +93,7 @@ func StickerWebM(ctx context.Context, directory string, frames []Frame, width, h
 	return readBounded(output, 20<<20)
 }
 
-// ToStickerWebM converts an existing video or animation into a VP9 WebM.
+// ToStickerWebM 把已有的视频或动图转成 VP9 WebM。
 func ToStickerWebM(ctx context.Context, directory string, input []byte, extension string) ([]byte, error) {
 	binary, err := FFmpeg()
 	if err != nil {
@@ -115,14 +113,14 @@ func ToStickerWebM(ctx context.Context, directory string, input []byte, extensio
 	return readBounded(filepath.Join(directory, "converted.webm"), 20<<20)
 }
 
-// encodeTimeout bounds one ffmpeg run.
+// encodeTimeout 是单次运行 ffmpeg 的时限。
 const encodeTimeout = 3 * time.Minute
 
-// run executes ffmpeg and turns a failure into something readable.
+// run 执行 ffmpeg，并把失败转成看得懂的信息。
 //
-// A killed ffmpeg writes nothing, so reporting only its output produced
-// the message "ffmpeg failed:" with nothing after it — true, and useless.
-// The deadline is reported as itself.
+// 被杀掉的 ffmpeg 什么都不输出，所以只报告它的输出的话，得到的就是
+// 后面空空如也的 "ffmpeg failed:"，没说错，但毫无用处。超时就直接
+// 报告为超时。
 func run(ctx context.Context, binary, directory string, args []string) error {
 	ctx, cancel := context.WithTimeout(ctx, encodeTimeout)
 	defer cancel()

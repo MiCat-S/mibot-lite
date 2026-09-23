@@ -11,14 +11,13 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/imaging"
 )
 
-// TestRealAnimationAssets runs the .eatgif compositing path against a real
-// animation from the plugin repository, which the unit tests cannot cover
-// with synthetic images: the masks there are irregular shapes with
-// anti-aliased edges, and the specs rotate and offset by amounts that a
-// hand-made fixture would not reproduce.
+// TestRealAnimationAssets 用插件仓库里的一个真实动画跑一遍 .eatgif 的
+// 合成流程。这一点用合成图像的单元测试覆盖不到：真实动画的蒙版是
+// 边缘抗锯齿的不规则形状，配置里的旋转角度和偏移量，手工做的测试数据
+// 也复现不出来。
 //
-// It is skipped unless MIBOT_EATGIF_ASSETS points at a checkout of the
-// eatgif asset directory, so the suite stays hermetic:
+// 只有 MIBOT_EATGIF_ASSETS 指向一份 eatgif 素材目录时才会运行，否则
+// 跳过，这样测试套件不依赖外部环境：
 //
 //	MIBOT_EATGIF_ASSETS=/path/to/eatgif go test ./internal/imaging/ -run RealAnimation -v
 func TestRealAnimationAssets(t *testing.T) {
@@ -63,8 +62,8 @@ func TestRealAnimationAssets(t *testing.T) {
 		}
 		return value
 	}
-	// A face with a bright stripe across it, so a rotation that silently
-	// did nothing would be visible as an unrotated stripe.
+	// 脸上横着一道亮条，如果旋转悄悄没生效，
+	// 就能看到一道没转过的横条。
 	face := func(tint color.RGBA) image.Image {
 		value := image.NewRGBA(image.Rect(0, 0, 640, 640))
 		for y := 0; y < 640; y++ {
@@ -111,8 +110,8 @@ func TestRealAnimationAssets(t *testing.T) {
 				shaped = imaging.Brightness(shaped, *item.Brightness)
 			}
 			masked := imaging.ApplyMask(shaped, mask)
-			// The mask must actually cut something out, or every avatar
-			// would paste as a full rectangle.
+			// 蒙版必须真的裁掉一部分，否则每个头像都会
+			// 贴成一整个矩形。
 			opaque, transparent := 0, 0
 			for offset := 3; offset < len(masked.Pix); offset += 4 {
 				if masked.Pix[offset] == 255 {

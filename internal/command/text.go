@@ -6,17 +6,17 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/bot"
 )
 
-// Escape renders untrusted text safe for HTML.
+// Escape 把不可信的文本转义成能安全放进 HTML 的形式。
 func Escape(value string) string { return bot.Escape(value) }
 
-// Code wraps escaped text in <code>.
+// Code 用 <code> 包住转义后的文本。
 func Code(value string) string { return bot.Code(value) }
 
-// Bold wraps escaped text in <b>.
+// Bold 用 <b> 包住转义后的文本。
 func Bold(value string) string { return bot.Bold(value) }
 
-// EscapedPages splits plain text into pages whose escaped HTML stays under
-// limit characters, never splitting a character. Each page is escaped.
+// EscapedPages 把纯文本分页，每页转义后的 HTML 不超过 limit 个字符，
+// 不会把一个字符拆开。每一页都已经转义过。
 func EscapedPages(text string, limit int) []string {
 	var pages []string
 	var page strings.Builder
@@ -37,9 +37,8 @@ func EscapedPages(text string, limit int) []string {
 var htmlTags = map[string]bool{"b": true, "strong": true, "i": true, "em": true, "u": true, "ins": true, "s": true,
 	"strike": true, "del": true, "code": true, "pre": true, "a": true, "blockquote": true, "tg-spoiler": true}
 
-// HTMLPages splits HTML into pages of at most limit characters, closing
-// open tags at each page end and reopening them on the next. Malformed
-// markup is rendered as visible text.
+// HTMLPages 把 HTML 分成每页最多 limit 个字符，在每页末尾闭合还开着的
+// 标签，到下一页再重新打开。格式不对的标记按可见文本显示。
 func HTMLPages(text string, limit int) []string {
 	type open struct{ name, tag string }
 	var pages []string
@@ -131,7 +130,7 @@ func isEntity(token string) bool {
 	return strings.HasPrefix(body, "#") && len(body) > 1
 }
 
-// tokenizeHTML splits into tags, entities and text runs.
+// tokenizeHTML 把文本切成标签、实体和连续的普通文本。
 func tokenizeHTML(text string) []string {
 	var tokens []string
 	for index := 0; index < len(text); {

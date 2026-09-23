@@ -1,6 +1,5 @@
-// Package httpx is the bounded HTTP client every command that talks to the
-// web goes through: one shared transport, a per-request timeout, a byte
-// limit on the body, and no more than three redirects.
+// Package httpx 是带限制的 HTTP 客户端，所有要联网的命令都走它：
+// 共用一个 transport，每个请求有超时，响应体有字节上限，重定向最多三次。
 package httpx
 
 import (
@@ -15,10 +14,10 @@ import (
 	"time"
 )
 
-// UserAgent is sent unless a request overrides it.
+// UserAgent 是默认发送的 User-Agent，请求可以自己覆盖。
 const UserAgent = "MiBot-Lite/1"
 
-// ErrTooLarge means the body exceeded the request's byte limit.
+// ErrTooLarge 表示响应体超过了请求设定的字节上限。
 var ErrTooLarge = errors.New("response body exceeds the size limit")
 
 var shared = &http.Client{
@@ -39,29 +38,28 @@ var shared = &http.Client{
 	},
 }
 
-// Request describes one call.
+// Request 描述一次调用。
 type Request struct {
 	Method  string
 	URL     string
 	Headers map[string]string
 	Body    []byte
-	// Timeout bounds the whole call. Zero means 30 seconds.
+	// Timeout 限制整个调用的时长。零值表示 30 秒。
 	Timeout time.Duration
-	// MaxBytes bounds the body. Zero means 2 MB.
+	// MaxBytes 限制响应体大小。零值表示 2 MB。
 	MaxBytes int64
 }
 
-// Response is what came back.
+// Response 是返回的结果。
 type Response struct {
 	Status int
 	Body   []byte
 }
 
-// OK reports a 2xx status.
+// OK 判断状态码是不是 2xx。
 func (r Response) OK() bool { return r.Status >= 200 && r.Status < 300 }
 
-// Do performs the request. A non-2xx status is not an error: the caller
-// decides what a 404 means.
+// Do 执行请求。非 2xx 状态码不算错误：404 意味着什么由调用方决定。
 func Do(ctx context.Context, request Request) (Response, error) {
 	timeout := request.Timeout
 	if timeout <= 0 {
@@ -104,7 +102,7 @@ func Do(ctx context.Context, request Request) (Response, error) {
 	return Response{Status: resp.StatusCode, Body: data}, nil
 }
 
-// GetJSON fetches and decodes a JSON document.
+// GetJSON 获取并解码一个 JSON 文档。
 func GetJSON(ctx context.Context, url string, timeout time.Duration, maxBytes int64, out any) error {
 	response, err := Do(ctx, Request{URL: url, Timeout: timeout, MaxBytes: maxBytes})
 	if err != nil {
@@ -119,7 +117,7 @@ func GetJSON(ctx context.Context, url string, timeout time.Duration, maxBytes in
 	return nil
 }
 
-// PostJSON sends a JSON body and returns the raw response.
+// PostJSON 发送 JSON 请求体，返回原始响应。
 func PostJSON(ctx context.Context, url string, headers map[string]string, payload any, timeout time.Duration, maxBytes int64) (Response, error) {
 	encoded, err := json.Marshal(payload)
 	if err != nil {
@@ -132,13 +130,12 @@ func PostJSON(ctx context.Context, url string, headers map[string]string, payloa
 	return Do(ctx, Request{Method: http.MethodPost, URL: url, Headers: merged, Body: encoded, Timeout: timeout, MaxBytes: maxBytes})
 }
 
-// StatusError is a non-2xx response.
+// StatusError 表示非 2xx 的响应。
 type StatusError struct{ Status int }
 
 func (e *StatusError) Error() string { return fmt.Sprintf("HTTP %d", e.Status) }
 
-// Reason renders a transport failure for a chat message without leaking
-// URLs or hosts.
+// Reason 把传输失败转成能发到聊天里的说明，不泄露 URL 和主机名。
 func Reason(err error) string {
 	var status *StatusError
 	switch {

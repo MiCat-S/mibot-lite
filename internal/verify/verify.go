@@ -1,20 +1,17 @@
-// Package verify exercises the commands against the live account.
+// Package verify 用真实账号把各个命令实际跑一遍。
 //
-// The unit tests cover the parsing and the pure logic; what they cannot
-// cover is whether a command, run against a real connection, actually
-// edits a real message. This sends each command to Saved Messages, hands
-// it to the dispatcher, waits for the handler to rewrite it, checks what
-// came back and deletes it.
+// 单元测试覆盖了解析和纯逻辑；覆盖不到的是：命令在真实连接上运行时，
+// 是否真的改写了一条真实的消息。这里把每个命令发到收藏夹，交给分发器，
+// 等处理函数改写消息，检查改写的结果，然后把消息删掉。
 //
-// It dispatches the message itself rather than waiting for an update,
-// because a process cannot receive an update for its own action: Telegram
-// reports it in the RPC result, and for plain text that result carries
-// only an id and a pts — no peer, no text. So the update plumbing is the
-// one layer this does not cover; everything above it, from prefix routing
-// to the edit that lands in the chat, is the real thing.
+// 这里自己分发消息，而不是等更新推送，因为进程收不到自己操作产生的
+// 更新：Telegram 把它放在 RPC 结果里返回，而纯文本消息的结果只带一个
+// id 和一个 pts——没有 peer，也没有文本。所以更新处理这一层是这里
+// 唯一覆盖不到的；它之上的一切，从前缀路由到最终落到聊天里的那次编辑，
+// 都是真实运行的。
 //
-// Only read-only commands are listed. Nothing here deletes a chat's
-// history, bans anyone or restarts the service.
+// 这里只列只读命令。不会清空任何聊天记录，不会封禁任何人，
+// 也不会重启服务。
 package verify
 
 import (
@@ -30,23 +27,21 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/sysinfo"
 )
 
-// Case is one command and what its answer must contain.
+// Case 是一个命令，以及它的回复必须包含的内容。
 type Case struct {
-	// Command is the text sent, without the prefix.
+	// Command 是要发送的文本，不带前缀。
 	Command string
-	// Expect is a substring the edited message must contain. It must not
-	// appear in the command's own progress line, or the case passes
-	// before the command has done anything.
+	// Expect 是改写后的消息必须包含的子串。它不能出现在命令自己的进度
+	// 提示里，否则命令还没真正做事，这个用例就已经通过了。
 	Expect string
-	// Network marks a case that talks to a third party, so a failure is
-	// reported as a warning rather than a defect in this program.
+	// Network 标记要访问第三方的用例，这类用例失败时报为警告，
+	// 而不算本程序的缺陷。
 	Network bool
-	// Wait overrides the default per-case timeout.
+	// Wait 覆盖默认的单个用例超时时间。
 	Wait time.Duration
 }
 
-// Cases is the default set: every command that answers without changing
-// anything.
+// Cases 是默认的用例集：所有不改动任何东西就能给出回复的命令。
 var Cases = []Case{
 	{Command: "ping", Expect: "Pong"},
 	{Command: "version", Expect: "MiBot Lite"},
@@ -77,7 +72,7 @@ var Cases = []Case{
 	{Command: "rate BTC", Expect: "数据更新", Network: true, Wait: 90 * time.Second},
 }
 
-// Result is what one case did.
+// Result 记录一个用例的运行结果。
 type Result struct {
 	Case    Case
 	Passed  bool
@@ -86,12 +81,11 @@ type Result struct {
 	Took    time.Duration
 }
 
-// Dispatch offers a message to the command registry and reports whether a
-// command matched.
+// Dispatch 把一条消息交给命令注册表，返回是否匹配到命令。
 type Dispatch func(ctx context.Context, message *tg.Message) bool
 
-// Run sends every case and reports what happened. It returns the number of
-// failures that are this program's own, ignoring third-party outages.
+// Run 逐个发送用例并报告结果。返回值是本程序自身造成的失败数，
+// 第三方服务故障不计在内。
 func Run(ctx context.Context, client *bot.Client, prefix string, out io.Writer, cases []Case, dispatch Dispatch) (int, error) {
 	self := &tg.InputPeerSelf{}
 	fmt.Fprintf(out, "verifying %d commands as %s, in Saved Messages\n\n", len(cases), bot.UserID(client.SelfID()))
@@ -130,7 +124,7 @@ func Run(ctx context.Context, client *bot.Client, prefix string, out io.Writer, 
 	return failed, nil
 }
 
-// run sends one command and waits for the handler to rewrite it.
+// run 发送一个命令，等处理函数把它改写。
 func run(ctx context.Context, client *bot.Client, peer tg.InputPeerClass, prefix string, item Case, dispatch Dispatch) Result {
 	wait := item.Wait
 	if wait <= 0 {
@@ -142,17 +136,15 @@ func run(ctx context.Context, client *bot.Client, peer tg.InputPeerClass, prefix
 	if err != nil {
 		return Result{Case: item, Detail: "send failed: " + err.Error(), Took: time.Since(started)}
 	}
-	// The message is removed whatever happens, so a verification run
-	// leaves Saved Messages as it found it.
+	// 无论结果如何都删掉这条消息，这样验证跑完后，收藏夹和跑之前一样。
 	defer func() {
 		removeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 		defer cancel()
 		_ = client.Delete(removeCtx, peer, []int{id})
 	}()
 
-	// Read the message back in full: what the send returned cannot be
-	// dispatched, and this is also a first check that the account can see
-	// what it just wrote.
+	// 把消息完整地读回来：发送返回的结果没法拿去分发；这也顺便初步检查了
+	// 账号能不能看到自己刚写的内容。
 	sent, err := client.GetMessages(ctx, peer, []int{id})
 	if err != nil || len(sent) == 0 {
 		return Result{Case: item, Detail: "could not read the sent message back", Took: time.Since(started)}
@@ -161,10 +153,9 @@ func run(ctx context.Context, client *bot.Client, peer tg.InputPeerClass, prefix
 		return Result{Case: item, Detail: "no command matched " + text, Took: time.Since(started)}
 	}
 
-	// Wait for the answer, not merely for a change: several commands edit
-	// once to say they are working and again with the result. Taking the
-	// first edit would pass on the progress line and, worse, delete the
-	// message out from under the command still writing to it.
+	// 要等的是答案，而不只是消息有变化：好几个命令会先改一次，说明正在
+	// 处理，再改一次给出结果。如果取第一次编辑，就会在进度提示上误判通过；
+	// 更糟的是，命令还在往这条消息里写，消息却已经被删掉了。
 	deadline := time.Now().Add(wait)
 	answer, matched := "", false
 	for time.Now().Before(deadline) {
@@ -193,8 +184,7 @@ func run(ctx context.Context, client *bot.Client, peer tg.InputPeerClass, prefix
 	if matched {
 		return Result{Case: item, Passed: true, Detail: snippet, Took: took}
 	}
-	// A third party being down is not a defect in this program, and a
-	// verification run must be able to say which is which.
+	// 第三方服务挂了不是本程序的缺陷，验证运行必须能分清是哪一种。
 	if item.Network {
 		return Result{Case: item, Skipped: true, Detail: "third party: " + snippet, Took: took}
 	}

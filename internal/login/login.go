@@ -1,6 +1,6 @@
-// Package login signs a Telegram account in from the terminal and writes
-// config.json (gramjs session, the format MiBox reads) plus gotd's own
-// session file, so either runtime can use the account afterwards.
+// Package login 在终端里登录 Telegram 账号，写出 config.json（gramjs
+// 会话，也就是 MiBox 读取的格式）和 gotd 自己的会话文件，之后两种
+// 运行时都能使用这个账号。
 package login
 
 import (
@@ -26,14 +26,13 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/session"
 )
 
-// SessionFile is gotd's session file name, shared with MiBox's Go host.
+// SessionFile 是 gotd 会话文件的文件名，与 MiBox 的 Go 宿主共用。
 const SessionFile = "gotd-session.json"
 
-// lockFile is the instance lock the running service holds, named to match
-// internal/app.
+// lockFile 是运行中的服务持有的实例锁，名字与 internal/app 保持一致。
 const lockFile = "mibot-lite.lock"
 
-// Options configure a sign-in.
+// Options 是一次登录的配置。
 type Options struct {
 	Root    string
 	APIID   int
@@ -43,8 +42,7 @@ type Options struct {
 	Out     io.Writer
 }
 
-// Run signs in and writes the files. Nothing on disk changes until Telegram
-// has confirmed the account.
+// Run 登录并写出文件。Telegram 确认账号之前，磁盘上什么都不会改。
 func Run(ctx context.Context, options Options) error {
 	out := options.Out
 	if out == nil {
@@ -73,10 +71,9 @@ func Run(ctx context.Context, options Options) error {
 		case current != "" && !options.Force:
 			return errors.New("config.json already holds a session; pass --force to replace it")
 		case current != "":
-			// --force says "replace the session", not "replace it while a
-			// process is running on it". The service would keep serving
-			// with a session that is no longer the one on disk, and the
-			// next restart would silently become a different login.
+			// --force 的意思是「替换会话」，不是「在有进程正用着它时
+			// 替换」。那样的话，服务会继续用一个已经不是磁盘上那份的
+			// 会话运行，下次重启就会悄悄变成另一个登录。
 			if err := refuseWhileRunning(root); err != nil {
 				return err
 			}
@@ -173,27 +170,24 @@ func Run(ctx context.Context, options Options) error {
 	return nil
 }
 
-// refuseWhileRunning reports an error when a process already holds this
-// deployment's instance lock.
+// refuseWhileRunning 在已有进程持有这个部署的实例锁时返回错误。
 //
-// The lock is the same flock the running service takes, so this asks the
-// kernel rather than guessing from a pid file or a unit name: it is right
-// whether the deployment runs under systemd, in a terminal, or not at all.
+// 这个锁和运行中的服务拿的是同一个 flock，所以这里直接问内核，而不是
+// 根据 pid 文件或服务单元名去猜：不管部署是跑在 systemd 下、终端里，
+// 还是根本没在跑，结果都是对的。
 func refuseWhileRunning(root string) error {
 	path := filepath.Join(root, lockFile)
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		// A lock we cannot even open is not evidence that something is
-		// running; sign-in has its own reasons to fail later if the
-		// directory is unusable.
+		// 锁文件连打开都打不开，并不能说明有东西在运行；如果目录
+		// 不可用，登录后面自然会因为别的原因失败。
 		return nil
 	}
 	defer file.Close()
 	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		return errors.New("a mibot-lite instance is running on this directory; stop it before signing in again")
 	}
-	// Release it straight away: sign-in does not need to hold the lock, it
-	// only needed to know whether anyone else does.
+	// 马上释放：登录不需要一直拿着锁，只需要知道有没有别人拿着。
 	_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
 	return nil
 }

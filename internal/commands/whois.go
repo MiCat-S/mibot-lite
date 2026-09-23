@@ -26,9 +26,10 @@ type whoisData struct {
 }
 
 var (
-	// Every label may carry digits and hyphens; only the last one is
-	// required to be letters. MiBox's pattern allowed digits in the first
-	// label only, which rejected real domains such as a.b.co.uk.
+	// 域名的每一段都可以含数字和连字符，只要求最后一段是字母。MiBox 的
+	// 正则要求第一段之后的每一段都只能是字母、而且至少两个，所以
+	// a.b.co.uk（第二段只有一个字母）和 mail.1and1.com（中间段带数字）
+	// 这样的真实域名都被拒掉了。
 	domainPattern    = regexp.MustCompile(`^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}$`)
 	loosePattern     = regexp.MustCompile(`(?i)(?:https?://)?(?:www\.)?[a-z0-9][a-z0-9.-]*\.[a-z]{2,}`)
 	nameServerRegexp = regexp.MustCompile(`(?im)^(?:Name Server|nserver|NS):[ \t]*(.+)$`)
@@ -145,7 +146,7 @@ func formatInt(value int) string {
 	return string(digits)
 }
 
-// Whois registers .whois.
+// Whois 注册 .whois。
 func Whois(a *app.App) {
 	data := newStore(a, "whois.json", func() whoisData { return whoisData{Cache: map[string]whoisItem{}} })
 	help := func(prefix string) string {

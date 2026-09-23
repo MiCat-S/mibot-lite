@@ -1,5 +1,5 @@
-// Package commands holds every command mibot-lite serves: the core ones and
-// the ports of the MiBox extensions the deployment used.
+// Package commands 包含 mibot-lite 提供的所有命令：核心命令，以及
+// 原先部署里用到的那些 MiBox 扩展的移植版。
 package commands
 
 import (
@@ -15,7 +15,7 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/sysinfo"
 )
 
-// Core registers ping, version, memory, status, sysinfo and help.
+// Core 注册 ping、version、memory、status、sysinfo 和 help。
 func Core(a *app.App) {
 	registry := a.Registry
 	registry.Register(

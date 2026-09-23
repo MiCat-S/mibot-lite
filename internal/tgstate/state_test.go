@@ -43,9 +43,8 @@ func TestStateSurvivesRestart(t *testing.T) {
 	if pts, found, _ := reopened.GetChannelPts(ctx, 7, 99); !found || pts != 55 {
 		t.Fatalf("channel pts %d found=%v", pts, found)
 	}
-	// Without the access hashes a restarted process cannot address a chat
-	// that has not spoken since, which is what broke restart receipts
-	// outside Saved Messages.
+	// 没有 access hash，重启后的进程就没法给之后没人说过话的对话发消息，
+	// 收藏夹以外的重启回执就是这样坏掉的。
 	if hash, found, _ := reopened.GetChannelAccessHash(ctx, 7, 99); !found || hash != 1234 {
 		t.Fatalf("channel hash %d found=%v", hash, found)
 	}
@@ -54,8 +53,8 @@ func TestStateSurvivesRestart(t *testing.T) {
 	}
 }
 
-// gotd's contract: a field set before any state exists must report that,
-// so the manager can tell "never synced" from "synced to zero".
+// gotd 的约定：还没有任何状态时设置单个字段，必须报告出来，
+// 这样管理器才能分清「从没同步过」和「同步到了零」。
 func TestSetFieldWithoutStateFails(t *testing.T) {
 	state, err := Open(filepath.Join(t.TempDir(), "updates.json"))
 	if err != nil {
@@ -70,8 +69,8 @@ func TestSetFieldWithoutStateFails(t *testing.T) {
 	}
 }
 
-// SetState resets the channel positions: they were recorded against the
-// previous sync and reading them as current would skip updates.
+// SetState 会清空各频道的位置：它们是相对上一次同步记下的，
+// 当成当前位置来读会漏掉更新。
 func TestSetStateResetsChannels(t *testing.T) {
 	ctx := context.Background()
 	state, err := Open(filepath.Join(t.TempDir(), "updates.json"))

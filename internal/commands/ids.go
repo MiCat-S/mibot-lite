@@ -15,9 +15,8 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/command"
 )
 
-// Telegram does not publish when an account was made. User ids were handed
-// out roughly in order, so the date is estimated from where an id falls
-// between accounts whose creation is known. The table is MiBox's.
+// Telegram 不公开账号的注册时间。用户 id 大致是按顺序分配的，所以根据
+// 一个 id 落在哪两个已知注册时间的账号之间来估算日期。这张表取自 MiBox。
 var idTimeline = [][2]int64{
 	{0, 1376438400}, {50000000, 1400000000}, {150000000, 1451606400},
 	{350000000, 1483228800}, {500000000, 1514764800}, {900000000, 1559347200},
@@ -26,10 +25,9 @@ var idTimeline = [][2]int64{
 	{7800000000, 1735689600}, {8500000000, 1767225600},
 }
 
-// estimateCreation interpolates within the table. Past its end the last
-// segment's pace is carried forward — MiBox fell back to the first and
-// last points there, which put a new account years in the past — and the
-// result never lands after now.
+// estimateCreation 在表内做插值。超出表尾时沿用最后一段的增长速度往后推
+// （MiBox 在这里退回到用首尾两个点，结果把新账号估到了好几年前），
+// 估出的时间也不会晚于当前时间。
 func estimateCreation(id int64, now time.Time) time.Time {
 	lower, upper := idTimeline[len(idTimeline)-2], idTimeline[len(idTimeline)-1]
 	for index := 0; index < len(idTimeline)-1; index++ {
@@ -46,8 +44,8 @@ func estimateCreation(id int64, now time.Time) time.Time {
 	return estimate
 }
 
-// dcPlaces are where Telegram's data centres are, which is the question
-// behind asking for one.
+// dcPlaces 是 Telegram 各数据中心所在的城市，问 DC 的人真正想知道的
+// 就是这个。
 var dcPlaces = map[int]string{1: "迈阿密", 2: "阿姆斯特丹", 3: "迈阿密", 4: "阿姆斯特丹", 5: "新加坡"}
 
 func dcLabel(dc int) string {
@@ -60,8 +58,8 @@ func dcLabel(dc int) string {
 	return fmt.Sprintf("DC%d", dc)
 }
 
-// resolveEntity finds the subject: an argument if there is one, else the
-// sender of the replied message, else the fallback.
+// resolveEntity 确定要查的对象：有参数就用参数，否则用被回复消息的
+// 发送者，再没有就用 fallback。
 func resolveEntity(ctx context.Context, inv *command.Invocation, fallback tg.InputPeerClass) (tg.InputPeerClass, error) {
 	if argument := strings.TrimSpace(inv.Arg(0)); argument != "" {
 		peer, err := inv.Client.ResolveTarget(ctx, argument)
@@ -85,9 +83,9 @@ func resolveEntity(ctx context.Context, inv *command.Invocation, fallback tg.Inp
 	return fallback, nil
 }
 
-// entityInfo is what .ids and .dc need about one peer.
+// entityInfo 是 .ids 和 .dc 需要的某个对象的信息。
 type entityInfo struct {
-	kind     string // user, channel, supergroup, group
+	kind     string // 取值 user、channel、supergroup、group
 	id       int64
 	name     string
 	username string
@@ -191,8 +189,8 @@ func fetchEntity(ctx context.Context, client *bot.Client, peer tg.InputPeerClass
 	return nil, errors.New("这种对象查不了")
 }
 
-// primaryUsername prefers the editable username, then the first active
-// collectible one.
+// primaryUsername 优先取可编辑的普通用户名；没有的话，取第一个启用中的
+// 附加用户名（比如在 Fragment 上买的那种）。
 func primaryUsername(username string, usernames []tg.Username) string {
 	if username != "" {
 		return username
@@ -205,7 +203,7 @@ func primaryUsername(username string, usernames []tg.Username) string {
 	return ""
 }
 
-// joinedAt reads when a user joined the supergroup the command came from.
+// joinedAt 读取用户加入命令所在超级群的时间。
 func joinedAt(ctx context.Context, inv *command.Invocation, user tg.InputPeerClass) (time.Time, bool) {
 	if !inv.Message.IsGroup() {
 		return time.Time{}, false
@@ -310,7 +308,7 @@ func dcHelp(prefix string) string {
 		"DC 读自头像存放的位置，没有公开头像的账号看不出来。"
 }
 
-// Entity registers .ids and .dc.
+// Entity 注册 .ids 和 .dc。
 func Entity(a *app.App) {
 	ids := func(ctx context.Context, inv *command.Invocation) error {
 		if strings.EqualFold(inv.Arg(0), "help") || strings.EqualFold(inv.Arg(0), "h") {

@@ -10,8 +10,7 @@ import (
 	"github.com/gotd/td/tg"
 )
 
-// UserInfo is what the cache keeps about a user: enough to address it and
-// to print its name.
+// UserInfo 是缓存为一个用户保存的信息：够用来寻址，也够用来显示名字。
 type UserInfo struct {
 	ID        int64
 	Hash      int64
@@ -20,14 +19,14 @@ type UserInfo struct {
 	LastName  string
 	Username  string
 	Bot       bool
-	// PhotoID and PhotoDC locate the profile photo, for .yvlu's avatars.
+	// PhotoID 和 PhotoDC 定位头像，供 .yvlu 画头像用。
 	PhotoID int64
 	PhotoDC int
-	// EmojiStatus is the custom emoji the user wears beside their name.
+	// EmojiStatus 是用户挂在名字旁边的自定义 emoji。
 	EmojiStatus string
 }
 
-// DisplayName renders a user the way the MiBox plugins did.
+// DisplayName 按 MiBox 插件原来的格式渲染用户名。
 func (u UserInfo) DisplayName() string {
 	name := strings.TrimSpace(strings.TrimSpace(u.FirstName) + " " + strings.TrimSpace(u.LastName))
 	if name == "" {
@@ -39,7 +38,7 @@ func (u UserInfo) DisplayName() string {
 	return name
 }
 
-// ChannelInfo is what the cache keeps about a channel or supergroup.
+// ChannelInfo 是缓存为频道或超级群保存的信息。
 type ChannelInfo struct {
 	ID          int64
 	Hash        int64
@@ -56,7 +55,7 @@ type ChannelInfo struct {
 	PhotoDC     int
 }
 
-// ChatInfo is what the cache keeps about a legacy group.
+// ChatInfo 是缓存为旧式普通群保存的信息。
 type ChatInfo struct {
 	ID          int64
 	Title       string
@@ -68,16 +67,15 @@ type ChatInfo struct {
 	PhotoDC     int
 }
 
-// HashLookup is the read side of the persisted access-hash store.
+// HashLookup 是持久化 access hash 存储的读取接口。
 type HashLookup interface {
 	GetChannelAccessHash(ctx context.Context, userID, channelID int64) (int64, bool, error)
 	GetUserAccessHash(ctx context.Context, userID, targetUserID int64) (int64, bool, error)
 }
 
-// PeerCache remembers the access hashes and names that arrive with updates
-// and RPC replies, so a peer can be addressed later without a resolve
-// round trip. Min entities never supply a hash: theirs is not usable for
-// addressing.
+// PeerCache 记下随更新和 RPC 回复一起到来的 access hash 和名字，之后
+// 就能直接寻址某个 peer，省掉一次解析往返。min 实体从不提供 hash：
+// 它们带的 hash 不能用来寻址。
 type PeerCache struct {
 	mu       sync.RWMutex
 	users    map[int64]*UserInfo
@@ -87,26 +85,26 @@ type PeerCache struct {
 	durable  HashLookup
 }
 
-// NewPeerCache builds an empty cache.
+// NewPeerCache 创建一个空缓存。
 func NewPeerCache() *PeerCache {
 	return &PeerCache{users: map[int64]*UserInfo{}, channels: map[int64]*ChannelInfo{}, chats: map[int64]*ChatInfo{}}
 }
 
-// SetSelf records the authenticated account id.
+// SetSelf 记下已认证账号的 id。
 func (c *PeerCache) SetSelf(id int64) {
 	c.mu.Lock()
 	c.selfID = id
 	c.mu.Unlock()
 }
 
-// SetDurable attaches the persisted hash store.
+// SetDurable 接上持久化的 hash 存储。
 func (c *PeerCache) SetDurable(lookup HashLookup) {
 	c.mu.Lock()
 	c.durable = lookup
 	c.mu.Unlock()
 }
 
-// Remember records every entity carried by an update.
+// Remember 记下一条更新携带的所有实体。
 func (c *PeerCache) Remember(entities tg.Entities) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -121,7 +119,7 @@ func (c *PeerCache) Remember(entities tg.Entities) {
 	}
 }
 
-// RememberUsers records users from an RPC reply.
+// RememberUsers 记下 RPC 回复里的用户。
 func (c *PeerCache) RememberUsers(users []tg.UserClass) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -132,7 +130,7 @@ func (c *PeerCache) RememberUsers(users []tg.UserClass) {
 	}
 }
 
-// RememberChats records chats and channels from an RPC reply.
+// RememberChats 记下 RPC 回复里的普通群和频道。
 func (c *PeerCache) RememberChats(chats []tg.ChatClass) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -212,7 +210,7 @@ func (c *PeerCache) rememberChat(chat *tg.Chat) {
 	}
 }
 
-// User returns what is known about a user.
+// User 返回已知的用户信息。
 func (c *PeerCache) User(id int64) (UserInfo, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -223,7 +221,7 @@ func (c *PeerCache) User(id int64) (UserInfo, bool) {
 	return *info, true
 }
 
-// Channel returns what is known about a channel.
+// Channel 返回已知的频道信息。
 func (c *PeerCache) Channel(id int64) (ChannelInfo, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -234,7 +232,7 @@ func (c *PeerCache) Channel(id int64) (ChannelInfo, bool) {
 	return *info, true
 }
 
-// Chat returns what is known about a legacy group.
+// Chat 返回已知的旧式普通群信息。
 func (c *PeerCache) Chat(id int64) (ChatInfo, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -245,7 +243,7 @@ func (c *PeerCache) Chat(id int64) (ChatInfo, bool) {
 	return *info, true
 }
 
-// Title renders a peer's display name: a chat's title or a user's name.
+// Title 返回 peer 的显示名：对话的标题，或者用户的名字。
 func (c *PeerCache) Title(peer tg.PeerClass) string {
 	switch value := peer.(type) {
 	case *tg.PeerUser:
@@ -271,8 +269,7 @@ func (c *PeerCache) Title(peer tg.PeerClass) string {
 	return ""
 }
 
-// InputPeer converts a peer into something addressable, reporting false
-// when no access hash is known.
+// InputPeer 把 peer 转成可寻址的形式；不知道 access hash 时返回 false。
 func (c *PeerCache) InputPeer(peer tg.PeerClass) (tg.InputPeerClass, bool) {
 	c.mu.RLock()
 	selfID, durable := c.selfID, c.durable

@@ -74,8 +74,8 @@ func TestEnvelopeReadsReplyAndEdit(t *testing.T) {
 	}
 }
 
-// A hash is never guessed: addressing a peer the session has not seen must
-// fail rather than send the message somewhere else.
+// access hash 绝不靠猜：给会话没见过的对象发消息必须失败，
+// 而不是把消息发到别处去。
 func TestInputPeerRefusesUnknownHash(t *testing.T) {
 	peers := NewPeerCache()
 	peers.SetSelf(7)
@@ -92,9 +92,8 @@ func TestInputPeerRefusesUnknownHash(t *testing.T) {
 	}
 }
 
-// A min entity's access hash is not usable for addressing, so it must not
-// enter the cache: an empty cache is recoverable, a confidently wrong one
-// is not.
+// min 实体的 access hash 不能用来定位对象，所以不能进缓存：
+// 缓存里缺了还能补，存了错的还当真就补不回来了。
 func TestPeerCacheSkipsMinEntities(t *testing.T) {
 	peers := NewPeerCache()
 	peers.Remember(tg.Entities{Users: map[int64]*tg.User{5: {ID: 5, AccessHash: 9, Min: true, FirstName: "A"}}})
@@ -131,8 +130,8 @@ func TestEscapeAndParseHTML(t *testing.T) {
 	}
 }
 
-// Telegram's expandable blockquote is what several commands fold long
-// output into; gotd only produces it when the attribute survives.
+// 好几个命令会把长输出折叠进 Telegram 的可展开引用块；
+// 只有 expandable 属性保留下来，gotd 才会生成它。
 func TestParseHTMLExpandableBlockquote(t *testing.T) {
 	_, entities, err := ParseHTML("<blockquote expandable>long</blockquote>")
 	if err != nil {
@@ -147,8 +146,8 @@ func TestParseHTMLExpandableBlockquote(t *testing.T) {
 	}
 }
 
-// Replying to part of a message must carry that selection through, or
-// .yvlu would quote the whole message the operator deliberately narrowed.
+// 回复消息的一部分时，选中的部分必须一路带过去，否则 .yvlu
+// 会引用整条消息，而使用者明明特意只选了其中一段。
 func TestEnvelopeCarriesQuoteSelection(t *testing.T) {
 	peers := NewPeerCache()
 	peers.SetSelf(7)
@@ -167,7 +166,7 @@ func TestEnvelopeCarriesQuoteSelection(t *testing.T) {
 	}
 }
 
-// A reply without a selection carries none, so the full message is used.
+// 没有选中部分的回复不带选区，于是使用整条消息。
 func TestEnvelopeWithoutQuoteSelection(t *testing.T) {
 	peers := NewPeerCache()
 	peers.SetSelf(7)
@@ -179,7 +178,7 @@ func TestEnvelopeWithoutQuoteSelection(t *testing.T) {
 	}
 }
 
-// The emoji status a user wears is what .yvlu draws beside their name.
+// 用户挂着的 emoji 状态，.yvlu 会画在名字旁边。
 func TestPeerCacheKeepsEmojiStatus(t *testing.T) {
 	peers := NewPeerCache()
 	user := &tg.User{ID: 9, FirstName: "A"}
@@ -191,9 +190,9 @@ func TestPeerCacheKeepsEmojiStatus(t *testing.T) {
 	}
 }
 
-// A chat with oneself has no direction, so Telegram leaves Out clear.
-// Gating commands on that flag discarded every command typed in Saved
-// Messages; the question a gate should ask is who wrote the message.
+// 和自己的对话没有收发方向，所以 Telegram 不设置 Out。以前按这个
+// 标志过滤命令，收藏夹里输入的命令全被丢掉了；过滤时该问的是
+// 这条消息是谁写的。
 func TestEnvelopeTreatsSavedMessagesAsOwn(t *testing.T) {
 	peers := NewPeerCache()
 	peers.SetSelf(7)
@@ -213,7 +212,7 @@ func TestEnvelopeTreatsSavedMessagesAsOwn(t *testing.T) {
 	}
 }
 
-// Someone else's private message must not be mistaken for the account's.
+// 别人发来的私聊消息不能误当成本账号自己的。
 func TestEnvelopeKeepsOtherPeopleIncoming(t *testing.T) {
 	peers := NewPeerCache()
 	peers.SetSelf(7)

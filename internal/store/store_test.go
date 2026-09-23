@@ -50,9 +50,8 @@ func TestUpdatePersists(t *testing.T) {
 	}
 }
 
-// A failed mutation must leave the file exactly as it was: these documents
-// hold API keys and task state, and a half-applied change is worse than a
-// rejected one.
+// 修改失败时文件必须原封不动：这些文档里存着 API key 和任务状态，
+// 改了一半比整个被拒绝更糟。
 func TestFailedUpdateLeavesFileAlone(t *testing.T) {
 	store := newTestStore(t)
 	_ = store.Update(func(value *document) error { value.Count = 1; return nil })
@@ -66,8 +65,8 @@ func TestFailedUpdateLeavesFileAlone(t *testing.T) {
 	}
 }
 
-// Read hands out a copy: a caller that mutates what it got must not change
-// what the next reader sees.
+// Read 交出去的是副本：调用方改动自己拿到的那份，
+// 不能影响下一个读取者看到的内容。
 func TestReadReturnsCopy(t *testing.T) {
 	store := newTestStore(t)
 	_ = store.Update(func(value *document) error { value.Items["a"] = 1; return nil })

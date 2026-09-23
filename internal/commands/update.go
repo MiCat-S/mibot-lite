@@ -21,10 +21,10 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/httpx"
 )
 
-// Self-update from GitHub Releases: the release must carry an asset named
-// mibot-lite-<os>-<arch> and a checksums.txt with "<sha256>  <name>" lines.
-// Nothing changes on disk until the download verified and the new binary
-// proved it can read this deployment (--check).
+// 从 GitHub Releases 自更新：release 里必须有名为 mibot-lite-<os>-<arch>
+// 的文件，以及每行都是 "<sha256>  <name>" 的 checksums.txt。下载的文件
+// 通过校验、新二进制也证明了自己能读取这个部署（--check）之前，
+// 磁盘上什么都不改。
 
 type release struct {
 	TagName string `json:"tag_name"`
@@ -36,7 +36,7 @@ type release struct {
 	} `json:"assets"`
 }
 
-// Update registers .update.
+// Update 注册 .update。
 func Update(a *app.App) {
 	repo := a.Env.Get("MIBOT_UPDATE_REPO", "MiCat-S/mibot-lite")
 	a.Registry.Register(&command.Command{Name: "update", Description: "检查并更新程序", Usage: "[check|run|rollback]", Timeout: 10 * time.Minute,

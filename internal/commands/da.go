@@ -488,7 +488,7 @@ func (r *daRun) sweepOwn() bool {
 	return true
 }
 
-// appendBounded appends and keeps at most limit entries.
+// appendBounded 追加一项，最多保留 limit 项。
 func appendBounded(values []string, value string, limit int) []string {
 	values = append(values, value)
 	if len(values) > limit {

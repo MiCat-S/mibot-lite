@@ -24,33 +24,33 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/store"
 )
 
-// saveDocument is data/save.json.
+// saveDocument 对应 data/save.json。
 type saveDocument struct {
-	// Target is where saved messages go: "" for Saved Messages, "local"
-	// for disk, otherwise a username or chat id.
+	// Target 是保存的消息发往哪里："" 表示收藏夹，"local" 表示存到磁盘，
+	// 其他值是用户名或对话 id。
 	Target string `json:"target,omitempty"`
-	// Source adds a line pointing back at where each message came from.
+	// Source 为 true 时，额外发一行指回每条消息原出处的链接。
 	Source bool `json:"source,omitempty"`
 }
 
 const (
-	// A range walks message ids one by one and every one of them may be a
-	// video; past a few hundred this is an archive job, not a command.
+	// 范围是按消息编号逐个走的，每一条都可能是视频；超过几百条就是
+	// 归档任务了，不该由一条命令来做。
 	saveRangeLimit = 500
-	// Telegram's own ceiling for a file.
+	// Telegram 自己对单个文件的上限。
 	saveMaxBytes = 4 << 30
 )
 
-// messageLink is one t.me message link.
+// messageLink 是一条 t.me 消息链接。
 type messageLink struct {
-	Username string // public chats
-	ChatID   string // private ones, as -100…
+	Username string // 公开对话
+	ChatID   string // 私密对话，形如 -100…
 	ID       int
 	Raw      string
 }
 
-// linkPattern reads the four shapes Telegram hands out: public and
-// private, each with or without a forum topic in the middle.
+// linkPattern 识别 Telegram 给出的四种链接形式：公开和私密两类，
+// 每类中间都可能带或不带论坛话题。
 var linkPattern = regexp.MustCompile(`^(?:https?://)?(?:t|telegram)\.me/(?:c/(\d+)|([A-Za-z][A-Za-z0-9_]{3,31}))(?:/\d+)?/(\d+)(?:[/?#].*)?$`)
 
 func parseLink(text string) (messageLink, bool) {
@@ -71,14 +71,12 @@ func parseLink(text string) (messageLink, bool) {
 	return link, true
 }
 
-// sameChat reports whether two links point into one chat, which a range
-// needs.
+// sameChat 判断两个链接是否指向同一个对话，范围要求这一点。
 func (l messageLink) sameChat(other messageLink) bool {
 	return l.ChatID == other.ChatID && strings.EqualFold(l.Username, other.Username)
 }
 
-// url is the message's t.me address, or "" for a private chat with a
-// person, which has none.
+// url 返回消息的 t.me 地址；和人的私聊没有这种地址，返回 ""。
 func (l messageLink) url() string {
 	if l.Username != "" {
 		return "https://t.me/" + l.Username + "/" + strconv.Itoa(l.ID)
@@ -89,16 +87,15 @@ func (l messageLink) url() string {
 	return ""
 }
 
-// saveRequest is what the arguments asked for.
+// saveRequest 描述参数要求做什么。
 type saveRequest struct {
 	Links  []messageLink
 	Range  *[2]messageLink
-	Target string // empty: the saved default
+	Target string // 为空时用保存的默认目标
 }
 
-// parseSaveArgs splits the arguments into links, a range and an optional
-// target. A target is the one argument that is not a link; more than one
-// is a mistake worth saying so about.
+// parseSaveArgs 把参数拆成链接、范围和可选的目标。目标就是那个唯一不是
+// 链接的参数；这样的参数超过一个就是写错了，值得明确告诉用户。
 func parseSaveArgs(args []string) (saveRequest, error) {
 	var request saveRequest
 	var others []string
@@ -157,7 +154,7 @@ func describeTarget(target string) string {
 	return target
 }
 
-// saver carries one command's work.
+// saver 承载一次命令要做的工作。
 type saver struct {
 	client  *bot.Client
 	root    string
@@ -169,9 +166,8 @@ type saver struct {
 	progress func(string)
 }
 
-// peerOf finds the chat a link points into. A private chat the account
-// has not heard from since it started is not in the peer cache yet, so
-// the dialogs are read once to learn it.
+// peerOf 找出链接指向的对话。账号启动以来还没收到过消息的私密对话，
+// 不在 peer 缓存里，所以要读一次对话列表来认识它。
 func (s *saver) peerOf(ctx context.Context, link messageLink) (tg.InputPeerClass, error) {
 	if link.Username != "" {
 		return s.client.ResolveUsername(ctx, link.Username)
@@ -193,7 +189,7 @@ func (s *saver) peerOf(ctx context.Context, link messageLink) (tg.InputPeerClass
 	return peer, nil
 }
 
-// targetOf resolves where saved messages go.
+// targetOf 解析保存的消息要发往哪里。
 func (s *saver) targetOf(ctx context.Context, target string) (tg.InputPeerClass, error) {
 	if isSelfTarget(target) {
 		return &tg.InputPeerSelf{}, nil
@@ -215,7 +211,7 @@ func (s *saver) targetOf(ctx context.Context, target string) (tg.InputPeerClass,
 	return peer, nil
 }
 
-// learnDialogs reads the dialog list into the peer cache.
+// learnDialogs 把对话列表读进 peer 缓存。
 func learnDialogs(ctx context.Context, client *bot.Client) error {
 	offsetDate, offsetID := 0, 0
 	var offsetPeer tg.InputPeerClass = &tg.InputPeerEmpty{}
@@ -259,7 +255,7 @@ func learnDialogs(ctx context.Context, client *bot.Client) error {
 	return nil
 }
 
-// fetch reads messages by id, skipping the ones that are gone.
+// fetch 按 id 读取消息，已经不存在的跳过。
 func (s *saver) fetch(ctx context.Context, peer tg.InputPeerClass, ids []int) ([]*tg.Message, error) {
 	var found []*tg.Message
 	for start := 0; start < len(ids); start += 100 {
@@ -273,10 +269,9 @@ func (s *saver) fetch(ctx context.Context, peer tg.InputPeerClass, ids []int) ([
 	return found, nil
 }
 
-// send forwards a message, or copies it when the chat forbids forwarding.
+// send 转发一条消息；对话禁止转发时改为复制。
 //
-// A message that says noforwards is copied without trying: the forward
-// would only come back refused.
+// 带 noforwards 标记的消息不去尝试转发，直接复制：转发只会被拒。
 func (s *saver) send(ctx context.Context, message *tg.Message, from, to tg.InputPeerClass) (copied bool, err error) {
 	if !message.Noforwards {
 		err := onFlood(ctx, func() error {
@@ -294,8 +289,7 @@ func (s *saver) send(ctx context.Context, message *tg.Message, from, to tg.Input
 	return true, s.copy(ctx, message, to)
 }
 
-// copy sends the same content again from scratch: the text with its
-// formatting, and any media downloaded and uploaded anew.
+// copy 从头把同样的内容重新发一遍：文字连同格式，媒体则重新下载再上传。
 func (s *saver) copy(ctx context.Context, message *tg.Message, to tg.InputPeerClass) error {
 	media, err := s.remake(ctx, message)
 	if err != nil {
@@ -318,9 +312,8 @@ func (s *saver) copy(ctx context.Context, message *tg.Message, to tg.InputPeerCl
 	return onFlood(ctx, func() error { _, err := s.client.API().MessagesSendMedia(ctx, request); return err })
 }
 
-// remake builds media that can be sent again: an upload for photos and
-// documents, a fresh copy of the value for the kinds that carry no file.
-// It returns nil for a message that is only text, or only a link preview.
+// remake 构造可以再次发送的媒体：图片和文件要重新上传，不带文件的类型
+// 则照原值新建一份。纯文字或只有链接预览的消息返回 nil。
 func (s *saver) remake(ctx context.Context, message *tg.Message) (tg.InputMediaClass, error) {
 	media, ok := message.GetMedia()
 	if !ok {
@@ -341,8 +334,8 @@ func (s *saver) remake(ctx context.Context, message *tg.Message) (tg.InputMediaC
 	case *tg.MessageMediaContact:
 		return &tg.InputMediaContact{PhoneNumber: value.PhoneNumber, FirstName: value.FirstName, LastName: value.LastName, Vcard: value.Vcard}, nil
 	case *tg.MessageMediaPoll:
-		// A quiz's right answer is not visible to a voter, so the copy is
-		// an ordinary poll with the same question and options.
+		// 投票者看不到测验的正确答案，所以复制出来的是一个问题和选项
+		// 都相同的普通投票。
 		poll := tg.Poll{ID: rand.Int64(), Question: value.Poll.Question, Answers: value.Poll.Answers,
 			MultipleChoice: value.Poll.MultipleChoice}
 		return &tg.InputMediaPoll{Poll: poll}, nil
@@ -369,9 +362,8 @@ func (s *saver) remake(ctx context.Context, message *tg.Message) (tg.InputMediaC
 	return nil, errors.New("这种消息在禁止转发的对话里没法复制")
 }
 
-// download writes a media file into the deployment's own partial
-// directory rather than /tmp: on this kind of host /tmp is a tmpfs, and a
-// video parked there is a video held in memory.
+// download 把媒体文件写到部署目录自己的 partial 目录，而不是 /tmp：
+// 这类主机上 /tmp 是 tmpfs，视频放在那里就等于占着内存。
 func (s *saver) download(ctx context.Context, source *bot.MediaSource) (string, error) {
 	if source.Size > saveMaxBytes {
 		return "", fmt.Errorf("文件 %s，超过 Telegram 的上限", formatBytes(int(source.Size)))
@@ -400,9 +392,8 @@ func (s *saver) download(ctx context.Context, source *bot.MediaSource) (string, 
 	return file.Name(), nil
 }
 
-// saveLocal writes a message's media under save/<chat>/ with a JSON file
-// beside it saying where it came from. Text-only messages have nothing to
-// write and are skipped.
+// saveLocal 把消息的媒体写到 save/<chat>/ 下，旁边放一个 JSON 文件
+// 记录来源。纯文字消息没有东西可写，直接跳过。
 func (s *saver) saveLocal(ctx context.Context, message *tg.Message, link messageLink) (string, error) {
 	source, ok := bot.SourceOf(message)
 	if !ok {
@@ -458,9 +449,9 @@ func sanitizeSegment(value string) string {
 	return value
 }
 
-// knownExtensions pins the types Telegram actually sends. The system MIME
-// table lists several extensions for most of them in no useful order —
-// video/mp4 came back as .m4v.
+// knownExtensions 把 Telegram 实际会发的类型的扩展名固定下来。系统的
+// MIME 表给其中大多数类型列了好几个扩展名，顺序没有规律，比如
+// video/mp4 查出来是 .m4v。
 var knownExtensions = map[string]string{
 	"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/gif": ".gif",
 	"video/mp4": ".mp4", "video/webm": ".webm", "video/quicktime": ".mov",
@@ -495,10 +486,9 @@ func uniquePath(path string) string {
 	}
 }
 
-// onFlood retries a call once, and only after a flood wait. retryFlood
-// retries any error, which is wrong here: a forward refused because the
-// chat protects its content is refused the same way every time, and that
-// refusal is the signal to switch to copying.
+// onFlood 只在遇到 flood wait 时重试一次调用。retryFlood 遇到任何错误
+// 都会重试，这里不能用它：因为对话开启了内容保护而被拒的转发，每次都会
+// 以同样的方式被拒，而这个拒绝正是改用复制的信号。
 func onFlood(ctx context.Context, call func() error) error {
 	err := call()
 	if wait, ok := bot.FloodWait(err); ok && wait <= 5*time.Minute {

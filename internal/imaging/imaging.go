@@ -1,11 +1,10 @@
-// Package imaging is the small amount of pixel work two commands need:
-// .yvlu resizes an avatar, .eatgif pastes avatars through a mask onto
-// animation frames.
+// Package imaging 是两个命令要用到的那一点像素处理：.yvlu 缩放头像，
+// .eatgif 把头像透过蒙版贴到动画帧上。
 //
-// It is the Go standard library plus golang.org/x/image for the scaler.
-// MiBox used sharp, which binds libvips — a shared library, an image cache
-// and a thread pool resident for the whole process, to do work that here
-// happens a few times a day and is entirely expressible in image/draw.
+// 只用 Go 标准库，缩放器用 golang.org/x/image。MiBox 用的是 sharp，
+// 它绑定 libvips——一个共享库、一份图像缓存和一个线程池，在整个进程
+// 生命周期里常驻内存；而这里的活一天只做几次，完全可以用 image/draw
+// 写出来。
 package imaging
 
 import (
@@ -24,13 +23,12 @@ import (
 	xdraw "golang.org/x/image/draw"
 )
 
-// MaxDimension bounds every image this package will decode or produce.
-// Telegram stickers are at most 512 on a side and the remote assets
-// declare their own size, so anything larger is a malformed or hostile
-// asset rather than a picture worth resizing.
+// MaxDimension 是本包解码或生成的所有图像的尺寸上限。
+// Telegram 贴纸每边最多 512，远程素材也会声明自己的尺寸，所以超过
+// 这个值的只会是格式错误或恶意构造的素材，不是值得缩放的图片。
 const MaxDimension = 2048
 
-// DecodePNG reads a PNG, refusing one larger than MaxDimension.
+// DecodePNG 读取 PNG，超过 MaxDimension 的一律拒绝。
 func DecodePNG(data []byte) (image.Image, error) {
 	config, err := png.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
@@ -42,8 +40,8 @@ func DecodePNG(data []byte) (image.Image, error) {
 	return png.Decode(bytes.NewReader(data))
 }
 
-// Decode reads PNG or JPEG, whichever the bytes are. Telegram serves
-// avatars as JPEG and the animation assets are PNG.
+// Decode 读取 PNG 或 JPEG，按字节内容自动判断。Telegram 给的头像是
+// JPEG，动画素材是 PNG。
 func Decode(data []byte) (image.Image, error) {
 	config, _, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
@@ -56,7 +54,7 @@ func Decode(data []byte) (image.Image, error) {
 	return value, err
 }
 
-// EncodePNG writes an image as PNG.
+// EncodePNG 把图像编码成 PNG。
 func EncodePNG(value image.Image) ([]byte, error) {
 	var buffer bytes.Buffer
 	encoder := png.Encoder{CompressionLevel: png.DefaultCompression}
@@ -66,22 +64,21 @@ func EncodePNG(value image.Image) ([]byte, error) {
 	return buffer.Bytes(), nil
 }
 
-// WritePNG writes an image straight to a writer, so a frame sequence never
-// holds more than one encoded frame in memory.
+// WritePNG 把图像直接写进 writer，这样处理帧序列时，内存里最多只有
+// 一帧编码后的数据。
 func WritePNG(w io.Writer, value image.Image) error {
 	return (&png.Encoder{CompressionLevel: png.DefaultCompression}).Encode(w, value)
 }
 
-// Resize scales an image to exactly width x height, ignoring aspect ratio.
+// Resize 把图像缩放到正好 width x height，不管宽高比。
 func Resize(source image.Image, width, height int) *image.RGBA {
 	target := image.NewRGBA(image.Rect(0, 0, width, height))
 	xdraw.CatmullRom.Scale(target, target.Bounds(), source, source.Bounds(), draw.Src, nil)
 	return target
 }
 
-// ResizeCover scales an image to fill width x height, cropping the longer
-// side from the centre — what a square avatar wants from a rectangular
-// photo.
+// ResizeCover 缩放图像以铺满 width x height，较长的一边以中心为准裁掉
+// 两头——把长方形照片做成方形头像，要的正是这个。
 func ResizeCover(source image.Image, width, height int) *image.RGBA {
 	bounds := source.Bounds()
 	scale := math.Max(float64(width)/float64(bounds.Dx()), float64(height)/float64(bounds.Dy()))
@@ -96,8 +93,8 @@ func ResizeCover(source image.Image, width, height int) *image.RGBA {
 	return target
 }
 
-// ResizeFit scales an image down to fit inside width x height, keeping its
-// aspect ratio. An image already smaller is returned unscaled.
+// ResizeFit 把图像缩小到能放进 width x height，保持宽高比。
+// 本来就更小的图像按原尺寸返回，不做缩放。
 func ResizeFit(source image.Image, width, height int) *image.RGBA {
 	bounds := source.Bounds()
 	scale := math.Min(float64(width)/float64(bounds.Dx()), float64(height)/float64(bounds.Dy()))
@@ -111,9 +108,8 @@ func ResizeFit(source image.Image, width, height int) *image.RGBA {
 	return target
 }
 
-// Rotate turns an image by degrees about its centre, keeping the canvas
-// size — the animation specs rotate a face inside a fixed mask, so a
-// growing canvas would shift the paste position.
+// Rotate 把图像绕中心旋转 degrees 度，画布尺寸不变——动画配置是在
+// 固定的蒙版里旋转脸，画布一变大，粘贴位置就会偏。
 func Rotate(source image.Image, degrees float64) *image.RGBA {
 	bounds := source.Bounds()
 	target := image.NewRGBA(image.Rect(0, 0, bounds.Dx(), bounds.Dy()))
@@ -121,7 +117,7 @@ func Rotate(source image.Image, degrees float64) *image.RGBA {
 	sin, cos := math.Sin(radians), math.Cos(radians)
 	centreX := float64(bounds.Dx()) / 2
 	centreY := float64(bounds.Dy()) / 2
-	// Translate the centre to the origin, rotate, translate back.
+	// 先把中心平移到原点，旋转，再平移回去。
 	matrix := f64Aff3{
 		cos, -sin, centreX - cos*centreX + sin*centreY,
 		sin, cos, centreY - sin*centreX - cos*centreY,
@@ -130,8 +126,8 @@ func Rotate(source image.Image, degrees float64) *image.RGBA {
 	return target
 }
 
-// Brightness multiplies every channel by factor, clamped to the alpha so
-// premultiplied pixels stay valid.
+// Brightness 把每个通道乘以 factor，结果不超过 alpha，
+// 这样预乘像素仍然合法。
 func Brightness(source image.Image, factor float64) *image.RGBA {
 	bounds := source.Bounds()
 	target := image.NewRGBA(image.Rect(0, 0, bounds.Dx(), bounds.Dy()))
@@ -149,19 +145,18 @@ func Brightness(source image.Image, factor float64) *image.RGBA {
 	return target
 }
 
-// ApplyMask keeps the parts of source the mask marks opaque, which is
-// sharp's "dest-in" blend. The mask's own colour is ignored; only its
-// alpha channel counts.
+// ApplyMask 只保留 source 里被蒙版标为不透明的部分，相当于 sharp 的
+// "dest-in" 混合。蒙版本身的颜色不起作用，只看它的 alpha 通道。
 func ApplyMask(source image.Image, mask image.Image) *image.RGBA {
 	bounds := mask.Bounds()
 	target := image.NewRGBA(image.Rect(0, 0, bounds.Dx(), bounds.Dy()))
-	// Drawing Over onto a transparent target through the mask yields
-	// source multiplied by the mask's alpha, which is the intent.
+	// 在透明的目标上透过蒙版用 Over 绘制，得到的就是 source 乘以
+	// 蒙版的 alpha，正是想要的结果。
 	draw.DrawMask(target, target.Bounds(), source, source.Bounds().Min, alphaOf(mask), bounds.Min, draw.Over)
 	return target
 }
 
-// alphaOf presents an image's alpha channel as a mask.
+// alphaMask 把图像的 alpha 通道当作蒙版来用，由 alphaOf 构造。
 type alphaMask struct{ image.Image }
 
 func (a alphaMask) At(x, y int) color.Color {
@@ -173,14 +168,14 @@ func (a alphaMask) ColorModel() color.Model { return color.Alpha16Model }
 
 func alphaOf(value image.Image) image.Image { return alphaMask{Image: value} }
 
-// Composite pastes an overlay onto a canvas at (x, y), blending alpha.
+// Composite 把 overlay 贴到 canvas 的 (x, y) 处，按 alpha 混合。
 func Composite(canvas draw.Image, overlay image.Image, x, y int) {
 	bounds := overlay.Bounds()
 	target := image.Rect(x, y, x+bounds.Dx(), y+bounds.Dy())
 	draw.Draw(canvas, target, overlay, bounds.Min, draw.Over)
 }
 
-// ToRGBA returns an editable copy of an image.
+// ToRGBA 返回图像的一个可编辑副本。
 func ToRGBA(source image.Image) *image.RGBA {
 	if value, ok := source.(*image.RGBA); ok {
 		return value
@@ -191,7 +186,7 @@ func ToRGBA(source image.Image) *image.RGBA {
 	return target
 }
 
-// Flatten composites an image over a solid background, dropping alpha.
+// Flatten 把图像合成到纯色背景上，去掉 alpha。
 func Flatten(source image.Image, background color.Color) *image.RGBA {
 	bounds := source.Bounds()
 	target := image.NewRGBA(image.Rect(0, 0, bounds.Dx(), bounds.Dy()))
@@ -200,30 +195,30 @@ func Flatten(source image.Image, background color.Color) *image.RGBA {
 	return target
 }
 
-// f64Aff3 is x/image's affine matrix type, spelled locally so callers of
-// this package do not need the golang.org/x/image/math/f64 import.
+// f64Aff3 就是 x/image 的仿射矩阵类型，在本地重新写一遍，这样本包的
+// 调用方不必导入 golang.org/x/image/math/f64。
 type f64Aff3 = [6]float64
 
-// ErrNotWebP means the bytes are not a WebP file.
+// ErrNotWebP 表示这些字节不是 WebP 文件。
 var ErrNotWebP = errors.New("not a WebP image")
 
-// WebPSize reads a WebP's dimensions from its header.
+// WebPSize 从文件头读出 WebP 的尺寸。
 //
-// Telegram wants a DocumentAttributeImageSize alongside a sticker, and the
-// remote quote service returns WebP. Only the header is read: decoding the
-// image would mean a WebP decoder for two integers.
+// Telegram 发贴纸时要附带 DocumentAttributeImageSize，而远程的语录服务
+// 返回的是 WebP。这里只读文件头：解码整张图的话，就得为了两个整数
+// 引入一个 WebP 解码器。
 func WebPSize(data []byte) (width, height int, err error) {
 	if len(data) < 30 || string(data[0:4]) != "RIFF" || string(data[8:12]) != "WEBP" {
 		return 0, 0, ErrNotWebP
 	}
 	switch string(data[12:16]) {
 	case "VP8X":
-		// Extended format: 24-bit little-endian, stored minus one.
+		// 扩展格式：24 位小端，存的是实际值减一。
 		width = int(data[24]) | int(data[25])<<8 | int(data[26])<<16
 		height = int(data[27]) | int(data[28])<<8 | int(data[29])<<16
 		return width + 1, height + 1, nil
 	case "VP8 ":
-		// Lossy: a 3-byte start code, then 14-bit dimensions.
+		// 有损格式：先是 3 字节的起始码，然后是 14 位的宽和高。
 		if len(data) < 30 || data[23] != 0x9d || data[24] != 0x01 || data[25] != 0x2a {
 			return 0, 0, ErrNotWebP
 		}
@@ -231,7 +226,7 @@ func WebPSize(data []byte) (width, height int, err error) {
 		height = int(binary.LittleEndian.Uint16(data[28:30]) & 0x3fff)
 		return width, height, nil
 	case "VP8L":
-		// Lossless: a signature byte, then two 14-bit fields, minus one.
+		// 无损格式：先是一个签名字节，然后是两个 14 位字段，同样存的是减一后的值。
 		if data[20] != 0x2f {
 			return 0, 0, ErrNotWebP
 		}

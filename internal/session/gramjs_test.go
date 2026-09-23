@@ -37,9 +37,8 @@ func TestRoundTrip(t *testing.T) {
 	}
 }
 
-// A session that came out of gramjs must convert to the same DC and the
-// same auth key, byte for byte: this is what lets an existing MiBox
-// deployment keep its login.
+// 从 gramjs 来的会话必须转换成同一个 DC、逐字节相同的 auth key：
+// 已有的 MiBox 部署正是靠这一点保住登录状态。
 func TestParseGramjsLayout(t *testing.T) {
 	key := bytes.Repeat([]byte{7}, AuthKeyLength)
 	address := []byte("91.108.56.130")
@@ -88,11 +87,10 @@ func TestDataCarriesKeyAndAddress(t *testing.T) {
 	}
 }
 
-// A session gotd created itself carries no address — it reconnects from
-// the data-centre id and its config. Exporting one to the gramjs format,
-// which has no room for a config, has to look the address up. This path
-// never ran until a real --login produced a session, and it failed with
-// `session address "" is not host:port`.
+// gotd 自己创建的会话不带地址，它靠 DC 编号和自带的 config 重连。
+// gramjs 格式里没有放 config 的位置，导出成这种格式时只能去查地址。
+// 这条路径直到真用 --login 生成了会话才第一次跑到，当时报错
+// `session address "" is not host:port`。
 func TestResolveAddressWithoutStoredAddress(t *testing.T) {
 	data := sample().Data()
 	data.Addr = ""
@@ -104,7 +102,7 @@ func TestResolveAddressWithoutStoredAddress(t *testing.T) {
 	if err != nil || host == "" || port == "" {
 		t.Fatalf("resolved %q: %v", address, err)
 	}
-	// The whole export has to work, not just the lookup.
+	// 整个导出流程都要走通，光查到地址还不够。
 	parsed, err := FromData(data)
 	if err != nil {
 		t.Fatal(err)
@@ -122,8 +120,8 @@ func TestResolveAddressWithoutStoredAddress(t *testing.T) {
 	}
 }
 
-// The session's own config wins over the published list: a client told to
-// use a different address should keep using it.
+// 会话自带的 config 优先于公开的地址列表：客户端被告知改用别的
+// 地址后，就应该一直用那个地址。
 func TestResolveAddressPrefersSessionConfig(t *testing.T) {
 	data := sample().Data()
 	data.Addr = ""
@@ -140,8 +138,8 @@ func TestResolveAddressPrefersSessionConfig(t *testing.T) {
 	}
 }
 
-// Media-only, CDN and obfuscated-only endpoints are not what an ordinary
-// client connects to, so they are never chosen.
+// 仅限媒体、CDN 和仅限混淆传输的端点都不是普通客户端该连的，
+// 所以一律不选。
 func TestResolveAddressSkipsSpecialEndpoints(t *testing.T) {
 	data := sample().Data()
 	data.Addr = ""

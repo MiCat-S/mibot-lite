@@ -26,7 +26,7 @@ func TestEscapedPagesRespectLimit(t *testing.T) {
 	}
 }
 
-// A page break must never split an escaped entity or a multi-byte rune.
+// 分页时绝不能把转义后的实体或多字节字符拆开。
 func TestEscapedPagesKeepRunesWhole(t *testing.T) {
 	for _, page := range EscapedPages(strings.Repeat("中", 50), 13) {
 		if !strings.HasPrefix(page, "中") || strings.ContainsRune(page, '�') {
@@ -35,8 +35,8 @@ func TestEscapedPagesKeepRunesWhole(t *testing.T) {
 	}
 }
 
-// HTML paging reopens the tags that were open at a page break, so the
-// second page renders the same as the first.
+// HTML 分页会在下一页重新打开分页处还没闭合的标签，
+// 所以第二页的显示效果和第一页一样。
 func TestHTMLPagesReopenTags(t *testing.T) {
 	pages := HTMLPages("<b>"+strings.Repeat("a", 60)+"</b>", 40)
 	if len(pages) < 2 {

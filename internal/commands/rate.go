@@ -70,7 +70,7 @@ func newRateService() *rateService {
 	}{}}
 }
 
-// rateGet fetches a JSON document under the per-query request budget.
+// rateGetter 在每次查询的请求配额之内获取 JSON 文档。
 type rateGetter struct {
 	fetch    func(context.Context, httpx.Request) (httpx.Response, error)
 	requests int
@@ -616,7 +616,7 @@ func rateHandle(ctx context.Context, inv *command.Invocation, service *rateServi
 	return inv.Edit(ctx, renderRate(pricer, source, target, amount, price, converted))
 }
 
-// Rate registers .rate.
+// Rate 注册 .rate。
 func Rate(a *app.App) {
 	service := newRateService()
 	a.Registry.Register(&command.Command{Name: "rate", Description: "智能汇率查询与数量换算", Usage: "货币 [目标货币] [数量]", Help: rateHelp, Timeout: 2 * time.Minute,

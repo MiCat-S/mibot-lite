@@ -1,6 +1,6 @@
 package commands
 
-// currency is a built-in fiat or crypto entry.
+// currency 是一条内置的法币或加密货币条目。
 type currency struct {
 	Symbol  string
 	Name    string

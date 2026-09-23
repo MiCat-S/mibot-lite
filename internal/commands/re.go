@@ -18,8 +18,8 @@ func clampInt(value, low, high int) int {
 	return value
 }
 
-// Re registers .re: forward the replied message (and the ones before it)
-// into the current chat, optionally several times.
+// Re 注册 .re：把被回复的消息（以及它之前的几条）转发到当前对话，
+// 可以转发多次。
 func Re(a *app.App) {
 	help := func(prefix string) string {
 		p := command.Escape(prefix)

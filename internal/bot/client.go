@@ -1,5 +1,5 @@
-// Package bot wraps gotd for the commands: sending, editing, deleting and
-// fetching messages by peer, with the access-hash bookkeeping hidden.
+// Package bot 为命令封装 gotd：按 peer 发送、编辑、删除和读取消息，
+// access hash 的记录维护都藏在里面。
 package bot
 
 import (
@@ -22,11 +22,11 @@ import (
 	"github.com/gotd/td/tgerr"
 )
 
-// ErrUnaddressablePeer means no access hash is known for a peer. The client
-// never guesses one: a wrong hash sends the message somewhere else.
+// ErrUnaddressablePeer 表示不知道某个 peer 的 access hash。客户端从不
+// 猜测 hash：猜错了，消息就会发到别处。
 var ErrUnaddressablePeer = errors.New("telegram peer is not addressable from this session")
 
-// Client is the connected account.
+// Client 是已连接的账号。
 type Client struct {
 	tg     *telegram.Client
 	api    *tg.Client
@@ -35,7 +35,7 @@ type Client struct {
 	logger *slog.Logger
 	upload *uploader.Uploader
 
-	// dcConns holds the extra data-centre connections downloads opened.
+	// dcConns 保存下载时额外打开的数据中心连接。
 	dcMu    sync.Mutex
 	dcConns map[int]*dcConnection
 }
@@ -49,31 +49,31 @@ func FromAPI(api *tg.Client, peers *PeerCache, self *tg.User, logger *slog.Logge
 	return &Client{api: api, peers: peers, self: self, logger: logger, upload: uploader.NewUploader(api)}
 }
 
-// New wraps an authorized client.
+// New 封装一个已授权的客户端。
 func New(client *telegram.Client, peers *PeerCache, self *tg.User, logger *slog.Logger) *Client {
 	api := client.API()
 	return &Client{tg: client, api: api, peers: peers, self: self, logger: logger, upload: uploader.NewUploader(api)}
 }
 
-// API is the raw TL client.
+// API 返回原始的 TL 客户端。
 func (c *Client) API() *tg.Client { return c.api }
 
-// Peers is the access-hash cache.
+// Peers 返回 access hash 缓存。
 func (c *Client) Peers() *PeerCache { return c.peers }
 
-// Self is the authenticated user.
+// Self 返回已认证的用户。
 func (c *Client) Self() *tg.User { return c.self }
 
-// SelfID is the authenticated user's id.
+// SelfID 返回已认证用户的 id。
 func (c *Client) SelfID() int64 { return c.self.ID }
 
-// Logger is the process logger.
+// Logger 返回进程的日志器。
 func (c *Client) Logger() *slog.Logger { return c.logger }
 
-// Uploader uploads files.
+// Uploader 返回文件上传器。
 func (c *Client) Uploader() *uploader.Uploader { return c.upload }
 
-// Ping measures one cheap authenticated round trip.
+// Ping 测量一次开销很小的、带认证的往返。
 func (c *Client) Ping(ctx context.Context) (time.Duration, error) {
 	started := time.Now()
 	if _, err := c.tg.Self(ctx); err != nil {
@@ -82,7 +82,7 @@ func (c *Client) Ping(ctx context.Context) (time.Duration, error) {
 	return time.Since(started), nil
 }
 
-// InputPeer resolves a peer through the cache.
+// InputPeer 通过缓存解析 peer。
 func (c *Client) InputPeer(peer tg.PeerClass) (tg.InputPeerClass, error) {
 	resolved, ok := c.peers.InputPeer(peer)
 	if !ok {
@@ -91,7 +91,7 @@ func (c *Client) InputPeer(peer tg.PeerClass) (tg.InputPeerClass, error) {
 	return resolved, nil
 }
 
-// InputPeerFromChatID resolves a marked decimal id.
+// InputPeerFromChatID 解析带标记的十进制 id。
 func (c *Client) InputPeerFromChatID(chatID string) (tg.InputPeerClass, error) {
 	peer, ok := PeerFromID(chatID)
 	if !ok {
@@ -100,7 +100,7 @@ func (c *Client) InputPeerFromChatID(chatID string) (tg.InputPeerClass, error) {
 	return c.InputPeer(peer)
 }
 
-// ResolveTarget accepts "me", a marked decimal id or a @username.
+// ResolveTarget 接受 "me"、带标记的十进制 id 或 @username。
 func (c *Client) ResolveTarget(ctx context.Context, target string) (tg.InputPeerClass, error) {
 	target = strings.TrimSpace(target)
 	switch {
@@ -118,8 +118,7 @@ func (c *Client) ResolveTarget(ctx context.Context, target string) (tg.InputPeer
 	return c.ResolveUsername(ctx, target)
 }
 
-// ResolveUsername resolves a public username to a peer, remembering the
-// entities the reply carried.
+// ResolveUsername 把公开用户名解析成 peer，并记下回复里带的实体。
 func (c *Client) ResolveUsername(ctx context.Context, username string) (tg.InputPeerClass, error) {
 	resolved, err := c.api.ContactsResolveUsername(ctx, &tg.ContactsResolveUsernameRequest{Username: strings.TrimPrefix(username, "@")})
 	if err != nil {
@@ -130,7 +129,7 @@ func (c *Client) ResolveUsername(ctx context.Context, username string) (tg.Input
 	return c.InputPeer(resolved.Peer)
 }
 
-// InputChannel converts an input peer to an input channel when it is one.
+// InputChannel 在 input peer 是频道时，把它转成 input channel。
 func InputChannel(peer tg.InputPeerClass) (*tg.InputChannel, bool) {
 	channel, ok := peer.(*tg.InputPeerChannel)
 	if !ok {
@@ -139,7 +138,7 @@ func InputChannel(peer tg.InputPeerClass) (*tg.InputChannel, bool) {
 	return &tg.InputChannel{ChannelID: channel.ChannelID, AccessHash: channel.AccessHash}, true
 }
 
-// InputUser converts an input peer to an input user when it is one.
+// InputUser 在 input peer 是用户时，把它转成 input user。
 func InputUser(peer tg.InputPeerClass) (tg.InputUserClass, bool) {
 	switch value := peer.(type) {
 	case *tg.InputPeerUser:
@@ -150,7 +149,7 @@ func InputUser(peer tg.InputPeerClass) (tg.InputUserClass, bool) {
 	return nil, false
 }
 
-// ParseHTML turns Telegram-flavoured HTML into text plus entities.
+// ParseHTML 把 Telegram 风格的 HTML 转成纯文本加实体。
 func ParseHTML(text string) (string, []tg.MessageEntityClass, error) {
 	builder := &entity.Builder{}
 	if err := html.HTML(strings.NewReader(text), builder, html.Options{}); err != nil {
@@ -160,28 +159,25 @@ func ParseHTML(text string) (string, []tg.MessageEntityClass, error) {
 	return plain, entities, nil
 }
 
-// SendOptions tune a send.
+// SendOptions 是一次发送的选项。
 type SendOptions struct {
 	ReplyTo     int
 	LinkPreview bool
 	Silent      bool
 }
 
-// SendHTML sends a message and returns its id.
+// SendHTML 发送一条消息，返回它的 id。
 func (c *Client) SendHTML(ctx context.Context, peer tg.InputPeerClass, text string, options SendOptions) (int, error) {
 	id, _, err := c.SendHTMLRaw(ctx, peer, text, options)
 	return id, err
 }
 
-// SendHTMLRaw sends a message and returns its id together with the raw
-// updates Telegram answered with.
+// SendHTMLRaw 发送一条消息，返回它的 id 和 Telegram 应答的原始更新。
 //
-// Those updates are not delivered to this process by the server: an action
-// taken on this connection is reported in its own RPC result, not pushed
-// back. Ordinary sending discards them, which is right — re-dispatching
-// one's own outgoing message would make a command that sends text starting
-// with the prefix invoke itself. --verify is the one caller that wants
-// them, because it has to drive the dispatcher from inside.
+// 服务器不会把这些更新推送给本进程：在这条连接上做的操作，只在它自己的
+// RPC 结果里报告，不会再推送回来。普通发送直接丢掉它们，这样做是对的：
+// 要是把自己发出的消息重新分发一遍，某个命令发出以前缀开头的文本时，
+// 就会触发它自己。只有 --verify 需要这些更新，因为它得从内部驱动分发器。
 func (c *Client) SendHTMLRaw(ctx context.Context, peer tg.InputPeerClass, text string, options SendOptions) (int, tg.UpdatesClass, error) {
 	plain, entities, err := ParseHTML(text)
 	if err != nil {
@@ -202,17 +198,17 @@ func (c *Client) SendHTMLRaw(ctx context.Context, peer tg.InputPeerClass, text s
 	return id, updates, err
 }
 
-// SendText sends literal text.
+// SendText 按原样发送文本。
 func (c *Client) SendText(ctx context.Context, peer tg.InputPeerClass, text string, options SendOptions) (int, error) {
 	return c.SendHTML(ctx, peer, Escape(text), options)
 }
 
-// SendSelf sends to Saved Messages.
+// SendSelf 发到收藏夹。
 func (c *Client) SendSelf(ctx context.Context, text string) (int, error) {
 	return c.SendHTML(ctx, &tg.InputPeerSelf{}, text, SendOptions{})
 }
 
-// EditMessage replaces a message's text. MESSAGE_NOT_MODIFIED is success.
+// EditMessage 替换消息文本。MESSAGE_NOT_MODIFIED 也算成功。
 func (c *Client) EditMessage(ctx context.Context, peer tg.InputPeerClass, id int, text string, linkPreview bool) error {
 	plain, entities, err := ParseHTML(text)
 	if err != nil {
@@ -229,7 +225,7 @@ func (c *Client) EditMessage(ctx context.Context, peer tg.InputPeerClass, id int
 	return nil
 }
 
-// Edit replaces a message's text with HTML.
+// Edit 用 HTML 替换消息文本。
 func (c *Client) Edit(ctx context.Context, message *Message, text string) error {
 	peer, err := c.InputPeer(message.Peer)
 	if err != nil {
@@ -238,12 +234,12 @@ func (c *Client) Edit(ctx context.Context, message *Message, text string) error 
 	return c.EditMessage(ctx, peer, message.ID, text, false)
 }
 
-// EditText replaces a message's text with literal text.
+// EditText 用原样文本替换消息文本。
 func (c *Client) EditText(ctx context.Context, message *Message, text string) error {
 	return c.Edit(ctx, message, Escape(text))
 }
 
-// Reply sends a new message answering the given one.
+// Reply 发一条新消息，回复给定的那条。
 func (c *Client) Reply(ctx context.Context, message *Message, text string) (int, error) {
 	peer, err := c.InputPeer(message.Peer)
 	if err != nil {
@@ -252,7 +248,7 @@ func (c *Client) Reply(ctx context.Context, message *Message, text string) (int,
 	return c.SendHTML(ctx, peer, text, SendOptions{ReplyTo: message.ID})
 }
 
-// Delete removes messages for everyone.
+// Delete 为所有人删除消息。
 func (c *Client) Delete(ctx context.Context, peer tg.InputPeerClass, ids []int) error {
 	if len(ids) == 0 {
 		return nil
@@ -265,7 +261,7 @@ func (c *Client) Delete(ctx context.Context, peer tg.InputPeerClass, ids []int) 
 	return err
 }
 
-// DeleteMessage removes one message.
+// DeleteMessage 删除一条消息。
 func (c *Client) DeleteMessage(ctx context.Context, message *Message) error {
 	peer, err := c.InputPeer(message.Peer)
 	if err != nil {
@@ -274,7 +270,7 @@ func (c *Client) DeleteMessage(ctx context.Context, message *Message) error {
 	return c.Delete(ctx, peer, []int{message.ID})
 }
 
-// Forward copies messages from one chat to another.
+// Forward 把消息从一个对话转发到另一个对话。
 func (c *Client) Forward(ctx context.Context, from, to tg.InputPeerClass, ids []int) error {
 	randomIDs := make([]int64, len(ids))
 	for index := range ids {
@@ -284,8 +280,7 @@ func (c *Client) Forward(ctx context.Context, from, to tg.InputPeerClass, ids []
 	return err
 }
 
-// GetMessages reads specific messages, remembering the entities the reply
-// carried.
+// GetMessages 读取指定的消息，并记下回复里带的实体。
 func (c *Client) GetMessages(ctx context.Context, peer tg.InputPeerClass, ids []int) ([]*tg.Message, error) {
 	inputs := make([]tg.InputMessageClass, len(ids))
 	for index, id := range ids {
@@ -311,8 +306,8 @@ func (c *Client) GetMessages(ctx context.Context, peer tg.InputPeerClass, ids []
 	return found, nil
 }
 
-// Unpack reads a messages reply, remembers its entities and returns the
-// messages plus whether the reply carried a total count.
+// Unpack 读取一个消息列表类的回复，记下其中的实体，返回消息和回复里的
+// 总数。回复本身不带总数时（MessagesMessages），总数就是这一批的条数。
 func (c *Client) Unpack(result tg.MessagesMessagesClass) ([]tg.MessageClass, int) {
 	switch value := result.(type) {
 	case *tg.MessagesMessages:
@@ -331,7 +326,7 @@ func (c *Client) Unpack(result tg.MessagesMessagesClass) ([]tg.MessageClass, int
 	return nil, 0
 }
 
-// GetReply reads the message this one replies to, or nil.
+// GetReply 读取这条消息所回复的消息，没有则返回 nil。
 func (c *Client) GetReply(ctx context.Context, message *Message) (*Message, error) {
 	if message.ReplyToID == 0 {
 		return nil, nil
@@ -360,7 +355,7 @@ func (c *Client) GetReply(ctx context.Context, message *Message) (*Message, erro
 	return nil, nil
 }
 
-// SendDocument uploads bytes and sends them as a file with an HTML caption.
+// SendDocument 上传字节，作为文件发送，并附上 HTML 说明文字。
 func (c *Client) SendDocument(ctx context.Context, peer tg.InputPeerClass, name, mimeType string, data []byte, caption string, replyTo int) error {
 	file, err := c.upload.FromBytes(ctx, name, data)
 	if err != nil {
@@ -382,10 +377,10 @@ func (c *Client) SendDocument(ctx context.Context, peer tg.InputPeerClass, name,
 	return err
 }
 
-// FloodWait reports the wait a FLOOD_WAIT error asks for.
+// FloodWait 返回 FLOOD_WAIT 错误要求等待的时长。
 func FloodWait(err error) (time.Duration, bool) { return tgerr.AsFloodWait(err) }
 
-// Escape renders untrusted text safe for the HTML parse mode.
+// Escape 转义不可信的文本，让它在 HTML 解析模式下是安全的。
 func Escape(value string) string {
 	var b strings.Builder
 	b.Grow(len(value))
@@ -406,34 +401,32 @@ func Escape(value string) string {
 	return b.String()
 }
 
-// Code wraps escaped text in <code>.
+// Code 把转义后的文本包进 <code>。
 func Code(value string) string { return "<code>" + Escape(value) + "</code>" }
 
-// Bold wraps escaped text in <b>.
+// Bold 把转义后的文本包进 <b>。
 func Bold(value string) string { return "<b>" + Escape(value) + "</b>" }
 
-// UserID renders a user id.
+// UserID 把用户 id 转成字符串。
 func UserID(id int64) string { return strconv.FormatInt(id, 10) }
 
-// DocumentOptions describe an uploaded document beyond its bytes.
+// DocumentOptions 描述上传的文档除字节内容之外的信息。
 type DocumentOptions struct {
-	// Name is the file name Telegram records.
+	// Name 是 Telegram 记录的文件名。
 	Name string
-	// MimeType is the declared content type.
+	// MimeType 是声明的内容类型。
 	MimeType string
-	// Caption is HTML, and may be empty.
+	// Caption 是 HTML，可以为空。
 	Caption string
-	// ReplyTo answers a message, when non-zero.
+	// ReplyTo 非零时，回复对应的那条消息。
 	ReplyTo int
-	// Attributes beyond the file name — a sticker attribute and an image
-	// size, for the commands that send stickers.
+	// Attributes 是文件名以外的属性：发贴纸的命令会放入贴纸属性和图片尺寸。
 	Attributes []tg.DocumentAttributeClass
-	// ForceDocument sends the file as a plain document rather than letting
-	// Telegram interpret it.
+	// ForceDocument 把文件当普通文档发送，不让 Telegram 自行解读它。
 	ForceDocument bool
 }
 
-// SendDocumentWith uploads bytes and sends them with the given attributes.
+// SendDocumentWith 上传字节，并带上给定的属性发送。
 func (c *Client) SendDocumentWith(ctx context.Context, peer tg.InputPeerClass, data []byte, options DocumentOptions) error {
 	file, err := c.upload.FromBytes(ctx, options.Name, data)
 	if err != nil {
@@ -456,8 +449,8 @@ func (c *Client) SendDocumentWith(ctx context.Context, peer tg.InputPeerClass, d
 	return err
 }
 
-// SendPhoto uploads an image and sends it as a photo, so clients show it
-// inline rather than as a file to download.
+// SendPhoto 上传图片并作为照片发送，这样客户端会直接显示它，
+// 而不是显示成一个要下载的文件。
 func (c *Client) SendPhoto(ctx context.Context, peer tg.InputPeerClass, name string, data []byte, caption string, replyTo int) error {
 	file, err := c.upload.FromBytes(ctx, name, data)
 	if err != nil {
@@ -479,8 +472,8 @@ func (c *Client) SendPhoto(ctx context.Context, peer tg.InputPeerClass, name str
 	return err
 }
 
-// UploadDocument uploads bytes and registers them as a document Telegram
-// will accept in a sticker RPC, which only takes an InputDocument.
+// UploadDocument 上传字节并登记成文档，供贴纸相关的 RPC 使用，
+// 这些 RPC 只接受 InputDocument。
 func (c *Client) UploadDocument(ctx context.Context, name, mimeType string, data []byte) (*tg.InputDocument, error) {
 	file, err := c.upload.FromBytes(ctx, name, data)
 	if err != nil {

@@ -23,8 +23,8 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/store"
 )
 
-// The sum command keeps the JSON layout MiBox's sum plugin wrote
-// (assets/sum/database.json), so data/sum.json can be copied over.
+// sum 命令沿用 MiBox 的 sum 插件写的 JSON 结构（assets/sum/database.json），
+// 所以 data/sum.json 可以直接复制过来。
 
 const sumDefaultPrompt = "你是 Telegram 群聊摘要助手。根据以下聊天记录，只输出 Telegram HTML 格式的中文总结。\n\n允许使用 <b>、<code>、<a href=\"...\">、<blockquote expandable>；禁止使用 Markdown、#、**、```、[文字](链接)、裸 URL、<https://...>。聊天记录中每条消息末尾都有“来源”链接。每条摘要、资源、结论、互动、零散信息或时间线条目都必须附带最对应的 Telegram 原消息链接，格式为 <a href=\"Telegram消息链接\">来源</a>；不要编造链接。\n\n只记录聊天中明确出现的事实、反馈、决定和计划。只有存在明确完成反馈、验证结果或维护者确认时，才可使用“已确认”“已解决”“已完成”等表达；个人测试、成员讨论或推测使用“有人反馈”“初步判断”“可能”“尚待复测”“未见最终确认”等表述。不要把“计划支持”“准备测试”“正在修改”写成已经实现或可用。合并重复消息，忽略纯寒暄、表情、广告、机器人状态和无结论闲聊。\n\n总长度控制在 900-1600 个中文字符；重要讨论较多时可接近上限。信息应完整、可回溯，但不要逐条复述聊天记录。\n\n固定输出：\n<b>📌 本次摘要</b>\n用 2-3 句话概括本次聊天背景、关键结果和当前状态；末尾附 1-2 个 <a href=\"Telegram消息链接\">来源</a>。\n\n随后按实际内容选择下列栏目，不相关的栏目完全不要输出：\n<b>💬 主要话题</b>：日常交流、综合讨论、一般观点或群内共识。\n<b>🧩 技术与项目</b>：技术方案、配置、开发、排障、版本更新、命令和实现细节。\n<b>📰 资源分享</b>：重要外部链接、文件、工具、新闻或可复用资源。\n<b>👥 重要互动</b>：明确的求助、答复、邀请、提醒、分工、争议或值得关注的人际互动。\n<b>🗂 零散信息</b>：无法归入其他栏目但值得保留的版本、环境、数据、状态、背景或简短结论。\n<b>🕒 时间线梳理</b>：仅在同一轮聊天出现多个明确时间点，且时间顺序有助于理解事件进展时输出。\n\n不要输出“待处理事项”“行动项”“下一步”这类面向管理者的栏目；群成员未必负责跟进。若聊天中存在未解决问题、风险或后续计划，将其放入最相关的上述栏目，并使用“仍待确认”“尚待复测”“计划继续”等中性表述。\n\n每个栏目使用以下格式：\n<b>栏目标题</b>\n<blockquote expandable>• 要点：说明结论、必要背景、明确分歧、风险或计划 <a href=\"Telegram消息链接\">来源</a>\n• 要点：说明结论、必要背景、明确分歧、风险或计划 <a href=\"Telegram消息链接\">来源</a></blockquote>\n\n规则：\n1. 每个栏目 1-3 条；每条建议 35-90 个中文字符。内容多时优先压缩重复过程，保留结论、关键依据、数据、风险和计划。\n2. 技术内容较多时，可在 <b>🧩 技术与项目</b> 内使用 <b>1. 小标题</b> 分组；最多 3 个小标题，每个小标题只保留 1-2 条。\n3. 时间线每条使用“<code>HH:MM</code>：事件概述 <a href=\"Telegram消息链接\">来源</a>”；最多 4 条，只保留转折、决定、故障、修复或重要更新。\n4. 命令、模型名、插件名、配置名、版本号、错误码使用 <code>...</code>。\n5. 外部链接仅在确实影响后续操作时保留，格式为 <a href=\"完整URL\">名称</a>，并在同一条末尾保留 Telegram <a href=\"Telegram消息链接\">来源</a>。\n6. 不输出空栏目、“无”“暂无”“未发现”或处理过程。每个栏目之间空一行，只输出最终总结。"
 
@@ -604,7 +604,7 @@ func sumHelp(prefix string) string {
 		"sum config set 名称 model|url|key|type 值</code>\n• <code>" + p + "sum config set preview|spoiler on|off</code>\n• <code>" + p + "sum config set reasoning|service 值</code>\n• <code>" + p + "sum config set prompt 内容|reset|show</code>\n• <code>" + p + "sum config del 名称</code>"
 }
 
-// Sum registers .sum and its scheduled tasks.
+// Sum 注册 .sum 及其定时任务。
 func Sum(a *app.App) {
 	service := &sumService{a: a, store: newStore(a, "sum.json", sumDefaults), cron: cron.New(), entries: map[string]cron.EntryID{}, running: map[string]bool{}}
 	a.Registry.AddJob(func(ctx context.Context, client *bot.Client) {

@@ -17,8 +17,8 @@ import (
 
 const account = `{"api_id": 1234567, "api_hash": "abc", "session": "1xyz"}`
 
-// deployment lays out a directory the way a running one looks, caches
-// and all, so the test can see what gets left behind.
+// deployment 按运行中部署的样子布置一个目录，连缓存都有，
+// 这样测试能看出哪些东西没有被带走。
 func deployment(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
@@ -89,8 +89,8 @@ func TestRoundTripKeepsConfigurationAndDropsTheRest(t *testing.T) {
 	}
 }
 
-// The file names have one definition each elsewhere; if either moves,
-// backups would silently stop carrying the session.
+// 这些文件名在别处各有一份定义；任何一边改了，备份就会悄悄地
+// 不再带上会话。
 func TestSessionFileNameMatchesTheApp(t *testing.T) {
 	found := false
 	for _, name := range rootFiles {
@@ -120,8 +120,8 @@ func TestRefusesToReplaceAnAccountUnlessAsked(t *testing.T) {
 	}
 }
 
-// The trap Restore exists to avoid: an older gotd-session.json outranks
-// config.json at start-up, so leaving one behind keeps the old account.
+// Restore 要避开的正是这个坑：启动时旧的 gotd-session.json 优先于
+// config.json，留下一个就会继续用旧账号。
 func TestOverwriteRemovesASessionTheBackupDoesNotReplace(t *testing.T) {
 	source := deployment(t)
 	os.Remove(filepath.Join(source, "gotd-session.json"))
@@ -143,7 +143,7 @@ func TestOverwriteRemovesASessionTheBackupDoesNotReplace(t *testing.T) {
 	}
 }
 
-// forge builds an archive by hand, to say things Create never would.
+// forge 手工构造一个归档，用来写出 Create 永远不会写的内容。
 func forge(t *testing.T, entries map[string]string, withManifest bool, kind byte) []byte {
 	t.Helper()
 	var out bytes.Buffer
@@ -169,7 +169,7 @@ func forge(t *testing.T, entries map[string]string, withManifest bool, kind byte
 	return out.Bytes()
 }
 
-// Every one of these must be refused, and refused before anything lands.
+// 下面每一个都必须被拒绝，而且要在写入任何东西之前拒绝。
 func TestRejectsWhatABackupNeverHolds(t *testing.T) {
 	cases := map[string][]byte{
 		"climbs out":          forge(t, map[string]string{"../escape.json": "{}"}, true, tar.TypeReg),
@@ -193,7 +193,7 @@ func TestRejectsWhatABackupNeverHolds(t *testing.T) {
 	}
 }
 
-// A download cut off half way must leave the directory as it was.
+// 下载到一半断掉时，目录必须保持原样。
 func TestTruncatedArchiveWritesNothing(t *testing.T) {
 	archive, _, err := Create(deployment(t), "0.1.12", time.Now())
 	if err != nil {

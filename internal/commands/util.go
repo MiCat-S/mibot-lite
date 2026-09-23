@@ -18,7 +18,7 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/store"
 )
 
-// userError is a message meant for the chat, not the log.
+// userError 是要显示在聊天里的消息，不是写给日志的。
 type userError struct{ text string }
 
 func (e userError) Error() string { return e.text }
@@ -27,7 +27,7 @@ func fail(text string) error { return userError{text: text} }
 
 func failf(format string, args ...any) error { return userError{text: fmt.Sprintf(format, args...)} }
 
-// isUserError reports whether err carries a chat-facing message.
+// isUserError 判断 err 是否带着要发到聊天里的消息。
 func isUserError(err error) (string, bool) {
 	var ue userError
 	if errors.As(err, &ue) {
@@ -36,7 +36,7 @@ func isUserError(err error) (string, bool) {
 	return "", false
 }
 
-// feedback renders a status line the way MiBox's ui.renderFeedback did.
+// feedback 按 MiBox 的 ui.renderFeedback 的样式生成一行状态。
 func feedback(state, title, detail string) string {
 	icon := "⏳"
 	switch state {
@@ -52,18 +52,17 @@ func feedback(state, title, detail string) string {
 	return text
 }
 
-// dataPath is where a command family keeps its JSON document.
+// dataPath 是一类命令存放其 JSON 文档的位置。
 func dataPath(a *app.App, name string) string {
 	return filepath.Join(a.DataDir(), name)
 }
 
-// newStore opens a command family's document.
+// newStore 打开一类命令的文档。
 func newStore[T any](a *app.App, name string, defaults func() T) *store.Store[T] {
 	return store.New(dataPath(a, name), defaults)
 }
 
-// sendPages edits the command message with the first page and replies with
-// the rest.
+// sendPages 把命令消息编辑成第一页，其余各页作为回复发出。
 func sendPages(ctx context.Context, inv *command.Invocation, pages []string) error {
 	for index, page := range pages {
 		if err := ctx.Err(); err != nil {
@@ -82,7 +81,7 @@ func sendPages(ctx context.Context, inv *command.Invocation, pages []string) err
 	return nil
 }
 
-// onOff parses on|off.
+// onOff 解析 on|off。
 func onOff(value string) (bool, error) {
 	switch strings.ToLower(value) {
 	case "on":
@@ -93,7 +92,7 @@ func onOff(value string) (bool, error) {
 	return false, fail("请输入 on 或 off")
 }
 
-// sleepCtx waits or returns when ctx ends.
+// sleepCtx 等待 d，ctx 结束时提前返回。
 func sleepCtx(ctx context.Context, d time.Duration) error {
 	if d <= 0 {
 		return ctx.Err()
@@ -108,8 +107,8 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// retryFlood runs fn, waiting out FLOOD_WAIT and backing off on other
-// errors, up to attempts retries.
+// retryFlood 执行 fn：遇到 FLOOD_WAIT 就等够规定的时间，遇到其他错误则
+// 退避，最多重试 attempts 次。
 func retryFlood(ctx context.Context, attempts int, fn func() error) error {
 	for attempt := 0; ; attempt++ {
 		err := fn()
@@ -126,11 +125,10 @@ func retryFlood(ctx context.Context, attempts int, fn func() error) error {
 	}
 }
 
-// rpcCode extracts the Telegram error code from an error, else a short
-// description.
+// rpcCode 从错误里取出 Telegram 错误码，取不到就给一段简短描述。
 func rpcCode(err error) string { return command.Brief(err) }
 
-// utf16Slice cuts a string by UTF-16 offsets, the unit Telegram entities use.
+// utf16Slice 按 UTF-16 偏移截取字符串，Telegram 的 entity 用的就是这个单位。
 func utf16Slice(text string, offset, length int) string {
 	units := utf16.Encode([]rune(text))
 	if offset < 0 || length <= 0 || offset >= len(units) {
@@ -143,7 +141,7 @@ func utf16Slice(text string, offset, length int) string {
 	return string(utf16.Decode(units[offset:end]))
 }
 
-// utf16Len is the length Telegram counts a message in.
+// utf16Len 是按 Telegram 的算法得出的消息长度。
 func utf16Len(text string) int {
 	count := 0
 	for _, r := range text {
@@ -156,7 +154,7 @@ func utf16Len(text string) int {
 	return count
 }
 
-// peerKey renders a peer as "kind:id", the comparison the dme port makes.
+// peerKey 把 peer 写成 "kind:id"，dme 移植版就是按这个来比较的。
 func peerKey(peer tg.PeerClass) string {
 	switch value := peer.(type) {
 	case *tg.PeerUser:
@@ -169,7 +167,7 @@ func peerKey(peer tg.PeerClass) string {
 	return ""
 }
 
-// truncateRunes cuts text to at most n runes.
+// truncateRunes 把 text 截到最多 n 个 rune。
 func truncateRunes(text string, n int) string {
 	runes := []rune(text)
 	if len(runes) <= n {
@@ -178,8 +176,8 @@ func truncateRunes(text string, n int) string {
 	return string(runes[:n])
 }
 
-// chatHTMLError turns a handler error into the chat message shown for it,
-// or "" for a generic failure.
+// chatHTMLError 把处理函数返回的错误转成要在聊天里显示的消息；
+// 一般性的失败返回 ""。
 func chatHTMLError(err error) string {
 	if text, ok := isUserError(err); ok {
 		return command.Escape(text)

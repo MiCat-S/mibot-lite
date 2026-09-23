@@ -14,7 +14,7 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/httpx"
 )
 
-// ipResult is ip-api.com's answer, restricted to the fields asked for.
+// ipResult 是 ip-api.com 的应答，只含请求时指定的字段。
 type ipResult struct {
 	Status     string `json:"status"`
 	Message    string `json:"message"`
@@ -30,8 +30,8 @@ type ipResult struct {
 	Hosting    bool   `json:"hosting"`
 }
 
-// The free ip-api endpoint is plain HTTP; HTTPS is its paid tier. What
-// travels in the clear is the address being looked up, nothing else.
+// ip-api 的免费接口只有明文 HTTP，HTTPS 要付费。明文传输的只有要查的
+// 那个地址，没有别的。
 const ipAPI = "http://ip-api.com/json/%s?lang=zh-CN&fields=status,message,country,regionName,city,isp,org,as,query,timezone,proxy,hosting"
 
 var (
@@ -40,8 +40,8 @@ var (
 	domainInText = regexp.MustCompile(`\b(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}\b`)
 )
 
-// findAddress picks what to look up out of a replied message: an address
-// if there is one, else a domain. A URL counts by its host.
+// findAddress 从被回复的消息里挑出要查的东西：有 IP 地址就用地址，
+// 没有就用域名。URL 按其中的主机名算。
 func findAddress(text string) string {
 	for _, field := range strings.Fields(text) {
 		if parsed, err := url.Parse(field); err == nil && parsed.Host != "" {
@@ -110,7 +110,7 @@ func ipHelp(prefix string) string {
 		"• 回复一条含 IP、域名或链接的消息发 <code>" + p + "ip</code>\n\n数据来自 ip-api.com。"
 }
 
-// binResult is binlist.net's answer.
+// binResult 是 binlist.net 的应答。
 type binResult struct {
 	Scheme  string `json:"scheme"`
 	Type    string `json:"type"`
@@ -144,9 +144,8 @@ var (
 	businessCard = regexp.MustCompile(`(?i)BUSINESS|CORPORATE|COMMERCIAL`)
 )
 
-// binDigits keeps the first eight digits of whatever was typed. Only the
-// issuer prefix is ever needed; the rest of a card number has no business
-// leaving the machine, so it is dropped before any request is made.
+// binDigits 只保留输入内容里的前 8 位数字。用得上的只有发卡行前缀；
+// 卡号其余部分没有理由离开这台机器，所以在发出任何请求之前就丢掉。
 func binDigits(input string) (string, bool) {
 	var digits strings.Builder
 	for _, r := range input {
@@ -219,7 +218,7 @@ func binHelp(prefix string) string {
 		"只会用前 8 位去查，多输入的数字在发请求之前就丢掉了。数据来自 binlist.net，免费额度很小，查多了会限流。"
 }
 
-// Lookup registers .ip and .bin.
+// Lookup 注册 .ip 和 .bin。
 func Lookup(a *app.App) {
 	ipHandle := func(ctx context.Context, inv *command.Invocation) error {
 		query := strings.TrimSpace(inv.Rest(0))

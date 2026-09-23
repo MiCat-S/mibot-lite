@@ -26,14 +26,13 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/store"
 )
 
-// Speed is measured by Ookla's official Speedtest CLI: it picks a nearby
-// server, knows the ISP, and publishes a result page that everyone already
-// recognises. When the CLI is not installed this command installs it once,
-// into its own data directory, and reuses it from then on.
+// 测速用的是 Ookla 官方的 Speedtest CLI：它会自己挑就近的服务器，认得出
+// ISP，还会发布一个大家都认得的结果页。没装 CLI 时，本命令会把它装一次到
+// 自己的数据目录里，之后一直复用。
 
-// reading is one complete measurement, however it was taken.
+// reading 是一次完整的测量结果，不管是用哪种方式测的。
 type reading struct {
-	// Source names what produced it, for the line that says so.
+	// Source 是产生这次结果的工具名，用在注明来源的那一行里。
 	Source     string
 	Latency    time.Duration
 	Jitter     time.Duration
@@ -45,8 +44,8 @@ type reading struct {
 	ExternalIP string
 }
 
-// ooklaResult is `speedtest -f json` from the official CLI. Its bandwidth
-// figures are bytes per second.
+// ooklaResult 对应官方 CLI 的 `speedtest -f json` 输出，其中的带宽数值
+// 单位是字节每秒。
 type ooklaResult struct {
 	Ping struct {
 		Latency float64 `json:"latency"`
@@ -72,7 +71,7 @@ type ooklaResult struct {
 	} `json:"interface"`
 }
 
-// pythonResult is `speedtest-cli --json`. Its figures are bits per second.
+// pythonResult 对应 `speedtest-cli --json` 的输出，其中的数值单位是比特每秒。
 type pythonResult struct {
 	Download float64 `json:"download"`
 	Upload   float64 `json:"upload"`
@@ -89,10 +88,9 @@ type pythonResult struct {
 	Share string `json:"share"`
 }
 
-// Ookla publishes a static binary that needs no package manager and no
-// root. The version and its digest are pinned here: this downloads an
-// executable and then runs it, so "it came over HTTPS from the right
-// domain" is not enough on its own.
+// Ookla 发布了静态编译的二进制，不需要包管理器，也不需要 root。版本号和
+// 摘要都固定在这里：这段代码会下载一个可执行文件然后运行它，光凭「它是
+// 从正确的域名经 HTTPS 下载的」还不够。
 const ooklaVersion = "1.2.0"
 
 var ooklaDigests = map[string]string{
@@ -102,8 +100,8 @@ var ooklaDigests = map[string]string{
 
 var ooklaArchives = map[string]string{"amd64": "x86_64", "arm64": "aarch64"}
 
-// externalTool finds an installed speedtest command, preferring Ookla's
-// own, and including the copy this command may have installed itself.
+// externalTool 查找已安装的 speedtest 命令，优先用 Ookla 官方的，
+// 本命令自己装的那份也算在内。
 func externalTool(dataDir string) (string, string) {
 	if path, err := exec.LookPath("speedtest"); err == nil {
 		return path, "ookla"
@@ -118,12 +116,10 @@ func externalTool(dataDir string) (string, string) {
 	return "", ""
 }
 
-// installOokla fetches the official static binary into the deployment's
-// own data directory.
+// installOokla 把官方静态二进制下载到本部署自己的数据目录。
 //
-// It goes there rather than into /usr/local/bin because this program
-// should not be editing the system on its own initiative, and because a
-// deployment that is deleted should take everything it installed with it.
+// 放在这里而不是 /usr/local/bin，是因为这个程序不该自作主张去改系统，
+// 而且部署被删掉时，它装过的东西也应该跟着一起消失。
 func installOokla(ctx context.Context, dataDir string) (string, error) {
 	archive, ok := ooklaArchives[runtime.GOARCH]
 	digest, hasDigest := ooklaDigests[runtime.GOARCH]
@@ -154,7 +150,7 @@ func installOokla(ctx context.Context, dataDir string) (string, error) {
 	return binary, nil
 }
 
-// extractOokla pulls just the speedtest executable out of the tarball.
+// extractOokla 只从压缩包里取出 speedtest 这一个可执行文件。
 func extractOokla(archive []byte, target string) (string, error) {
 	stream, err := gzip.NewReader(bytes.NewReader(archive))
 	if err != nil {
@@ -170,9 +166,8 @@ func extractOokla(archive []byte, target string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		// Only the one file, matched by its exact name: an archive entry
-		// is untrusted input, and a path from one has no business
-		// deciding where this writes.
+		// 只要这一个文件，并且按确切的文件名匹配：压缩包里的条目是
+		// 不可信输入，不能让条目里的路径决定这里往哪儿写。
 		if header.Typeflag != tar.TypeReg || filepath.Base(header.Name) != "speedtest" || strings.ContainsRune(header.Name, os.PathSeparator) {
 			continue
 		}
@@ -197,14 +192,12 @@ func extractOokla(archive []byte, target string) (string, error) {
 	return "", fail("Ookla CLI 压缩包里没有可执行文件")
 }
 
-// runExternal drives the installed speedtest tool.
+// runExternal 调用已安装的 speedtest 工具。
 //
-// home is where the tool is allowed to keep its own state. It matters:
-// the Ookla CLI reads $HOME to find where it recorded the licence, and
-// under this service's sandbox $HOME is unset, which it does not survive
-// — it aborts on a null string before it measures anything. Handing it a
-// writable directory of its own is also what keeps ProtectSystem=strict
-// from being the thing that breaks it.
+// home 是允许该工具存放自身状态的目录。这一点很关键：Ookla CLI 要读
+// $HOME 来找它记录许可协议的位置，而在本服务的沙箱里 $HOME 没有设置，
+// 它扛不住——还没开始测就因为一个空字符串直接中止。给它一个自己可写的
+// 目录，也能避免 ProtectSystem=strict 把它搞坏。
 func runExternal(ctx context.Context, path, kind, home string, server int) (*reading, error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
@@ -226,8 +219,8 @@ func runExternal(ctx context.Context, path, kind, home string, server int) (*rea
 	}
 	tool := exec.CommandContext(ctx, path, arguments...)
 	tool.Env = append(os.Environ(), "HOME="+home)
-	// Both streams are kept: the tool says why it failed on stderr, and
-	// "exit status 2" on its own sent me looking in the wrong place.
+	// 两路输出都留着：工具会在 stderr 上说明失败原因，
+	// 只有一句 "exit status 2" 的话，看不出真正的原因。
 	var out, complaint bytes.Buffer
 	tool.Stdout = &out
 	tool.Stderr = &complaint
@@ -238,7 +231,7 @@ func runExternal(ctx context.Context, path, kind, home string, server int) (*rea
 		return nil, fmt.Errorf("%s failed: %w", kind, err)
 	}
 	output := out.Bytes()
-	// Ookla prints one JSON object per line and ends with the result.
+	// Ookla 每行输出一个 JSON 对象，最后一行是结果。
 	line := output
 	if index := strings.LastIndexByte(strings.TrimSpace(string(output)), '\n'); index >= 0 {
 		line = []byte(strings.TrimSpace(string(output))[index+1:])
@@ -253,7 +246,7 @@ func runExternal(ctx context.Context, path, kind, home string, server int) (*rea
 		return &reading{
 			Source: "Ookla Speedtest", Latency: durationFromMillis(parsed.Ping.Latency),
 			Jitter: durationFromMillis(parsed.Ping.Jitter),
-			// Ookla reports bytes per second.
+			// Ookla 报的是字节每秒。
 			Download: parsed.Download.Bandwidth * 8, Upload: parsed.Upload.Bandwidth * 8,
 			Server: where, ISP: parsed.ISP, Link: parsed.Result.URL,
 			ExternalIP: parsed.Interface.ExternalIP,
@@ -272,7 +265,7 @@ func runExternal(ctx context.Context, path, kind, home string, server int) (*rea
 	}, nil
 }
 
-// speedServer is one entry of `speedtest -f json -L`.
+// speedServer 是 `speedtest -f json -L` 输出里的一项。
 type speedServer struct {
 	ID       int    `json:"id"`
 	Host     string `json:"host"`
@@ -281,11 +274,10 @@ type speedServer struct {
 	Country  string `json:"country"`
 }
 
-// listServers asks the CLI which servers it can see from here.
+// listServers 问 CLI 从这台机器能看到哪些服务器。
 //
-// Ookla orders them by its own idea of proximity, so the first entries are
-// the ones worth pinning; the whole list is hundreds long and no use in a
-// chat.
+// Ookla 按它自己判断的远近排序，所以排在前面的才值得固定；
+// 完整列表有好几百项，放进聊天里没什么用。
 func listServers(ctx context.Context, path, home string) ([]speedServer, error) {
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
@@ -315,24 +307,23 @@ func listServers(ctx context.Context, path, home string) ([]speedServer, error) 
 	return parsed.Servers, nil
 }
 
-// speedListLimit is how many servers a chat message can usefully hold.
+// speedListLimit 是一条聊天消息里值得列出的服务器数量上限。
 const speedListLimit = 12
 
-// speedNameLimit keeps one server on one line.
+// speedNameLimit 保证每台服务器只占一行。
 const speedNameLimit = 28
 
-// renderServers lays the list out one server per line.
+// renderServers 把列表排成每台服务器一行。
 //
-// Two lines each with an indented location was 20 lines for 10 servers and
-// read as a wall. A monospace table would align the ids, but the names
-// come back in Japanese as often as not and CJK widths do not align in a
-// pre block anyway, so the id is simply first and the rest follows it.
+// 以前每台占两行、第二行缩进写位置，10 台就是 20 行，读起来像一堵墙。
+// 等宽表格能让 ID 对齐，但服务器名经常是日文，而 CJK 字符在 pre 块里
+// 本来就对不齐，所以干脆把 ID 放在最前面，其余内容跟在后面。
 func renderServers(servers []speedServer, pinned int, prefix string) string {
 	shown := servers
 	if len(shown) > speedListLimit {
 		shown = shown[:speedListLimit]
 	}
-	// When they are all in one country, saying so once is enough.
+	// 全都在同一个国家时，只说一次就够了。
 	common := ""
 	for index, server := range shown {
 		if index == 0 {
@@ -364,7 +355,7 @@ func renderServers(servers []speedServer, pinned int, prefix string) string {
 		}
 		lines = append(lines, line)
 	}
-	// A worked example beats a placeholder: the id below can be copied.
+	// 给现成的例子比给占位符好：下面的 ID 可以直接复制。
 	sample := strconv.Itoa(shown[0].ID)
 	if pinned > 0 {
 		sample = strconv.Itoa(pinned)
@@ -375,9 +366,8 @@ func renderServers(servers []speedServer, pinned int, prefix string) string {
 	return strings.Join(lines, "\n")
 }
 
-// resultImage fetches the picture Speedtest publishes for a result, or
-// nil when there is none to be had. A missing image is not a failure: the
-// measurement is the point and the numbers are already in hand.
+// resultImage 获取 Speedtest 为结果发布的图片，拿不到时返回 nil。
+// 没有图片不算失败：测量本身才是重点，数字已经到手了。
 func resultImage(ctx context.Context, link string) []byte {
 	if !strings.HasPrefix(link, "https://www.speedtest.net/result/") {
 		return nil
@@ -389,21 +379,19 @@ func resultImage(ctx context.Context, link string) []byte {
 	if err != nil || !response.OK() || len(response.Body) < 1024 {
 		return nil
 	}
-	// Only a real PNG is forwarded: an error page rendered as an image
-	// would be worse than no image.
+	// 只转发真正的 PNG：把错误页当成图片发出去，还不如不发。
 	if len(response.Body) < 8 || string(response.Body[1:4]) != "PNG" {
 		return nil
 	}
 	return response.Body
 }
 
-// lastLine returns the final non-empty line, which is where these tools
-// put the reason they gave up.
+// lastLine 返回最后一个非空行，这些工具放弃时就把原因写在那里。
 //
-// Ookla writes that line as a JSON log record. Its message field is a
-// sentence a person can act on ("Could not retrieve or read
-// configuration"); the surrounding JSON is noise in a chat, so it is
-// unwrapped when it parses and kept verbatim when it does not.
+// Ookla 把这一行写成一条 JSON 日志记录。其中的 message 字段是一句人看了
+// 就知道该怎么办的话（"Could not retrieve or read configuration"）；
+// 外面那层 JSON 在聊天里只是噪音，所以能解析时就拆出来，解析不了就原样
+// 保留。
 func lastLine(text string) string {
 	lines := strings.Split(strings.TrimSpace(text), "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
@@ -425,14 +413,12 @@ func lastLine(text string) string {
 	return ""
 }
 
-// explainCLI turns the CLI's own wording into something actionable.
+// explainCLI 把 CLI 自己的措辞换成能照着做的提示。
 //
-// Both of these were met here for real. Running the test many times in an
-// afternoon got this host refused by Ookla's configuration endpoint, and
-// the message for that says "ConfigurationError", which reads like a
-// broken install rather than "wait a while". A listed server that will
-// not answer says "Cannot read from socket", which reads like a local
-// network fault rather than "pick another one".
+// 这两种情况都真实遇到过。一个下午里测了很多次之后，这台主机被 Ookla 的
+// 配置接口拒绝，这时的报错是 "ConfigurationError"，看起来像是安装坏了，
+// 而不是「等一会儿再试」。列表里的服务器不应答时报的是 "Cannot read from
+// socket"，看起来像本地网络故障，而不是「换一台」。
 func explainCLI(detail string) string {
 	switch {
 	case strings.Contains(detail, "Configuration"):
@@ -449,9 +435,8 @@ func durationFromMillis(value float64) time.Duration {
 	return time.Duration(value * float64(time.Millisecond))
 }
 
-// maskAddress hides the host's own address. The result goes into a chat,
-// and a server's public IP is not something a speed reading needs to
-// publish.
+// maskAddress 隐藏主机自己的地址。结果是要发到聊天里的，
+// 而测速结果没必要公开服务器的公网 IP。
 func maskAddress(address string) string {
 	if address == "" {
 		return "未知"
@@ -470,7 +455,7 @@ func maskAddress(address string) string {
 	return parts[0] + "." + parts[1] + ".x.x"
 }
 
-// formatSpeed renders bits per second at a sensible scale.
+// formatSpeed 把比特每秒换算成合适的量级显示。
 func formatSpeed(bitsPerSecond float64) string {
 	switch {
 	case bitsPerSecond >= 1e9:
@@ -511,7 +496,7 @@ func speedtestHelp(dataDir, prefix string, pinned int) string {
 		"指定的服务器测不通时会自动退回自动挑选，并在结果里说明。输出里的出口地址会打码。"
 }
 
-// render lays out a finished reading.
+// render 排版一次完成的测量结果。
 func render(result *reading, elapsed time.Duration, note string) string {
 	lines := []string{"🚀 <b>网络测速</b>", ""}
 	if result.Server != "" {

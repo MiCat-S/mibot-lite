@@ -1,6 +1,5 @@
-// Package command is the registry and dispatcher: it parses a prefix and a
-// command name out of an outgoing message and runs the handler on its own
-// goroutine with a timeout.
+// Package command 是命令的注册表和分发器：从发出的消息里解析出前缀和
+// 命令名，在单独的 goroutine 里带超时运行对应的处理函数。
 package command
 
 import (
@@ -18,7 +17,7 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/bot"
 )
 
-// Invocation is one parsed command.
+// Invocation 是解析好的一次命令调用。
 type Invocation struct {
 	Prefix  string
 	Command string
@@ -29,7 +28,7 @@ type Invocation struct {
 	Log     *slog.Logger
 }
 
-// Arg returns the i-th argument or "".
+// Arg 返回第 i 个参数，没有就返回 ""。
 func (inv *Invocation) Arg(index int) string {
 	if index < len(inv.Args) {
 		return inv.Args[index]
@@ -37,7 +36,7 @@ func (inv *Invocation) Arg(index int) string {
 	return ""
 }
 
-// Rest joins the arguments from index on.
+// Rest 把从 index 开始的参数拼起来。
 func (inv *Invocation) Rest(index int) string {
 	if index >= len(inv.Args) {
 		return ""
@@ -45,49 +44,48 @@ func (inv *Invocation) Rest(index int) string {
 	return strings.TrimSpace(strings.Join(inv.Args[index:], " "))
 }
 
-// Edit replaces the command message with HTML.
+// Edit 把命令消息改成 HTML 内容。
 func (inv *Invocation) Edit(ctx context.Context, html string) error {
 	return inv.Client.Edit(ctx, inv.Message, html)
 }
 
-// EditText replaces the command message with literal text.
+// EditText 把命令消息改成纯文本，原样显示。
 func (inv *Invocation) EditText(ctx context.Context, text string) error {
 	return inv.Client.EditText(ctx, inv.Message, text)
 }
 
-// Reply answers the command message with HTML.
+// Reply 用 HTML 回复命令消息。
 func (inv *Invocation) Reply(ctx context.Context, html string) error {
 	_, err := inv.Client.Reply(ctx, inv.Message, html)
 	return err
 }
 
-// Command is one registered command.
+// Command 是一个已注册的命令。
 type Command struct {
 	Name        string
 	Description string
-	// Usage is the argument summary shown in the command list.
+	// Usage 是命令列表里显示的参数摘要。
 	Usage string
-	// Help renders the long help for `.help name`. Nil falls back to the
-	// description.
+	// Help 生成 `.help name` 显示的详细帮助。为 nil 时改用 Description。
 	Help func(prefix string) string
-	// Handle runs the command. Errors are logged and reported to the chat.
+	// Handle 执行命令。返回的错误会写进日志，并报告到聊天里。
 	Handle func(ctx context.Context, inv *Invocation) error
-	// Timeout bounds the handler. Zero means the default (5 minutes);
-	// negative means no timeout at all.
+	// Timeout 是处理函数的时限。0 表示用默认值（5 分钟）；
+	// 负数表示完全不设时限。
 	Timeout time.Duration
-	// Hidden keeps the command out of the list (aliases).
+	// Hidden 让命令不出现在列表里（用于别名）。
 	Hidden bool
 }
 
-// Job is background work started once the account is connected.
+// Job 是账号连上之后启动的后台任务。
 type Job func(ctx context.Context, client *bot.Client)
 
-// Registry holds the commands and prefixes.
+// Registry 保存命令和前缀。
 type Registry struct {
 	mu       sync.RWMutex
 	commands map[string]*Command
-	// aliases maps a name the operator chose to the command line it
-	// stands for, arguments included. .alias edits it.
+	// aliases 把使用者自己起的名字映射到它代表的命令行，参数也包括在内。
+	// 由 .alias 修改。
 	aliases  map[string]string
 	prefixes []string
 	jobs     []Job
@@ -96,7 +94,7 @@ type Registry struct {
 	inFlight sync.WaitGroup
 }
 
-// New builds an empty registry.
+// New 创建一个空的注册表。
 func New(prefixes []string, logger *slog.Logger) *Registry {
 	if len(prefixes) == 0 {
 		prefixes = []string{"."}
@@ -104,7 +102,7 @@ func New(prefixes []string, logger *slog.Logger) *Registry {
 	return &Registry{commands: map[string]*Command{}, prefixes: prefixes, logger: logger, sem: make(chan struct{}, 16)}
 }
 
-// Register adds commands; a duplicate name is a programming error.
+// Register 添加命令；名字重复属于编程错误。
 func (r *Registry) Register(commands ...*Command) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -119,21 +117,21 @@ func (r *Registry) Register(commands ...*Command) {
 	}
 }
 
-// AddJob schedules background work for after connection.
+// AddJob 登记一项连上之后再执行的后台任务。
 func (r *Registry) AddJob(job Job) {
 	r.mu.Lock()
 	r.jobs = append(r.jobs, job)
 	r.mu.Unlock()
 }
 
-// Jobs returns the registered background work.
+// Jobs 返回已登记的后台任务。
 func (r *Registry) Jobs() []Job {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return append([]Job(nil), r.jobs...)
 }
 
-// Commands lists the visible commands, sorted by name.
+// Commands 列出可见的命令，按名字排序。
 func (r *Registry) Commands() []*Command {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -147,7 +145,7 @@ func (r *Registry) Commands() []*Command {
 	return list
 }
 
-// Lookup finds a command by name.
+// Lookup 按名字查找命令。
 func (r *Registry) Lookup(name string) (*Command, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -155,14 +153,14 @@ func (r *Registry) Lookup(name string) (*Command, bool) {
 	return command, ok
 }
 
-// Prefixes returns the active prefixes.
+// Prefixes 返回当前生效的前缀。
 func (r *Registry) Prefixes() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return append([]string(nil), r.prefixes...)
 }
 
-// SetAliases replaces the alias table.
+// SetAliases 替换整张别名表。
 func (r *Registry) SetAliases(aliases map[string]string) {
 	copied := make(map[string]string, len(aliases))
 	for name, target := range aliases {
@@ -173,7 +171,7 @@ func (r *Registry) SetAliases(aliases map[string]string) {
 	r.mu.Unlock()
 }
 
-// Aliases returns a copy of the alias table.
+// Aliases 返回别名表的副本。
 func (r *Registry) Aliases() map[string]string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -184,29 +182,27 @@ func (r *Registry) Aliases() map[string]string {
 	return copied
 }
 
-// Prefix returns the primary prefix, for help text.
+// Prefix 返回主前缀，供帮助文本使用。
 func (r *Registry) Prefix() string { return r.Prefixes()[0] }
 
 var commandName = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
 
-// Route is a parsed command line.
+// Route 是解析好的命令行。
 type Route struct {
 	Prefix  string
 	Command string
 	Args    []string
-	// Text is the message as the command should read it. For an alias it
-	// is the expansion followed by whatever came after the alias, kept
-	// exactly as typed: .gt and .yvlu read their input from the raw text,
-	// newlines included, and re-joining split words would lose them.
+	// Text 是命令应当读到的消息文本。对别名来说，它是展开后的内容，
+	// 后面接上别名之后的所有内容，一字不差地保留原样：.gt 和 .yvlu
+	// 从原始文本读取输入，换行也算在内，把拆开的词重新拼起来会丢掉换行。
 	Text string
 }
 
-// Parse resolves a message's text to a route: the longest matching prefix
-// wins, then the longest matching alias, then the first token is the
-// command and the rest are arguments.
+// Parse 把消息文本解析成路由：先取最长的匹配前缀，再取最长的匹配别名，
+// 然后第一个词是命令，其余的是参数。
 //
-// A single-word alias never shadows a real command of the same name, the
-// same rule MiBox applied; an alias of several words can start with one.
+// 单个词的别名永远不会盖住同名的真实命令，MiBox 也是这个规则；
+// 多个词的别名可以以命令名开头。
 func (r *Registry) Parse(text string) (Route, bool) {
 	prefixes := r.Prefixes()
 	prefix, matched := "", false
@@ -249,8 +245,8 @@ func (r *Registry) Parse(text string) (Route, bool) {
 	return Route{Prefix: prefix, Command: parts[0], Args: append([]string{}, parts[1:]...), Text: text}, true
 }
 
-// afterTokens drops the first n whitespace-separated tokens of s and
-// returns the rest exactly as written, leading whitespace included.
+// afterTokens 去掉 s 开头 n 个以空白分隔的词，剩下的部分原样返回，
+// 开头的空白也保留。
 func afterTokens(s string, n int) string {
 	index := 0
 	for count := 0; count < n; count++ {
@@ -280,8 +276,8 @@ func isSpace(r rune) bool {
 	return r >= 0x2000 && r <= 0x200a
 }
 
-// Dispatch offers a message to the registry. It reports whether a command
-// matched; the handler runs asynchronously.
+// Dispatch 把一条消息交给注册表，返回是否匹配到命令；
+// 处理函数异步运行。
 func (r *Registry) Dispatch(ctx context.Context, client *bot.Client, message *bot.Message) bool {
 	route, ok := r.Parse(message.Text)
 	if !ok {
@@ -334,7 +330,7 @@ func (r *Registry) Dispatch(ctx context.Context, client *bot.Client, message *bo
 	return true
 }
 
-// Wait blocks until in-flight commands finish or the timeout passes.
+// Wait 阻塞到正在运行的命令全部结束，或者超时为止。
 func (r *Registry) Wait(timeout time.Duration) bool {
 	done := make(chan struct{})
 	go func() { r.inFlight.Wait(); close(done) }()
@@ -346,8 +342,8 @@ func (r *Registry) Wait(timeout time.Duration) bool {
 	}
 }
 
-// Brief renders an error for a chat: the Telegram RPC code when there is
-// one, else a short generic line, never a URL or a host.
+// Brief 把错误转成适合发到聊天里的文字：有 Telegram RPC 错误码就只给
+// 错误码，否则给一句简短的通用说明，绝不带 URL 或主机名。
 func Brief(err error) string {
 	if err == nil {
 		return ""

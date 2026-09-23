@@ -1,6 +1,5 @@
-// Package app assembles the process: it reads the account, converts its
-// session, takes the lock, connects gotd, and routes updates to the
-// command registry.
+// Package app 把整个进程组装起来：读取账号、转换会话、加锁、连接 gotd，
+// 再把更新交给命令注册表。
 package app
 
 import (
@@ -34,36 +33,32 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/tgstate"
 )
 
-// Options configure a run.
+// Options 是一次运行的配置。
 type Options struct {
 	Root    string
 	Version string
 	Logger  *slog.Logger
 	Debug   bool
-	// Register adds the commands once the registry exists.
+	// Register 在注册表建好之后添加命令。
 	Register func(app *App)
-	// Logs holds the tail of what was logged, so .log can show it. The
-	// app works without one; the command simply reports that nothing is
-	// being kept.
+	// Logs 保存最近的一段日志，供 .log 显示。没有它程序照样能跑，
+	// 只是 .log 会说明当前没有保留日志。
 	Logs *logtail.Ring
-	// Level is the live log level. Handing it over lets the operator
-	// raise it from a chat, which otherwise takes editing the unit and a
-	// restart — which is what it took the day .log was written.
+	// Level 是运行中可调的日志级别。把它交进来，操作者就能在聊天里调高级别；
+	// 不然就得改服务单元再重启，而重启恰好会把要查的那一刻弄丢。
 	Level *slog.LevelVar
-	// ReadOnly prepares everything except the single-instance lock.
+	// ReadOnly 表示除了单实例锁，其他都照常准备。
 	//
-	// That lock means "only one process may serve this account", and a
-	// read-only check serves nothing. Taking it anyway made --check fail
-	// whenever the service was running — which is exactly when the
-	// self-updater runs it, so a good release was discarded as unreadable.
+	// 这把锁的意思是「一个账号只能由一个进程服务」，而只读检查什么也不服务。
+	// 以前照样加锁，结果只要服务在运行，--check 就会失败；自动更新偏偏就是
+	// 在这时候运行它，于是好好的新版本被当成读不了而丢弃。
 	ReadOnly bool
-	// AfterReady runs once the account is connected and the commands are
-	// serving. When it returns, Run stops. It is how --verify drives the
-	// live account without a second connection path.
+	// AfterReady 在账号连上、命令开始服务之后运行，它一返回 Run 就结束。
+	// --verify 靠它操作线上账号，不必另开一条连接路径。
 	AfterReady func(ctx context.Context, a *App, client *bot.Client) error
 }
 
-// App is one assembled process.
+// App 是组装好的一个进程。
 type App struct {
 	Root     string
 	Version  string
@@ -82,12 +77,12 @@ type App struct {
 	state  *tgstate.State
 	lock   *os.File
 	bot    atomic.Pointer[bot.Client]
-	// options is kept so Run can reach AfterReady.
+	// options 留着是为了让 Run 能拿到 AfterReady。
 	options    Options
 	hookResult atomic.Pointer[error]
 }
 
-// sleepFor waits, or returns when ctx ends.
+// sleepFor 等待一段时间，ctx 结束时提前返回。
 func sleepFor(ctx context.Context, d time.Duration) error {
 	timer := time.NewTimer(d)
 	defer timer.Stop()
@@ -99,18 +94,17 @@ func sleepFor(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// SessionFile is gotd's session file, shared with MiBox's Go host.
+// SessionFile 是 gotd 的会话文件，和 MiBox 的 Go 宿主共用。
 const SessionFile = "gotd-session.json"
 
-// ErrRunning reports that another process holds a deployment directory.
+// ErrRunning 表示部署目录已被另一个进程占用。
 var ErrRunning = errors.New("another mibot-lite instance already runs on this directory")
 
-// LockRoot takes the single-instance lock on a deployment directory.
+// LockRoot 给部署目录加单实例锁。
 //
-// Serving takes it so two processes never answer for one account. Restoring
-// a backup takes it too, for the opposite reason: rewriting config.json
-// under a running service would leave it holding a session the file no
-// longer describes.
+// 服务时加锁，是为了不让两个进程同时替一个账号应答。恢复备份也要加锁，
+// 理由正好反过来：在运行中的服务底下改写 config.json，服务手里的会话
+// 就和文件里记的对不上了。
 func LockRoot(root string) (*os.File, error) {
 	lock, err := os.OpenFile(filepath.Join(root, "mibot-lite.lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
@@ -123,11 +117,10 @@ func LockRoot(root string) (*os.File, error) {
 	return lock, nil
 }
 
-// DataDir is where the commands keep their JSON files.
+// DataDir 是命令存放 JSON 文件的目录。
 func (a *App) DataDir() string { return filepath.Join(a.Root, "data") }
 
-// Prepare reads the account, converts its session and takes the lock. It
-// performs no network I/O.
+// Prepare 读取账号、转换会话并加锁，不做任何网络 I/O。
 func Prepare(ctx context.Context, options Options) (*App, error) {
 	logger := options.Logger
 	if logger == nil {
@@ -215,8 +208,8 @@ func Prepare(ctx context.Context, options Options) (*App, error) {
 	return app, nil
 }
 
-// protocolLogger adapts slog for gotd. Below debug the protocol trace is
-// too chatty, so only warnings and errors pass unless --verbose.
+// protocolLogger 把 slog 适配给 gotd。gotd 的协议日志在 info 和 debug
+// 级别非常啰嗦，所以不加 --verbose 时只放行警告和错误，加了才全部放行。
 func protocolLogger(logger *slog.Logger, debug bool) gotdlog.Logger {
 	floor := slog.LevelWarn
 	if debug {
@@ -243,13 +236,11 @@ func (f levelFilter) WithGroup(name string) slog.Handler {
 	return levelFilter{handler: f.handler.WithGroup(name), floor: f.floor}
 }
 
-// loggingHandler records what the server actually pushed, before any of
-// this program's own filtering sees it.
+// loggingHandler 赶在本程序自己的任何过滤之前，记下服务器实际推送了什么。
 //
-// It exists because "the command did nothing" and "the update never
-// arrived" produce identical silence, and no amount of reading gotd
-// settles which one is happening. Volume is low: a busy account pushes a
-// handful of these a minute.
+// 之所以需要它，是因为「命令什么也没做」和「更新根本没到」表现完全一样，
+// 都是没有动静，而把 gotd 读得再细也分辨不出是哪一种。日志量不大：
+// 繁忙的账号每分钟也就推送几条。
 type loggingHandler struct {
 	next   telegram.UpdateHandler
 	logger *slog.Logger
@@ -269,8 +260,7 @@ func (h loggingHandler) Handle(ctx context.Context, updates tg.UpdatesClass) err
 	return h.next.Handle(ctx, updates)
 }
 
-// updateNames lists the type names in a batch, with the chat for the
-// message-bearing ones.
+// updateNames 列出一批更新的类型名，带消息的更新附上所在对话。
 func updateNames(list []tg.UpdateClass) []string {
 	names := make([]string, 0, len(list))
 	for _, item := range list {
@@ -320,15 +310,13 @@ func (a *App) dispatcher() tg.UpdateDispatcher {
 	return dispatcher
 }
 
-// handle normalises one protocol message and offers it to the registry.
-// Only the account's own fresh messages are commands: an edit does not
-// prove who is at the keyboard, and it is also what the bot's own result
-// edits look like.
+// handle 把一条协议消息规整好，交给注册表。只有本账号自己新发的消息
+// 才算命令：编辑证明不了是谁在键盘前，而且 bot 自己编辑结果时也是
+// 这个样子。
 //
-// Every path that drops a message says so. "I typed a command and nothing
-// happened" is otherwise indistinguishable from "the update never
-// arrived", and the two have completely different causes — most of the
-// time spent chasing one of these went into telling them apart.
+// 每条丢弃消息的路径都会留下记录。否则「输入了命令却没反应」和「更新
+// 根本没到」无从区分，而两者的原因完全不同。排查这类问题时，大部分
+// 时间都花在分辨是哪一种上。
 func (a *App) handle(ctx context.Context, entities tg.Entities, message tg.MessageClass, edited bool) {
 	plain, ok := message.(*tg.Message)
 	if !ok {
@@ -339,17 +327,14 @@ func (a *App) handle(ctx context.Context, entities tg.Entities, message tg.Messa
 	if client == nil {
 		return
 	}
-	// Whether this parsed as a command decides how loudly a drop is
-	// reported: an ordinary message going past is debug noise, while a
-	// command the operator typed and never saw answered belongs at the
-	// level they are actually reading.
+	// 能不能解析成命令，决定了丢弃时记录的级别：普通消息经过只是
+	// debug 噪音；操作者输入了命令却没等到回应，就该记在他们真正会看的
+	// 级别上。
 	_, looksLikeCommand := a.Registry.Parse(plain.Message)
 	envelope, converted := bot.Envelope(plain, client.SelfID(), edited, a.peers)
-	// Whether the account itself wrote this, which is the real question a
-	// command gate asks. The Out flag alone answers it wrongly in Saved
-	// Messages: a chat with oneself has no direction, Telegram leaves the
-	// flag clear, and every command typed there was being discarded as
-	// someone else's message.
+	// 这条是不是本账号自己写的，这才是命令关卡真正要问的。只看 Out 标志，
+	// 在收藏夹里会答错：和自己的对话没有方向，Telegram 不设这个标志，
+	// 结果在那里输入的每条命令都被当成别人的消息丢掉了。
 	mine := plain.Out || (converted && envelope.SenderID() == client.SelfID())
 	if mine {
 		a.Logger.Debug("update.outgoing", slog.String("chat", bot.PeerID(plain.PeerID)),
@@ -385,7 +370,7 @@ func (a *App) handle(ctx context.Context, entities tg.Entities, message tg.Messa
 	}
 }
 
-// truncate shortens text for a log line.
+// truncate 截短文本，用在日志行里。
 func truncate(text string, limit int) string {
 	runes := []rune(text)
 	if len(runes) <= limit {
@@ -394,18 +379,15 @@ func truncate(text string, limit int) string {
 	return string(runes[:limit]) + "…"
 }
 
-// Bot returns the connected client, or nil before authorization.
+// Bot 返回已连接的客户端；授权完成之前返回 nil。
 func (a *App) Bot() *bot.Client { return a.bot.Load() }
 
-// DispatchMessage offers a protocol message to the command registry, the
-// same way the update path does.
+// DispatchMessage 把一条协议消息交给命令注册表，做法和更新路径一样。
 //
-// It exists for --verify, which cannot reach the dispatcher any other way.
-// A message this process sends is never pushed back to it — the server
-// reports it in the RPC result instead, and for plain text that result is
-// an updateShortSentMessage carrying only an id and a pts, with no peer
-// and no text. So the verifier reads the message back in full and hands it
-// here.
+// 它是为 --verify 准备的，--verify 没有别的办法够到分发器。本进程发出的
+// 消息不会再推送回来，服务器改在 RPC 结果里报告；对纯文本来说，这个结果
+// 是 updateShortSentMessage，只带一个 id 和一个 pts，既没有 peer 也没有
+// 文本。所以校验程序把消息完整读回来，再交到这里。
 func (a *App) DispatchMessage(ctx context.Context, message *tg.Message) bool {
 	client := a.bot.Load()
 	if client == nil {
@@ -418,7 +400,7 @@ func (a *App) DispatchMessage(ctx context.Context, message *tg.Message) bool {
 	return a.Registry.Dispatch(ctx, client, envelope)
 }
 
-// Close releases the lock and flushes state.
+// Close 释放锁并把状态刷写到磁盘。
 func (a *App) Close() error {
 	if a.state != nil {
 		_ = a.state.Close()
@@ -429,8 +411,7 @@ func (a *App) Close() error {
 	return nil
 }
 
-// Run connects, authenticates, starts the jobs and serves updates until
-// ctx is done.
+// Run 连接、认证、启动后台任务，然后持续处理更新，直到 ctx 结束。
 func (a *App) Run(ctx context.Context) error {
 	return a.client.Run(ctx, func(ctx context.Context) error {
 		status, err := a.client.Auth().Status(ctx)
@@ -454,15 +435,13 @@ func (a *App) Run(ctx context.Context) error {
 			go job(ctx, client)
 		}
 		if a.options.AfterReady != nil {
-			// The update engine has to be running for commands to be
-			// dispatched at all, so the hook runs beside it and stops it
-			// when it finishes.
+			// 更新引擎在运行，命令才会被分发，所以钩子和它并行运行，
+			// 钩子结束时再把它停掉。
 			serving, stop := context.WithCancel(ctx)
 			defer stop()
 			hookErr := make(chan error, 1)
 			go func() {
-				// Give the update engine a moment to load its state
-				// before the first message is sent.
+				// 发第一条消息之前，给更新引擎一点时间加载状态。
 				if err := sleepFor(serving, 2*time.Second); err != nil {
 					hookErr <- nil
 					return

@@ -14,42 +14,36 @@ import (
 	"github.com/gotd/td/tgerr"
 )
 
-// ErrNoMedia means the message carries nothing downloadable.
+// ErrNoMedia 表示消息里没有可下载的内容。
 var ErrNoMedia = errors.New("message has no downloadable media")
 
-// ErrTooLarge means the file exceeds the caller's byte limit.
+// ErrTooLarge 表示文件超过了调用方给的字节上限。
 var ErrTooLarge = errors.New("file exceeds the size limit")
 
-// dcConnectTimeout bounds opening a connection to another data centre.
+// dcConnectTimeout 限制连接另一个数据中心最多花多长时间。
 //
-// Opening one is not just a dial: gotd has to run an authorization
-// transfer over it before the first request, and that whole sequence can
-// stall with no deadline of its own. A download is never so important
-// that it may hold a command open indefinitely, so the attempt is capped
-// here rather than left to the caller's context.
+// 建立连接不只是拨号：发第一个请求之前，gotd 要先在这条连接上做一次
+// 授权转移，整个过程可能卡住，而它自己并没有超时。下载再重要，也不值得
+// 让一条命令无限期挂着，所以在这里给这次尝试封顶，不交给调用方的 context。
 const dcConnectTimeout = 20 * time.Second
 
-// dcConnection is a held connection to another data centre.
+// dcConnection 是一条保留着的、通往另一个数据中心的连接。
 type dcConnection struct {
 	api    *tg.Client
 	closer io.Closer
 }
 
-// mediaDC returns a connection to another data centre, opening one the
-// first time and keeping it afterwards.
+// mediaDC 返回通往另一个数据中心的连接：第一次用时打开，之后一直留着。
 //
-// It asks for an ordinary connection rather than a media-only one. Media
-// DCs live on their own address list, and a host that reaches Telegram
-// perfectly well may have no route to those: the first attempt at this
-// hung inside the pool waiting for a connection that never came up, with
-// the session itself healthy on DC 4 the whole time. The ordinary address
-// is the one already known to work.
+// 这里要的是普通连接，不是 media-only 连接。媒体 DC 有自己单独的地址
+// 列表，一台能正常连上 Telegram 的主机，未必连得到那些地址：最初的实现
+// 就卡在连接池里，等一条永远建不起来的连接，而会话本身在 DC 4 上一直
+// 好好的。普通地址是已经确认能通的那个。
 //
-// The connection is kept rather than closed after each file. Opening one
-// is a full handshake plus an authorization transfer — seconds, not
-// milliseconds — and an account whose session is on one data centre and
-// whose avatars live on another pays that on every single download. One
-// idle socket is a much smaller price than repeating the handshake.
+// 连接会一直保留，不在每个文件下载完后关掉。建立一条连接要做完整的握手
+// 再加一次授权转移，耗时以秒计而不是毫秒；如果账号的会话在一个数据中心、
+// 头像在另一个，每次下载都要付出这个代价。多留一个空闲的 socket，比反复
+// 握手便宜得多。
 func (c *Client) mediaDC(ctx context.Context, dcID int) (*tg.Client, error) {
 	c.dcMu.Lock()
 	defer c.dcMu.Unlock()
@@ -70,7 +64,7 @@ func (c *Client) mediaDC(ctx context.Context, dcID int) (*tg.Client, error) {
 	return api, nil
 }
 
-// CloseDataCentres releases every extra data-centre connection.
+// CloseDataCentres 释放所有额外的数据中心连接。
 func (c *Client) CloseDataCentres() {
 	c.dcMu.Lock()
 	defer c.dcMu.Unlock()
@@ -80,8 +74,8 @@ func (c *Client) CloseDataCentres() {
 	}
 }
 
-// limitedWriter fails once more than limit bytes arrive, so a hostile or
-// mistaken file cannot be streamed into memory without bound.
+// limitedWriter 在收到的字节超过 limit 时报错，免得恶意或出错的文件
+// 被无限制地读进内存。
 type limitedWriter struct {
 	buffer bytes.Buffer
 	limit  int64
@@ -94,14 +88,12 @@ func (w *limitedWriter) Write(p []byte) (int, error) {
 	return w.buffer.Write(p)
 }
 
-// DownloadFile reads a file location into memory, bounded by limit.
+// DownloadFile 把一个文件位置的内容读进内存，大小受 limit 限制。
 //
-// The session's own connection is tried first, whatever data centre the
-// file claims to live on. Opening a second connection costs a handshake
-// and an authorization transfer, and Telegram says plainly when it is
-// needed: FILE_MIGRATE_N names the data centre to ask instead. Reaching
-// for that connection up front made every avatar pay for it, and one that
-// would not come up held the whole command until its deadline.
+// 不管文件声称在哪个数据中心，都先用会话自己的连接试。再开一条连接要
+// 付出一次握手加一次授权转移，而真正需要时 Telegram 会明说：
+// FILE_MIGRATE_N 会指明该改去问哪个数据中心。以前一上来就去开那条连接，
+// 每个头像都要为此付出代价；连接建不起来时，整条命令会一直卡到超时。
 func (c *Client) DownloadFile(ctx context.Context, location tg.InputFileLocationClass, dcID int, limit int64) ([]byte, error) {
 	data, err := download(ctx, c.api, location, limit)
 	if err == nil {
@@ -125,7 +117,7 @@ func (c *Client) DownloadFile(ctx context.Context, location tg.InputFileLocation
 	return download(ctx, api, location, limit)
 }
 
-// download streams one location through the given client.
+// download 通过给定的客户端，流式下载一个文件位置。
 func download(ctx context.Context, api *tg.Client, location tg.InputFileLocationClass, limit int64) ([]byte, error) {
 	sink := &limitedWriter{limit: limit}
 	if _, err := downloader.NewDownloader().Download(api, location).Stream(ctx, sink); err != nil {
@@ -137,9 +129,8 @@ func download(ctx context.Context, api *tg.Client, location tg.InputFileLocation
 	return sink.buffer.Bytes(), nil
 }
 
-// DownloadProfilePhoto reads a peer's avatar. It reports nil without an
-// error when the peer has no photo, which is an ordinary state rather than
-// a failure.
+// DownloadProfilePhoto 读取 peer 的头像。peer 没有头像时返回 nil，
+// 不报错，因为这是正常状态，不算失败。
 func (c *Client) DownloadProfilePhoto(ctx context.Context, peer tg.InputPeerClass, big bool, limit int64) ([]byte, error) {
 	photoID, dcID, ok := c.photoOf(peer)
 	if !ok {
@@ -149,7 +140,7 @@ func (c *Client) DownloadProfilePhoto(ctx context.Context, peer tg.InputPeerClas
 	return c.DownloadFile(ctx, location, dcID, limit)
 }
 
-// photoOf finds the cached profile photo id and data centre for a peer.
+// photoOf 从缓存里找出 peer 的头像 id 和所在的数据中心。
 func (c *Client) photoOf(peer tg.InputPeerClass) (photoID int64, dcID int, ok bool) {
 	switch value := peer.(type) {
 	case *tg.InputPeerSelf:
@@ -185,17 +176,17 @@ func photoFromUser(user *tg.User) (int64, int, bool) {
 	return value.PhotoID, value.DCID, true
 }
 
-// MediaFile describes what a message's media downloaded to.
+// MediaFile 描述消息媒体下载下来的结果。
 type MediaFile struct {
 	Data     []byte
 	MimeType string
-	// Sticker reports an attached DocumentAttributeSticker.
+	// Sticker 表示文档带有 DocumentAttributeSticker。
 	Sticker bool
-	// FileName is the document's declared name, when it had one.
+	// FileName 是文档声明的文件名，如果有的话。
 	FileName string
 }
 
-// DownloadMedia reads a message's photo or document, bounded by limit.
+// DownloadMedia 读取消息里的照片或文档，大小受 limit 限制。
 func (c *Client) DownloadMedia(ctx context.Context, message *tg.Message, limit int64) (*MediaFile, error) {
 	media, ok := message.GetMedia()
 	if !ok {
@@ -244,7 +235,7 @@ func (c *Client) DownloadMedia(ctx context.Context, message *tg.Message, limit i
 	return nil, ErrNoMedia
 }
 
-// largestPhotoSize picks the biggest ordinary size a photo offers.
+// largestPhotoSize 从照片提供的普通尺寸里挑出最大的一个。
 func largestPhotoSize(sizes []tg.PhotoSizeClass) string {
 	best, bestArea := "", 0
 	for _, entry := range sizes {
@@ -262,8 +253,8 @@ func largestPhotoSize(sizes []tg.PhotoSizeClass) string {
 	return best
 }
 
-// DocumentOf returns the InputDocument for a message's document, which is
-// what the sticker RPCs take.
+// DocumentOf 返回消息里文档对应的 InputDocument，贴纸相关的 RPC
+// 要的就是它。
 func DocumentOf(message *tg.Message) (*tg.InputDocument, bool) {
 	media, ok := message.GetMedia()
 	if !ok {
@@ -280,8 +271,8 @@ func DocumentOf(message *tg.Message) (*tg.InputDocument, bool) {
 	return &tg.InputDocument{ID: document.ID, AccessHash: document.AccessHash, FileReference: document.FileReference}, true
 }
 
-// MediaSource is where a message's photo or document lives, with what is
-// needed to send the same thing again from a fresh upload.
+// MediaSource 记录消息里的照片或文档在哪里，以及重新上传、再发一份
+// 同样的内容所需的信息。
 type MediaSource struct {
 	Location tg.InputFileLocationClass
 	DCID     int
@@ -289,14 +280,13 @@ type MediaSource struct {
 	Photo    bool
 	MimeType string
 	FileName string
-	// Attributes are the document's own: duration and size for a video,
-	// the voice flag, the sticker set, the animated-GIF marker. Reusing
-	// them on the re-upload is what keeps a round video round and a voice
-	// note a voice note instead of a file called audio.ogg.
+	// Attributes 是文档自身的属性：视频的时长和尺寸、语音标志、贴纸集、
+	// 动图标记。重新上传时沿用它们，圆形视频才仍是圆形视频，语音消息才仍是
+	// 语音消息，而不是一个叫 audio.ogg 的文件。
 	Attributes []tg.DocumentAttributeClass
 }
 
-// SourceOf finds the downloadable photo or document in a message.
+// SourceOf 找出消息里可下载的照片或文档。
 func SourceOf(message *tg.Message) (*MediaSource, bool) {
 	media, ok := message.GetMedia()
 	if !ok {
@@ -335,11 +325,10 @@ func SourceOf(message *tg.Message) (*MediaSource, bool) {
 	return nil, false
 }
 
-// DownloadTo streams a file straight to disk.
+// DownloadTo 把文件直接流式写到磁盘。
 //
-// DownloadFile holds the whole file in memory, which is right for an
-// avatar and wrong for a two-gigabyte video. This writes as it goes, four
-// parts at a time, and follows FILE_MIGRATE the same way.
+// DownloadFile 会把整个文件放在内存里，对头像合适，对 2 GB 的视频就不行。
+// 这里边下边写，每次四个分片，遇到 FILE_MIGRATE 也照样转过去。
 func (c *Client) DownloadTo(ctx context.Context, source *MediaSource, file *os.File) error {
 	err := parallel(ctx, c.api, source.Location, file)
 	if err == nil {
@@ -360,8 +349,8 @@ func (c *Client) DownloadTo(ctx context.Context, source *MediaSource, file *os.F
 	if dcErr != nil {
 		return dcErr
 	}
-	// A migrate error arrives before any part does, but the file is
-	// rewound regardless: a retry must never land on top of a half.
+	// migrate 错误会在任何分片到达之前出现，但文件还是先清空：
+	// 重试绝不能写在半截文件上面。
 	if err := file.Truncate(0); err != nil {
 		return err
 	}

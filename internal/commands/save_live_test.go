@@ -20,17 +20,14 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/bot"
 )
 
-// TestSaveLive runs .save's two paths against the real account, in Saved
-// Messages: a forward, and the copy that restricted chats force — media
-// downloaded to disk and uploaded again with its own attributes. It then
-// deletes what it sent.
+// TestSaveLive 在真实账号的收藏夹里跑 .save 的两条路径：一条是转发，
+// 另一条是受限对话逼出来的复制——媒体下载到磁盘，再带着原有属性重新
+// 上传。跑完把自己发出的消息删掉。
 //
-// The copy is what cannot be checked offline, and it is exercised on a
-// message whose chat allows forwarding: copying does not care why it was
-// chosen, so this is the same code a protected channel would run.
+// 复制是离线查不了的部分。测试用的消息所在对话允许转发，但复制并不
+// 关心自己为什么被选中，所以跑的就是受保护频道会走的那套代码。
 //
-// The service on that directory must be stopped first; one account
-// cannot be served twice.
+// 必须先停掉那个目录上的服务：同一个账号不能同时由两个进程服务。
 //
 //	MIBOT_SAVE_LIVE=/root/mibot-lite ./commands.test -test.run SaveLive -test.v
 func TestSaveLive(t *testing.T) {
@@ -74,8 +71,8 @@ func savedHistory(ctx context.Context, client *bot.Client, limit int) ([]*tg.Mes
 	return messages, nil
 }
 
-// looksLikeCommand keeps anything that could be read as a command out of
-// the test: a copy of ".bf" is a new message saying ".bf".
+// looksLikeCommand 把任何可能被当成命令的消息排除在测试之外：复制一条
+// ".bf"，就是新发一条内容为 ".bf" 的消息。
 func looksLikeCommand(text string) bool {
 	text = strings.TrimSpace(text)
 	return strings.HasPrefix(text, ".") || strings.HasPrefix(text, "。") || strings.HasPrefix(text, "$") || strings.HasPrefix(text, "!")
@@ -100,8 +97,8 @@ func exerciseSave(ctx context.Context, t *testing.T, client *bot.Client) error {
 			continue
 		}
 		source, ok := bot.SourceOf(message)
-		// Prefer a document — a video or voice note carries the attributes
-		// the copy has to keep — then any photo; small enough to be quick.
+		// 优先选文件（视频或语音消息带有复制时必须保留的属性），其次才是
+		// 图片；大小要小到能很快跑完。
 		if ok && source.Size < 30<<20 && (media == nil || (!source.Photo && isPhoto(media))) {
 			media = message
 		}
@@ -135,7 +132,7 @@ func exerciseSave(ctx context.Context, t *testing.T, client *bot.Client) error {
 		return latest[0], nil
 	}
 
-	// The copy path.
+	// 复制路径。
 	started := time.Now()
 	if err := work.copy(ctx, media, &tg.InputPeerSelf{}); err != nil {
 		return fmt.Errorf("copy: %w", err)
@@ -165,7 +162,7 @@ func exerciseSave(ctx context.Context, t *testing.T, client *bot.Client) error {
 		return fmt.Errorf("the caption changed: %q, want %q", copied.Message, media.Message)
 	}
 
-	// The forward path.
+	// 转发路径。
 	if text != nil {
 		forwardedCopy, err := work.send(ctx, text, &tg.InputPeerSelf{}, &tg.InputPeerSelf{})
 		if err != nil {
@@ -182,14 +179,14 @@ func exerciseSave(ctx context.Context, t *testing.T, client *bot.Client) error {
 		header, isForward := forwarded.GetFwdFrom()
 		t.Logf("转发：#%d → #%d，代码判定复制=%v，Telegram 附转发头=%v %+v，noforwards=%v",
 			text.ID, forwarded.ID, forwardedCopy, isForward, header.FromID, text.Noforwards)
-		// What .save decides is ours to assert. Whether Telegram marks a
-		// self-to-self forward with a header is not.
+		// 只断言 .save 自己做的决定。Telegram 会不会给自己转给自己的消息
+		// 加转发头，不在断言范围内。
 		if forwardedCopy {
 			return errors.New("an ordinary message was copied instead of forwarded")
 		}
 	}
 
-	// Local mode: the file lands on disk whole, with its metadata beside it.
+	// 本地模式：文件完整落盘，旁边带着元数据。
 	path, err := work.saveLocal(ctx, media, messageLink{ChatID: "self", ID: media.ID})
 	if err != nil {
 		return fmt.Errorf("local: %w", err)

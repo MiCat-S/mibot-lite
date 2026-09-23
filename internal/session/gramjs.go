@@ -1,9 +1,8 @@
-// Package session converts a gramjs/teleproto StringSession (what MiBox's
-// Node runtime stores in config.json) into gotd's session storage, and back.
+// Package session 把 gramjs/teleproto 的 StringSession（MiBox 的 Node
+// 运行时存在 config.json 里的就是它）转换成 gotd 的会话存储，也能转回去。
 //
-// The point is that an account that already signed in under MiBox keeps its
-// session: point mibot-lite at the same directory and it connects without
-// asking for a code.
+// 目的是让已经在 MiBox 下登录过的账号保住会话：把 mibot-lite 指向同一个
+// 目录，它就能直接连上，不用再要验证码。
 package session
 
 import (
@@ -23,13 +22,13 @@ import (
 	"github.com/gotd/td/tg"
 )
 
-// AuthKeyLength is the fixed size of a Telegram auth key.
+// AuthKeyLength 是 Telegram auth key 的固定长度。
 const AuthKeyLength = 256
 
-// Version is the only StringSession version teleproto writes or accepts.
+// Version 是 teleproto 唯一会写出或接受的 StringSession 版本。
 const Version = '1'
 
-// StringSession is a decoded gramjs session.
+// StringSession 是解码后的 gramjs 会话。
 type StringSession struct {
 	DC      int
 	Address string
@@ -37,19 +36,19 @@ type StringSession struct {
 	AuthKey []byte
 }
 
-// ParseStringSession decodes a gramjs/teleproto StringSession.
+// ParseStringSession 解码 gramjs/teleproto 的 StringSession。
 //
-// Layout written by teleproto's save():
+// teleproto 的 save() 写出的布局：
 //
 //	| 1     | byte    | DC id                     |
-//	| 2     | int16BE | server address length     |
-//	| n     | bytes   | server address, as text   |
-//	| 2     | int16BE | port                      |
+//	| 2     | int16BE | 服务器地址长度            |
+//	| n     | bytes   | 服务器地址（文本）        |
+//	| 2     | int16BE | 端口                      |
 //	| 256   | bytes   | auth key                  |
 //
-// Two other layouts are accepted, matching teleproto's reader: a Telethon
-// session (base64 payload of exactly 352 characters, raw 4-byte IPv4) and a
-// raw 16-byte IPv6 address when the length field reads above 100.
+// 与 teleproto 的读取逻辑一致，另外还接受两种布局：Telethon 会话
+// （base64 载荷正好 352 个字符，IPv4 地址是原始的 4 字节），以及
+// 长度字段读出来大于 100 时，原始 16 字节的 IPv6 地址。
 func ParseStringSession(text string) (*StringSession, error) {
 	if len(text) < 1 {
 		return nil, errors.New("session string is empty")
@@ -120,9 +119,8 @@ func ParseStringSession(text string) (*StringSession, error) {
 	return result, nil
 }
 
-// Data converts the decoded session into gotd's session data. The config and
-// server salt are not part of a StringSession and stay zero; gotd refetches
-// both on the first connection.
+// Data 把解码后的会话转换成 gotd 的会话数据。config 和 server salt
+// 不在 StringSession 里，保持零值；gotd 第一次连接时会重新获取这两项。
 func (s *StringSession) Data() *gotdsession.Data {
 	var key gotdcrypto.Key
 	copy(key[:], s.AuthKey)
@@ -135,9 +133,8 @@ func (s *StringSession) Data() *gotdsession.Data {
 	}
 }
 
-// Import decodes a gramjs StringSession and stores it in gotd's session
-// storage. A storage that already holds a session is left untouched unless
-// overwrite is set.
+// Import 解码 gramjs StringSession 并存进 gotd 的会话存储。
+// 存储里已经有会话的话，除非设置了 overwrite，否则不动它。
 func Import(ctx context.Context, storage gotdsession.Storage, text string, overwrite bool) (*StringSession, error) {
 	parsed, err := ParseStringSession(text)
 	if err != nil {
@@ -159,7 +156,7 @@ func Import(ctx context.Context, storage gotdsession.Storage, text string, overw
 	return parsed, nil
 }
 
-// decodeBase64 accepts what Node's Buffer.from(value, "base64") accepts.
+// decodeBase64 接受 Node 的 Buffer.from(value, "base64") 能接受的输入。
 func decodeBase64(text string) ([]byte, error) {
 	encodings := []*base64.Encoding{
 		base64.StdEncoding, base64.RawStdEncoding,
@@ -178,7 +175,7 @@ func decodeBase64(text string) ([]byte, error) {
 
 const maxAddressLength = 100
 
-// Encode writes the StringSession layout teleproto's save() produces.
+// Encode 按 teleproto 的 save() 生成的布局写出 StringSession。
 func (s *StringSession) Encode() (string, error) {
 	if s.DC <= 0 || s.DC > 255 {
 		return "", fmt.Errorf("session DC is out of range: %d", s.DC)
@@ -214,7 +211,7 @@ func (s *StringSession) Encode() (string, error) {
 	return text, nil
 }
 
-// FromData is the inverse of Data.
+// FromData 是 Data 的逆操作。
 func FromData(data *gotdsession.Data) (*StringSession, error) {
 	if data == nil {
 		return nil, errors.New("no session data")
@@ -234,19 +231,16 @@ func FromData(data *gotdsession.Data) (*StringSession, error) {
 	return &StringSession{DC: data.DC, Address: host, Port: number, AuthKey: append([]byte(nil), data.AuthKey...)}, nil
 }
 
-// ResolveAddress finds the host:port for a session's data centre.
+// ResolveAddress 查出会话所在数据中心的 host:port。
 //
-// A session gotd created itself carries no address: it reconnects from the
-// data-centre id plus the config it keeps alongside, and never needs one
-// written down — only the importers for other clients' formats fill the
-// field. A gramjs StringSession has no room for a config, the address is
-// part of the string, so exporting one has to look the address up: from
-// the config the session already carries, and failing that from the
-// published production list.
+// gotd 自己创建的会话不带地址：它靠数据中心 id 加上一起保存的 config
+// 重新连接，从来不需要把地址记下来——只有导入其他客户端格式的代码
+// 才会填这个字段。gramjs StringSession 里没有放 config 的地方，地址是
+// 字符串的一部分，所以导出时必须把地址查出来：先查会话自带的 config，
+// 查不到再查公开的生产环境地址列表。
 //
-// This is the direction that had never run. Every session until now came
-// from a gramjs string, where Data() puts the address there itself, so the
-// export path was only ever exercised on data that already had one.
+// 这个方向以前从没实际跑过。之前所有会话都来自 gramjs 字符串，由 Data()
+// 自己把地址填进去，所以导出路径只在本来就有地址的数据上跑过。
 func ResolveAddress(data *gotdsession.Data) (string, error) {
 	if data.Addr != "" {
 		return data.Addr, nil
@@ -260,9 +254,8 @@ func ResolveAddress(data *gotdsession.Data) (string, error) {
 	return "", fmt.Errorf("no address is known for data centre %d", data.DC)
 }
 
-// pickOption chooses the address an ordinary client connects to: not a
-// media-only, CDN or obfuscated-only endpoint. IPv4 wins when both are
-// offered, because it is what every reader of this format has seen.
+// pickOption 选出普通客户端会连接的地址：不选仅限媒体、CDN 或仅限混淆
+// 的端点。两种地址都有时优先 IPv4，因为这个格式的读取方见到的一直是 IPv4。
 func pickOption(options []tg.DCOption, dc int) (string, bool) {
 	fallback := ""
 	for _, option := range options {

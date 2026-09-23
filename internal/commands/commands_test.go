@@ -59,7 +59,7 @@ func TestParseRateArgs(t *testing.T) {
 	if base, quote, amount, _ := parseRateArgs(nil); base != "btc" || quote != "usd" || amount != 1 {
 		t.Fatalf("defaults are %s %s %v", base, quote, amount)
 	}
-	// An alias resolves to its currency code.
+	// 别名会解析成对应的货币代码。
 	if base, _, _, _ := parseRateArgs([]string{"rmb"}); base != "cny" {
 		t.Fatalf("rmb resolved to %s", base)
 	}
@@ -164,8 +164,8 @@ func TestZoneLabel(t *testing.T) {
 	}
 }
 
-// Re-saving the nickname must not bake in the clock the previous run
-// appended, or the base name grows a timestamp every time.
+// 重新保存昵称时，不能把上一次运行追加的时钟也存进去，否则基础昵称
+// 每次都会多长出一个时间戳。
 func TestCleanNickname(t *testing.T) {
 	if got := cleanNickname("我要一直陪着我 🕘 09:30"); got != "我要一直陪着我" {
 		t.Fatalf("cleanNickname = %q", got)
@@ -193,8 +193,7 @@ func TestNewerVersion(t *testing.T) {
 	}
 }
 
-// The .yvlu argument grammar is positional and irregular; these are the
-// spellings its users already have in their fingers.
+// .yvlu 的参数语法按位置解析，而且不规则；下面这些是用户早已用顺手的写法。
 func TestParseYvlu(t *testing.T) {
 	cases := []struct {
 		text     string
@@ -258,8 +257,8 @@ func TestConvertEntities(t *testing.T) {
 	}
 }
 
-// Faked text is cut out of the middle of the command, so the entities that
-// survive have to move with it and the ones that straddle the cut clip.
+// 伪造的文字是从命令中间截出来的，所以保留下来的实体要跟着平移，
+// 横跨截断点的实体要被裁掉一截。
 func TestConvertEntitiesShift(t *testing.T) {
 	converted := convertEntities([]tg.MessageEntityClass{
 		&tg.MessageEntityBold{Offset: 10, Length: 4},
@@ -277,7 +276,7 @@ func TestConvertEntitiesShift(t *testing.T) {
 	}
 }
 
-// Every asset path comes out of a remote JSON document, so it is untrusted.
+// 每个素材路径都来自远程的 JSON 文档，因此不可信。
 func TestSafeRelative(t *testing.T) {
 	for _, good := range []string{"md/md1.png", "config.json", "a/b/c.png"} {
 		if _, err := safeRelative(good); err != nil {
@@ -304,8 +303,7 @@ func TestNameHashIsStableAndPositive(t *testing.T) {
 	}
 }
 
-// The endpoint answers with two different shapes depending on whether the
-// request asked it to detect the source language.
+// 这个接口的应答有两种结构，取决于请求里有没有要求它检测源语言。
 func TestParseTranslation(t *testing.T) {
 	detected, err := parseTranslation([]byte(`[["你好世界","en"]]`))
 	if err != nil {
@@ -314,7 +312,7 @@ func TestParseTranslation(t *testing.T) {
 	if detected.Text != "你好世界" || detected.Source != "en" {
 		t.Fatalf("got %+v", detected)
 	}
-	// A request that named its source gets a bare string back.
+	// 指明了源语言的请求，拿回来的是一个裸字符串。
 	named, err := parseTranslation([]byte(`["早上好"]`))
 	if err != nil {
 		t.Fatal(err)
@@ -329,8 +327,8 @@ func TestParseTranslation(t *testing.T) {
 	}
 }
 
-// The first argument is a target language only when it names one. Deciding
-// by shape would eat the first word of "tr is this correct".
+// 第一个参数只有确实是某个语言名时，才算目标语言。如果按外形判断，
+// "tr is this correct" 里的第一个词就会被吞掉。
 func TestNamedLanguage(t *testing.T) {
 	for input, want := range map[string]string{
 		"en": "en", "EN": "en", "english": "en", "英文": "en",
@@ -347,8 +345,8 @@ func TestNamedLanguage(t *testing.T) {
 			t.Errorf("%q should be text, not the language %q", input, code)
 		}
 	}
-	// "is" and "tr" are real codes and would be surprising to swallow, so
-	// they are deliberately absent from the list.
+	// "is" 和 "tr" 都是真实的语言代码，但被当成语言吞掉会让人意外，
+	// 所以故意没放进列表。
 	for _, ambiguous := range []string{"is", "no", "it"} {
 		_, ok := namedLanguage(ambiguous)
 		if ambiguous == "is" && ok {
@@ -357,7 +355,7 @@ func TestNamedLanguage(t *testing.T) {
 	}
 }
 
-// An unqualified translation of Chinese must not ask for Chinese back.
+// 翻译中文又没指定目标语言时，不能再要求译成中文。
 func TestHasHan(t *testing.T) {
 	if !hasHan("今天天气不错") || !hasHan("mixed 中文 text") {
 		t.Error("Chinese text should be detected")
@@ -376,8 +374,7 @@ func TestLanguageName(t *testing.T) {
 	}
 }
 
-// A server's public address goes into a chat with the reading, so it is
-// masked rather than published.
+// 服务器的公网地址会和测速结果一起发进聊天，所以要打码，不能原样公开。
 func TestMaskAddress(t *testing.T) {
 	if got := maskAddress("43.153.150.179"); got != "43.153.x.x" {
 		t.Fatalf("maskAddress = %q", got)
@@ -403,9 +400,9 @@ func TestFormatSpeed(t *testing.T) {
 	}
 }
 
-// TestOoklaInstallLive downloads the pinned CLI and runs it, so the digest
-// in the source is checked against what the vendor actually serves rather
-// than assumed. Skipped unless MIBOT_SPEEDTEST_LIVE=1.
+// TestOoklaInstallLive 下载锁定版本的 CLI 并运行，用厂商实际提供的文件
+// 核对源码里的摘要，而不是想当然地认为它对。只在 MIBOT_SPEEDTEST_LIVE=1
+// 时运行，否则跳过。
 func TestOoklaInstallLive(t *testing.T) {
 	if os.Getenv("MIBOT_SPEEDTEST_LIVE") != "1" {
 		t.Skip("set MIBOT_SPEEDTEST_LIVE=1 to download the real CLI")
@@ -421,7 +418,7 @@ func TestOoklaInstallLive(t *testing.T) {
 	}
 	t.Logf("装到 %s（%.1f MB）", path, float64(info.Size())/(1<<20))
 
-	// It must also be found the next time without downloading again.
+	// 下一次还要能直接找到它，不用重新下载。
 	found, kind := externalTool(dir)
 	if found != path || kind != "ookla" {
 		t.Fatalf("externalTool found %q (%s), want the installed copy", found, kind)
@@ -449,15 +446,14 @@ func TestOoklaInstallLive(t *testing.T) {
 	}
 }
 
-// A tampered archive must never reach the disk, let alone be executed.
+// 被篡改的压缩包绝不能落盘，更不能被执行。
 func TestExtractOoklaRejectsJunk(t *testing.T) {
 	if _, err := extractOokla([]byte("not a gzip stream"), t.TempDir()); err == nil {
 		t.Fatal("garbage should not extract")
 	}
 }
 
-// The result picture is fetched only from Speedtest's own result pages,
-// and only when what comes back is really a PNG.
+// 结果图片只从 Speedtest 自己的结果页获取，而且拿回来的确实是 PNG 才用。
 func TestResultImageRefusesOtherSources(t *testing.T) {
 	for _, link := range []string{"", "http://evil.example/x.png", "https://example.com/result/c/1",
 		"https://www.speedtest.net.evil.com/result/c/1"} {
@@ -467,8 +463,8 @@ func TestResultImageRefusesOtherSources(t *testing.T) {
 	}
 }
 
-// The server list is the only way to learn an ID, so it has to show the
-// ID, stay short enough for a chat, and say which one is currently pinned.
+// 服务器列表是得知 ID 的唯一途径，所以它必须显示 ID、长度适合放进
+// 聊天，还要标出当前固定的是哪一个。
 func TestRenderServersMarksThePinnedOne(t *testing.T) {
 	servers := make([]speedServer, 0, speedListLimit+5)
 	for i := 0; i < speedListLimit+5; i++ {
@@ -484,22 +480,22 @@ func TestRenderServersMarksThePinnedOne(t *testing.T) {
 	if !strings.Contains(text, "1000") {
 		t.Errorf("the nearest server is missing:\n%s", text)
 	}
-	// One line per server, or the list is a wall again: header, blank,
-	// speedListLimit servers, blank, footer.
+	// 每个服务器占一行，否则列表又会变回一大片文字：表头、空行、
+	// speedListLimit 个服务器、空行、页脚。
 	if got := len(strings.Split(text, "\n")); got != speedListLimit+4 {
 		t.Errorf("the list is %d lines, want %d", got, speedListLimit+4)
 	}
-	// A shared country belongs in the header, once.
+	// 所有服务器共同的国家放在表头，只出现一次。
 	if strings.Count(text, "Japan") != 1 {
 		t.Errorf("the country is repeated per line:\n%s", text)
 	}
-	// The footer has to be something the reader can copy.
+	// 页脚必须是读者能直接复制使用的内容。
 	if !strings.Contains(text, ".speedtest 1003") {
 		t.Errorf("the footer has no usable example:\n%s", text)
 	}
 }
 
-// A list whose servers span countries has to say which is which.
+// 服务器分属不同国家时，列表要标明各自是哪个国家。
 func TestRenderServersKeepsMixedCountries(t *testing.T) {
 	text := renderServers([]speedServer{
 		{ID: 1, Name: "A", Location: "Tokyo", Country: "Japan"},
@@ -510,10 +506,9 @@ func TestRenderServersKeepsMixedCountries(t *testing.T) {
 	}
 }
 
-// TestListServersLive checks the two things the list is for: that the CLI
-// will enumerate servers from this host, and that an ID taken from that
-// list can actually be measured against. Skipped unless
-// MIBOT_SPEEDTEST_LIVE=1.
+// TestListServersLive 检查列表要满足的两件事：CLI 能在这台主机上列出
+// 服务器；从列表里取出的 ID 确实能用来测速。只在
+// MIBOT_SPEEDTEST_LIVE=1 时运行，否则跳过。
 func TestListServersLive(t *testing.T) {
 	if os.Getenv("MIBOT_SPEEDTEST_LIVE") != "1" {
 		t.Skip("set MIBOT_SPEEDTEST_LIVE=1 to reach the real servers")
@@ -539,10 +534,9 @@ func TestListServersLive(t *testing.T) {
 		t.Fatalf("the first entry is unusable: %+v", servers[0])
 	}
 
-	// A listed server is not necessarily reachable: 56935 in Tokyo
-	// answered the enumeration and then refused the socket. That is the
-	// case the command falls back on, so the test walks the list the same
-	// way rather than insisting the first entry works.
+	// 列出来的服务器不一定连得上：东京的 56935 回应了枚举，随后却拒绝了
+	// 套接字连接。这正是命令会做退回处理的情形，所以测试也同样沿着列表
+	// 往下试，而不是硬要第一个能用。
 	var measured *reading
 	var lastErr error
 	for _, server := range servers {
@@ -557,8 +551,7 @@ func TestListServersLive(t *testing.T) {
 		t.Logf("服务器 %d（%s）测不通", server.ID, server.Name)
 	}
 	if measured == nil {
-		// Not a defect here, but the reason has to be readable — that is
-		// what tells the operator to pick another ID.
+		// 这本身不算缺陷，但原因必须看得懂：运维正是靠它才知道要换一个 ID。
 		if lastErr == nil || lastErr.Error() == "" {
 			t.Fatal("every server failed and none said why")
 		}
@@ -568,8 +561,7 @@ func TestListServersLive(t *testing.T) {
 		t.Error("pinning a server produced an empty measurement")
 	}
 
-	// Auto selection has to keep working, since that is where a failed
-	// pin lands.
+	// 自动挑选必须一直可用，因为固定的服务器测不通时就会落到这里。
 	auto, err := runExternal(context.Background(), path, "ookla", home, 0)
 	if err != nil {
 		t.Fatalf("auto selection failed after a pinned run: %v", err)
@@ -577,8 +569,8 @@ func TestListServersLive(t *testing.T) {
 	t.Logf("自动挑选：%s，下载 %s", auto.Server, formatSpeed(auto.Download))
 }
 
-// The CLI's failure reason is a JSON log record; a chat needs the
-// sentence inside it, not the envelope.
+// CLI 给出的失败原因是一条 JSON 日志记录；聊天里需要的是其中那句话，
+// 而不是外面那层包装。
 func TestLastLineUnwrapsTheCLIRecord(t *testing.T) {
 	raw := `{"type":"log","timestamp":"2026-09-22T10:53:22Z","message":"Could not retrieve or read configuration","level":"error"}`
 	if got := lastLine(raw); got != "Could not retrieve or read configuration" {
@@ -592,8 +584,8 @@ func TestLastLineUnwrapsTheCLIRecord(t *testing.T) {
 	}
 }
 
-// The CLI's wording is accurate and useless. These two were met for real
-// on the deployment, so the translation is pinned.
+// CLI 的措辞准确，但对用户没什么用。这两条是在部署环境里真实遇到过的，
+// 所以把它们的翻译固定下来。
 func TestExplainCLI(t *testing.T) {
 	if got := explainCLI("Configuration - Could not retrieve or read configuration (ConfigurationError)"); !strings.Contains(got, "过一阵再试") {
 		t.Errorf("throttling was not explained: %q", got)
@@ -606,8 +598,8 @@ func TestExplainCLI(t *testing.T) {
 	}
 }
 
-// Every subcommand has to appear in the help, or it may as well not
-// exist: .speedtest list was missing for exactly this reason.
+// 每个子命令都必须出现在帮助里，否则跟不存在没什么两样：.speedtest list
+// 当初就是这样漏掉的。
 func TestSpeedtestHelpDocumentsEverySubcommand(t *testing.T) {
 	text := speedtestHelp(t.TempDir(), ".", 0)
 	for _, wanted := range []string{".speedtest list", ".speedtest set", ".speedtest clear", ".speedtest config", ".st"} {
@@ -623,8 +615,8 @@ func TestSpeedtestHelpDocumentsEverySubcommand(t *testing.T) {
 	}
 }
 
-// The alias ends where the first real command begins, which is what lets
-// an alias be several words and the target carry its own arguments.
+// 别名在第一个真正的命令名处结束，这样别名才能由几个词组成，目标命令
+// 也能带上自己的参数。
 func TestSplitAlias(t *testing.T) {
 	known := map[string]bool{"speedtest": true, "ping": true, "version": true}
 	isCommand := func(name string) bool { return known[name] }
@@ -657,8 +649,8 @@ func TestRenderAliases(t *testing.T) {
 	}
 }
 
-// The caption rides on the backup itself and must fit Telegram's 1024
-// characters however many command files there are.
+// 说明文字跟着备份文件本身一起发，不管有多少个命令配置文件，都得控制在
+// Telegram 的 1024 字符以内。
 func TestBackupCaptionFits(t *testing.T) {
 	names := []string{"config.json", "gotd-session.json", ".env"}
 	for i := 0; i < 40; i++ {
@@ -685,8 +677,7 @@ func TestBackupHelpSaysWhereItGoesAndHowToRestore(t *testing.T) {
 	}
 }
 
-// The four link shapes Telegram hands out, and things that only look
-// like links.
+// Telegram 给出的四种链接形式，以及一些只是看起来像链接的东西。
 func TestParseLink(t *testing.T) {
 	cases := map[string]messageLink{
 		"https://t.me/c/1234567890/42":        {ChatID: "-1001234567890", ID: 42},
@@ -729,8 +720,7 @@ func TestParseSaveArgs(t *testing.T) {
 	}
 }
 
-// A private chat with a person has no t.me address; making one up would
-// print a link that goes nowhere.
+// 和人的私聊没有 t.me 地址；硬编一个出来，打印的就是一条打不开的链接。
 func TestLinkURL(t *testing.T) {
 	if got := (messageLink{ChatID: "-1001234", ID: 5}).url(); got != "https://t.me/c/1234/5" {
 		t.Errorf("channel url = %q", got)
@@ -743,8 +733,7 @@ func TestLinkURL(t *testing.T) {
 	}
 }
 
-// Local saves name files after what the sender called them, which must
-// not be able to leave the directory.
+// 本地保存按发送者起的名字给文件命名，这个名字不能让文件跑出目录。
 func TestSanitizeSegment(t *testing.T) {
 	for input, want := range map[string]string{
 		"../../etc/passwd": "etc_passwd",
@@ -775,8 +764,7 @@ func TestFindAddress(t *testing.T) {
 	}
 }
 
-// Only the issuer prefix is looked up; the rest of a pasted card number
-// must never reach the request.
+// 只查发卡行前缀；粘贴进来的卡号其余部分绝不能进入请求。
 func TestBINDigitsNeverSendsMoreThanEight(t *testing.T) {
 	if got, ok := binDigits("4150 4212 3456 7890"); !ok || got != "41504212" {
 		t.Errorf("a full card number became %q", got)
@@ -789,8 +777,8 @@ func TestBINDigitsNeverSendsMoreThanEight(t *testing.T) {
 	}
 }
 
-// The response below is what binlist.net returned for 415042 from the
-// deployment, kept so the rendering is checked against the real shape.
+// 下面的应答是在部署环境上查 415042 时 binlist.net 返回的内容，
+// 留着它是为了按真实结构检查渲染结果。
 func TestRenderBINFromARealResponse(t *testing.T) {
 	var result binResult
 	raw := `{"number":{},"scheme":"visa","type":"credit","brand":"Visa Rewards","country":{"numeric":"643","alpha2":"RU","name":"Russian Federation (the)","emoji":"🇷🇺","currency":"RUB"},"bank":{"name":"(Ofac Sanctioned) Vtb Bank Pjsc"}}`
@@ -808,7 +796,7 @@ func TestRenderBINFromARealResponse(t *testing.T) {
 	}
 }
 
-// Likewise the real ip-api answer for 8.8.8.8.
+// 同样，这是 ip-api 对 8.8.8.8 的真实应答。
 func TestRenderIPFromARealResponse(t *testing.T) {
 	var result ipResult
 	raw := `{"status":"success","country":"美国","regionName":"弗吉尼亚州","city":"Ashburn","timezone":"America/New_York","isp":"Google LLC","org":"Google Public DNS","as":"AS15169 Google LLC","proxy":false,"hosting":true,"query":"8.8.8.8"}`
@@ -831,7 +819,7 @@ func TestEstimateCreation(t *testing.T) {
 	if got := estimateCreation(215959394, now).Year(); got != 2016 {
 		t.Errorf("id 215959394 estimated in %d, want 2016", got)
 	}
-	// Later ids are never estimated earlier.
+	// 更大的 id 估出的时间不会更早。
 	previous := time.Time{}
 	for id := int64(0); id <= 8_000_000_000; id += 250_000_000 {
 		got := estimateCreation(id, now)
@@ -840,7 +828,7 @@ func TestEstimateCreation(t *testing.T) {
 		}
 		previous = got
 	}
-	// Past the table the estimate keeps moving forward and stops at now.
+	// 超出表的范围后，估计值继续往后推，到当前时间为止。
 	if got := estimateCreation(8_600_000_000, now); !got.After(time.Unix(1767225600, 0)) && !got.Equal(now) {
 		t.Errorf("an id past the table landed at %v", got)
 	}

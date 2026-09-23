@@ -1,14 +1,11 @@
-// Package logtail keeps the recent log lines in memory so they can be
-// exported as a file and handed to someone else.
+// Package logtail 把最近的日志行留在内存里，以便导出成文件交给别人。
 //
-// The journal on the server has everything, but asking a user to run
-// journalctl and paste the output is asking them to leak their own chat
-// ids. What this produces is meant to be forwarded: it is scrubbed as it
-// is written, not as it is read, because scrubbing on the way out means
-// one forgotten call site is a leak.
+// 服务器上的 journal 什么都有，但让用户去跑 journalctl 再把输出贴出来，
+// 等于让他们泄露自己的聊天 ID。这里产出的内容本来就是要转发出去的：
+// 它在写入时脱敏，而不是在读出时脱敏，因为到输出时才脱敏的话，
+// 漏掉一个调用点就是一次泄露。
 //
-// It does not survive the process. A restart empties it, so a crash is
-// still a question for the journal.
+// 它活不过进程。一重启就清空，所以崩溃的原因仍然要去 journal 里查。
 package logtail
 
 import (
@@ -23,25 +20,23 @@ import (
 )
 
 const (
-	// Lines held. Enough that the interesting part is usually still in
-	// there, small enough that the whole ring is well under 100 KB.
+	// 保留的行数。多到关键的部分通常还在里面，又少到整个环形缓冲区
+	// 远不到 100 KB。
 	Lines = 300
-	// Each line is capped so one enormous record cannot grow the ring.
+	// 每行都有长度上限，免得一条超长的记录把环形缓冲区撑大。
 	LineLimit = 240
 )
 
-// identifying keys name something that points at a person or a chat.
-// Their values are replaced by a short stable digest, so the same chat
-// still reads as the same chat across lines without saying which one.
+// identifying 里的键指向某个人或某个聊天。它们的值会换成一个稳定的
+// 短摘要，这样在不同的行里仍能看出是同一个聊天，但看不出是哪一个。
 var identifying = map[string]bool{
 	"account": true, "chat": true, "chat_id": true, "channel": true,
 	"channel_id": true, "peer": true, "sender": true, "user": true,
 	"user_id": true, "from": true, "to": true, "target": true,
 }
 
-// carrying keys hold content or credentials. Nothing of them survives:
-// there is no version of a message body or an API key that is safe to
-// forward.
+// carrying 里的键装的是内容或凭据，一点都不保留：消息正文和 API key
+// 不管处理成什么样，都不能放心转发。
 var carrying = map[string]bool{
 	"text": true, "query": true, "prompt": true, "caption": true,
 	"title": true, "username": true, "phone": true, "key": true,
@@ -51,19 +46,18 @@ var carrying = map[string]bool{
 
 var (
 	addresses = regexp.MustCompile(`\b\d{1,3}(?:\.\d{1,3}){3}\b`)
-	// Nine digits or more, standing alone, is an id of some kind.
+	// 单独出现的九位及以上数字，总归是某种 id。
 	longIDs = regexp.MustCompile(`\b\d{9,}\b`)
 	tokens  = regexp.MustCompile(`\b(?:sk|xox[a-z]|ghp|gho|Bearer)[-_ ][A-Za-z0-9_.\-]{8,}`)
-	// Keep the scheme and host of a URL, drop the rest: the host says
-	// which service failed, the path is where keys hide.
+	// URL 只留协议和主机，其余去掉：主机能说明是哪个服务出的错，
+	// 路径则是藏 key 的地方。
 	urls = regexp.MustCompile(`(https?://[^/\s"]+)(/[^\s"]*)?`)
 )
 
-// Scrub removes what should not leave the machine from free text.
+// Scrub 从自由文本里去掉不该离开本机的内容。
 //
-// It runs over values this package cannot classify by key, which in
-// practice means error strings — the most useful part of a log and the
-// one most likely to have an address or a URL embedded in it.
+// 它处理的是本包无法按键名归类的值，实际上就是错误信息：这是日志里
+// 最有用的部分，也最可能夹带地址或 URL。
 func Scrub(value string) string {
 	value = urls.ReplaceAllString(value, "$1/…")
 	value = tokens.ReplaceAllString(value, "[token]")
@@ -72,7 +66,7 @@ func Scrub(value string) string {
 	return value
 }
 
-// Digest is the stable short stand-in for an identifier.
+// Digest 为一个标识符生成稳定的短代号。
 func Digest(value string) string {
 	if value == "" {
 		return "#none"
@@ -92,7 +86,7 @@ func redact(key, value string) string {
 	return Scrub(value)
 }
 
-// Ring is a fixed-size circular buffer of rendered log lines.
+// Ring 是存放已格式化日志行的定长环形缓冲区。
 type Ring struct {
 	mu    sync.Mutex
 	lines []string
@@ -115,8 +109,8 @@ func (r *Ring) add(line string) {
 	}
 }
 
-// Tail returns at most count lines, oldest first, keeping only those the
-// filter accepts. A nil filter keeps everything; count <= 0 keeps all.
+// Tail 返回最多 count 行，旧的在前，只保留过滤函数接受的行。
+// 过滤函数为 nil 时全部保留；count <= 0 时不限行数。
 func (r *Ring) Tail(count int, keep func(string) bool) []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -138,7 +132,7 @@ func (r *Ring) Tail(count int, keep func(string) bool) []string {
 	return matched
 }
 
-// Held reports how many lines the ring currently holds.
+// Held 返回环形缓冲区当前存了多少行。
 func (r *Ring) Held() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -148,17 +142,17 @@ func (r *Ring) Held() int {
 	return r.next
 }
 
-// Handler copies every record it passes on into a ring, redacted.
+// Handler 把经它转交的每条记录脱敏后，复制一份到环形缓冲区。
 //
-// It wraps rather than replaces the real handler, so the journal keeps
-// receiving exactly what it received before.
+// 它包在真正的 handler 外面，而不是取代它，所以 journal 收到的内容
+// 和以前完全一样。
 type Handler struct {
 	next   slog.Handler
 	ring   *Ring
 	prefix string
 }
 
-// Wrap returns a handler that writes to next and remembers the tail.
+// Wrap 返回一个 handler：照常写给 next，同时记下最近的日志。
 func Wrap(next slog.Handler, ring *Ring) *Handler {
 	return &Handler{next: next, ring: ring}
 }
@@ -207,8 +201,8 @@ func render(attrs []slog.Attr) string {
 	return out.String()
 }
 
-// AtLeast reports whether a rendered line's level reaches floor. The
-// level is the line's second field.
+// AtLeast 判断一行已格式化日志的级别是否达到 floor。级别是该行的
+// 第二个字段。
 func AtLeast(line string, floor slog.Level) bool {
 	fields := strings.Fields(line)
 	if len(fields) < 2 {

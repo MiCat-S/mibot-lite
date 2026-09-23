@@ -9,7 +9,7 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/command"
 )
 
-// aliasDocument is data/alias.json.
+// aliasDocument 对应 data/alias.json。
 type aliasDocument struct {
 	Aliases map[string]string `json:"aliases"`
 }
@@ -30,10 +30,9 @@ func aliasHelp(prefix string) string {
 		"• 同一条原命令只留一个别名，设新的会替换旧的。"
 }
 
-// splitAlias finds where the alias ends and the command begins: at the
-// first word, after the first, that names a command. That is what lets
-// an alias be several words while the command after it carries its own
-// arguments.
+// splitAlias 找出别名在哪里结束、命令从哪里开始：从第二个词起，第一个
+// 是命令名的词就是分界。这样别名可以由几个词组成，后面的命令也能带上
+// 自己的参数。
 func splitAlias(tokens []string, isCommand func(string) bool) (alias, target string, ok bool) {
 	for index := 1; index < len(tokens); index++ {
 		if isCommand(tokens[index]) {
@@ -62,7 +61,7 @@ func renderAliases(aliases map[string]string, prefix string) string {
 	return strings.Join(lines, "\n")
 }
 
-// Alias registers .alias and loads the saved table into the registry.
+// Alias 注册 .alias，并把保存的别名表加载进注册表。
 func Alias(a *app.App) {
 	saved := newStore(a, "alias.json", func() aliasDocument { return aliasDocument{Aliases: map[string]string{}} })
 	if current, err := saved.Read(); err != nil {
@@ -70,11 +69,10 @@ func Alias(a *app.App) {
 	} else {
 		a.Registry.SetAliases(current.Aliases)
 	}
-	// publish hands the saved table to the registry. It runs after the
-	// write has succeeded and reads the table back rather than using the
-	// one just built: a failed write must leave the running aliases alone,
-	// and two .alias commands finishing out of order must not let the
-	// older table win.
+	// publish 把保存好的别名表交给注册表。它在写入成功之后才运行，并且
+	// 把表重新读回来，而不是直接用刚构造的那份：写入失败时，正在生效的
+	// 别名不能被动到；两个 .alias 命令乱序完成时，也不能让旧的那份表
+	// 盖掉新的。
 	publish := func() {
 		if current, err := saved.Read(); err == nil {
 			a.Registry.SetAliases(current.Aliases)
@@ -139,7 +137,7 @@ func Alias(a *app.App) {
 			if document.Aliases == nil {
 				document.Aliases = map[string]string{}
 			}
-			// One alias per expansion, as MiBox kept it.
+			// 每条展开内容只对应一个别名，和 MiBox 的做法一致。
 			for other, expansion := range document.Aliases {
 				if expansion == target && other != name {
 					replaced = other

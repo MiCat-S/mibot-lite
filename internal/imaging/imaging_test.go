@@ -37,8 +37,8 @@ func TestEncodeDecodeRoundTrip(t *testing.T) {
 	}
 }
 
-// A malformed or hostile asset must be refused by its header, before any
-// pixels are allocated.
+// 格式错误或恶意构造的素材必须在读文件头时就被拒绝，
+// 不能等到分配像素之后。
 func TestDecodeRejectsOversize(t *testing.T) {
 	var buffer bytes.Buffer
 	if err := png.Encode(&buffer, image.NewRGBA(image.Rect(0, 0, MaxDimension+1, 1))); err != nil {
@@ -53,8 +53,8 @@ func TestDecodeRejectsOversize(t *testing.T) {
 }
 
 func TestResizeCoverCropsCentre(t *testing.T) {
-	// A wide image reduced to a square keeps its full height and crops the
-	// sides, so a face in the middle survives.
+	// 宽图缩成正方形时保留完整高度、裁掉两侧，
+	// 这样位于中间的脸能保留下来。
 	source := image.NewRGBA(image.Rect(0, 0, 200, 100))
 	for x := 0; x < 200; x++ {
 		shade := color.RGBA{A: 255}
@@ -85,8 +85,8 @@ func TestResizeFitKeepsAspectAndNeverUpscales(t *testing.T) {
 	}
 }
 
-// The canvas must keep its size through a rotation, or the paste position
-// the animation spec gives would land somewhere else.
+// 旋转前后画布尺寸必须不变，否则动画配置给出的粘贴位置
+// 会落到别处。
 func TestRotateKeepsCanvasSize(t *testing.T) {
 	result := Rotate(solid(30, 20, color.RGBA{B: 255, A: 255}), 45)
 	if result.Bounds().Dx() != 30 || result.Bounds().Dy() != 20 {
@@ -111,7 +111,7 @@ func TestApplyMaskUsesAlpha(t *testing.T) {
 	}
 }
 
-// Premultiplied pixels stay valid: no channel may exceed its own alpha.
+// 预乘像素必须保持合法：任何通道都不能超过它自己的 alpha。
 func TestBrightnessClampsToAlpha(t *testing.T) {
 	source := image.NewRGBA(image.Rect(0, 0, 2, 1))
 	source.SetRGBA(0, 0, color.RGBA{R: 100, G: 100, B: 100, A: 128})
@@ -150,8 +150,8 @@ func TestFlattenDropsTransparency(t *testing.T) {
 	}
 }
 
-// Telegram wants a sticker's dimensions alongside it, and the quote
-// service answers in WebP; only the header is parsed.
+// Telegram 要求贴纸附带尺寸，而语录服务返回的是 WebP；
+// 这里只解析文件头。
 func TestWebPSize(t *testing.T) {
 	lossy := make([]byte, 30)
 	copy(lossy[0:], "RIFF")

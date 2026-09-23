@@ -1,5 +1,5 @@
-// Package sysinfo reports process and host resource use for .memory,
-// .status and .sysinfo.
+// Package sysinfo 为 .memory、.status 和 .sysinfo 提供进程和主机的
+// 资源占用情况。
 package sysinfo
 
 import (
@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// Memory is a process memory snapshot, in bytes.
+// Memory 是进程内存的快照，单位为字节。
 type Memory struct {
 	RSS        uint64
 	HeapAlloc  uint64
@@ -22,7 +22,7 @@ type Memory struct {
 	Goroutines int
 }
 
-// Read samples current memory use.
+// Read 采样当前的内存占用。
 func Read() Memory {
 	var stats runtime.MemStats
 	runtime.ReadMemStats(&stats)
@@ -53,10 +53,10 @@ func residentBytes() uint64 {
 	return kilobytes * 1024
 }
 
-// Megabytes renders a byte count for display.
+// Megabytes 把字节数换算成用于显示的 MB 数。
 func Megabytes(value uint64) float64 { return float64(value) / (1 << 20) }
 
-// Host is what .sysinfo reports about the machine.
+// Host 是 .sysinfo 报告的机器信息。
 type Host struct {
 	Hostname      string
 	Platform      string
@@ -68,8 +68,7 @@ type Host struct {
 	FreeMemory    uint64
 }
 
-// ReadHost reads the host's resource state; a failing source leaves its
-// field at zero.
+// ReadHost 读取主机的资源状态；哪个来源读取失败，对应字段就保持零值。
 func ReadHost() Host {
 	host := Host{Platform: runtime.GOOS + " " + runtime.GOARCH, CPUs: runtime.NumCPU()}
 	if name, err := os.Hostname(); err == nil {

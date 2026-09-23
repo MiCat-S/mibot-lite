@@ -13,7 +13,7 @@ import (
 
 const maxExpressionLength = 120
 
-// calcParser is a recursive-descent evaluator for + - * / and parentheses.
+// calcParser 是递归下降求值器，支持 + - * / 和括号。
 type calcParser struct {
 	text  []rune
 	index int
@@ -164,8 +164,8 @@ func (p *calcParser) skipSpace() {
 	}
 }
 
-// formatCalc renders a result: integers plainly, others to 12 significant
-// digits without trailing zeros.
+// formatCalc 格式化结果：整数原样输出，其余保留 12 位有效数字，
+// 去掉末尾的零。
 func formatCalc(value float64) string {
 	if value == math.Trunc(value) && math.Abs(value) < 1e15 {
 		return strconv.FormatFloat(value, 'f', 0, 64)
@@ -180,7 +180,7 @@ func formatCalc(value float64) string {
 	return text
 }
 
-// Calc registers .calc.
+// Calc 注册 .calc。
 func Calc(a *app.App) {
 	help := func(prefix string) string {
 		return "🧮 <b>计算器</b>\n\n• " + command.Code(prefix+"calc 2+2*5") + "\n• " + command.Code(prefix+"calc (10-3)*4") + "\n• " + command.Code(prefix+"calc -(2-5)/3") + "\n支持括号、小数和负数。"

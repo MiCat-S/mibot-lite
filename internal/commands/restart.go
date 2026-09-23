@@ -18,8 +18,8 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/store"
 )
 
-// receipt is what survives a systemd restart so the process that comes back
-// can edit the message that asked for it.
+// receipt 是能撑过 systemd 重启的记录，让重启回来的进程能编辑
+// 发起重启的那条消息。
 type receipt struct {
 	ChatID      string `json:"chatId"`
 	MessageID   int    `json:"messageId"`
@@ -34,7 +34,7 @@ type receiptDocument struct {
 
 var chatIDPattern = regexp.MustCompile(`^-?[0-9]+$`)
 
-// restarter submits a systemd restart and leaves the receipt behind.
+// restarter 向 systemd 提交重启，并留下回执。
 type restarter struct {
 	a       *app.App
 	service string
@@ -52,7 +52,7 @@ func systemctl() string {
 	return "systemctl"
 }
 
-// Restart registers .restart and the receipt hook.
+// Restart 注册 .restart 和处理回执的钩子。
 func Restart(a *app.App) {
 	r := &restarter{a: a, service: a.Env.Get("MIBOT_SERVICE", "mibot-lite.service"),
 		store: store.New(filepath.Join(a.Root, "restart-receipt.json"), func() receiptDocument { return receiptDocument{} })}
@@ -125,7 +125,7 @@ func ownerHint() string {
 	return "当前运行用户 UID=" + strconv.Itoa(uid) + "，通常需要 root 或 systemd 管理权限。"
 }
 
-// notifyReady answers the message that asked for the restart, once.
+// notifyReady 回应发起重启的那条消息，只回应一次。
 func (r *restarter) notifyReady(ctx context.Context, client *bot.Client) {
 	doc, err := r.store.Read()
 	if err != nil || doc.Pending == nil || doc.Pending.BootID == r.a.BootID {

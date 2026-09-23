@@ -47,8 +47,8 @@ func TestParseRoutes(t *testing.T) {
 	}
 }
 
-// The longest prefix wins, so ".." routes its own spelling rather than
-// being read as "." plus a command starting with ".".
+// 最长的前缀优先，所以 ".." 按它自己的写法路由，而不会被读成 "."
+// 加上一个以 "." 开头的命令。
 func TestLongestPrefixWins(t *testing.T) {
 	route, ok := registry().Parse("..ping")
 	if !ok || route.Prefix != ".." {
@@ -96,8 +96,8 @@ type errTest string
 
 func (e errTest) Error() string { return string(e) }
 
-// withCommands is a registry holding a few real commands and an alias
-// table, the way .alias leaves it.
+// withCommands 返回一个带几个真实命令和一张别名表的注册表，
+// 和 .alias 修改之后的状态一样。
 func withCommands(t *testing.T, aliases map[string]string) *Registry {
 	t.Helper()
 	built := registry()
@@ -116,8 +116,8 @@ func TestAliasExpandsAndKeepsTheArguments(t *testing.T) {
 	}
 }
 
-// The words after an alias are the command's input, and some commands
-// read that input from the raw text: .gt translates it line by line.
+// 别名后面的词是命令的输入，有些命令从原始文本读取输入：
+// .gt 就是逐行翻译的。
 func TestAliasKeepsTheRestOfTheTextExactly(t *testing.T) {
 	registry := withCommands(t, map[string]string{"译": "gt"})
 	route, ok := registry.Parse(".译 hello\n  world\n")
@@ -136,8 +136,8 @@ func TestLongestAliasWins(t *testing.T) {
 	}
 }
 
-// A one-word alias named like a real command is dead, not a hijack; a
-// longer alias may still start with a command's name.
+// 和真实命令同名的单个词别名只会失效，不会劫持这个命令；
+// 更长的别名仍然可以以命令名开头。
 func TestRealCommandsOutrankOneWordAliases(t *testing.T) {
 	registry := withCommands(t, map[string]string{"ping": "version", "ping now": "speedtest"})
 	if route, _ := registry.Parse(".ping"); route.Command != "ping" {

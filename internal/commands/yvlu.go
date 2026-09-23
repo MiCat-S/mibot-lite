@@ -25,28 +25,26 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/store"
 )
 
-// The quote image itself is rendered by a remote service: this command
-// collects who said what, with which avatar and which formatting, posts
-// that as JSON, and sends back whatever image comes out. No text layout,
-// no font stack and no emoji rendering lives in this process.
+// 语录图片本身由远程服务渲染：本命令只负责收集谁说了什么、用的哪个头像、
+// 带什么格式，以 JSON 提交过去，再把返回的图片原样发回。文字排版、字体栈、
+// emoji 渲染都不在本进程里做。
 const quoteEndpoint = "https://quote-api-enhanced.zhetengsha.eu.org/generate.webp"
 
-// quoteUserAgent is not decoration: the service sits behind a filter that
-// answers 403 with a challenge page to anything it does not recognise.
-// This exact string is what the plugin sent and what still gets through,
-// so it is part of the protocol rather than a courtesy.
+// quoteUserAgent 不是摆设：该服务前面有一层过滤，凡是它不认识的请求，
+// 都会得到 403 和一个质询页。原插件发的就是这个字符串，现在也仍然能通过，
+// 所以它是协议的一部分，而不是出于礼貌才带上的。
 const quoteUserAgent = "TeleBox/0.2.1"
 
 type yvluConfig struct {
 	StickerSet string `json:"stickerSetShortName"`
 }
 
-// yvluOptions is one parsed invocation.
+// yvluOptions 是解析好的一次调用。
 type yvluOptions struct {
 	Count        int
 	IncludeReply bool
-	// Format is the remote service's own vocabulary: "quote" renders a
-	// transparent sticker, "image" a background card, "stories" a 9:16 card.
+	// Format 用的是远程服务自己的取值："quote" 渲染成透明贴纸，
+	// "image" 是带背景的卡片，"stories" 是 9:16 的卡片。
 	Format     string
 	FakeText   string
 	FakeEnts   []tg.MessageEntityClass
@@ -64,8 +62,8 @@ func yvluHelp(prefix string) string {
 		"yvlu config</code> 查看配置\n• <code>" + p + "yvlu config sticker 名称</code> 设置贴纸包\n\n图片由远程 quote 服务渲染，需要网络可达。"
 }
 
-// parseYvlu reads the argument grammar, which is positional and a little
-// irregular because it is the one the plugin's users already know.
+// parseYvlu 解析参数。参数按位置排列，还有点不规整，
+// 因为这是原插件的用户已经用惯的写法。
 func parseYvlu(inv *command.Invocation) (*yvluOptions, bool) {
 	args := inv.Args
 	options := &yvluOptions{Count: 1, Format: "quote"}
@@ -112,8 +110,8 @@ func parseYvlu(inv *command.Invocation) (*yvluOptions, bool) {
 		options.Count = count(inv.Arg(2))
 	case (sub == "f" || sub == "fr") && len(args) > 1:
 		options.IncludeReply = sub == "fr"
-		// The faked text is taken from the raw message so its own
-		// formatting entities survive, shifted to the new offset.
+		// 伪造的文本从原始消息里取，这样它自带的格式 entity 能保留
+		// 下来，只是平移到新的偏移位置。
 		marker := regexp.MustCompile(`^\S+\s+` + sub + `\s+`)
 		match := marker.FindString(inv.Text)
 		if match == "" {
@@ -121,8 +119,8 @@ func parseYvlu(inv *command.Invocation) (*yvluOptions, bool) {
 		}
 		offset := utf16Len(match)
 		options.FakeText = string([]rune(inv.Text)[len([]rune(match)):])
-		// The parser is handed an invocation, not a message: a caller
-		// without a protocol message behind it still gets its text parsed.
+		// 解析函数拿到的是一次调用而不是一条消息：背后没有协议层
+		// 消息的调用方，文本照样能被解析。
 		if inv.Message != nil && inv.Message.Raw != nil {
 			if entities, ok := inv.Message.Raw.GetEntities(); ok {
 				options.FakeEnts = shiftEntities(entities, offset)
@@ -149,8 +147,8 @@ func isDigits(value string) bool {
 	return true
 }
 
-// shiftEntities moves entities left by offset, dropping those that fall
-// entirely before it and clipping one that straddles it.
+// shiftEntities 丢掉完全落在 offset 之前的格式实体，其余原样保留。
+// 真正按 offset 平移和截断跨界实体，是后面 convertEntities 做的。
 func shiftEntities(entities []tg.MessageEntityClass, offset int) []tg.MessageEntityClass {
 	var kept []tg.MessageEntityClass
 	for _, entity := range entities {
@@ -195,8 +193,7 @@ func entityRange(entity tg.MessageEntityClass) (offset, length int) {
 	return 0, 0
 }
 
-// quoteEntity is the remote service's entity shape, which follows the Bot
-// API rather than TL.
+// quoteEntity 是远程服务使用的 entity 结构，沿用 Bot API 的格式而不是 TL。
 type quoteEntity struct {
 	Offset        int    `json:"offset"`
 	Length        int    `json:"length"`
@@ -273,7 +270,7 @@ func convertEntities(entities []tg.MessageEntityClass, shift int) []quoteEntity 
 	return converted
 }
 
-// quoteFrom is the author block of one quoted message.
+// quoteFrom 是一条被引用消息的作者信息块。
 type quoteFrom struct {
 	ID        int64      `json:"id"`
 	Name      string     `json:"name,omitempty"`
@@ -281,7 +278,7 @@ type quoteFrom struct {
 	LastName  string     `json:"last_name,omitempty"`
 	Username  string     `json:"username,omitempty"`
 	Photo     *quotePhot `json:"photo,omitempty"`
-	// EmojiStatus is the custom emoji the author wears beside their name.
+	// EmojiStatus 是作者挂在名字旁边的自定义表情。
 	EmojiStatus string `json:"emoji_status,omitempty"`
 }
 
@@ -308,7 +305,7 @@ type quoteMessage struct {
 	Voice         *quoteVoice   `json:"voice,omitempty"`
 	Document      *quoteDoc     `json:"document,omitempty"`
 	Forward       *quoteFwd     `json:"forward,omitempty"`
-	// SenderTag is the author's admin title in this group, if any.
+	// SenderTag 是作者在本群的管理员头衔，没有就留空。
 	SenderTag string      `json:"senderTag,omitempty"`
 	Audio     *quoteAudio `json:"audio,omitempty"`
 }
@@ -347,16 +344,15 @@ type yvluService struct {
 	a     *app.App
 	store *store.Store[yvluConfig]
 
-	// rendered caches encoded avatars, keyed by the peer and the photo id
-	// Telegram gave it. A changed avatar is a new photo id, so a stale
-	// entry can never be served; the key does the invalidating.
+	// rendered 缓存编码好的头像，键是 peer 加上 Telegram 给的 photo id。
+	// 换了头像就是新的 photo id，所以不可能用到过期的条目；
+	// 失效由键本身完成。
 	avatarMu sync.Mutex
 	rendered map[string]*quotePhot
 }
 
-// avatarCacheLimit bounds the cache. Quoting is bursty and repetitive —
-// the same handful of people, over and over — so a small map catches
-// nearly everything.
+// avatarCacheLimit 限制缓存大小。引用语录往往扎堆出现、反复进行——
+// 来来回回总是那几个人——所以一个小 map 就能命中几乎所有情况。
 const avatarCacheLimit = 32
 
 func (s *yvluService) cachedAvatar(key string) (*quotePhot, bool) {
@@ -381,7 +377,7 @@ func (s *yvluService) cacheAvatar(key string, photo *quotePhot) {
 	s.rendered[key] = photo
 }
 
-// Yvlu registers .yvlu.
+// Yvlu 注册 .yvlu。
 func Yvlu(a *app.App) {
 	service := &yvluService{a: a, store: newStore(a, "yvlu.json", func() yvluConfig { return yvluConfig{} })}
 	a.Registry.Register(&command.Command{Name: "yvlu", Description: "生成文字语录贴纸、图片与故事，管理贴纸包",
@@ -461,9 +457,9 @@ func (s *yvluService) handle(ctx context.Context, inv *command.Invocation) error
 	if err := inv.Client.SendDocumentWith(ctx, peer, image, document); err != nil {
 		return err
 	}
-	// Where a slow quote spent its time. At debug, because it is a
-	// diagnostic: the answer to "why did that take seven seconds" is one
-	// of these three numbers, and guessing at it cost a deployment.
+	// 记录一条慢语录的时间花在了哪里。用 debug 级别，因为这是诊断信息：
+	// 「为什么花了七秒」的答案就是这三个数之一；以前靠猜，白白多部署了
+	// 一次。
 	inv.Log.Debug("yvlu.timing",
 		"collect", built.Sub(started).String(),
 		"render", rendered.Sub(built).String(),
@@ -515,8 +511,8 @@ func (s *yvluService) config(ctx context.Context, inv *command.Invocation) error
 	return inv.Edit(ctx, feedback("success", "贴纸包配置已更新", "已设置贴纸包："+name+"\n贴纸包链接：t.me/addstickers/"+name))
 }
 
-// saveSticker adds the replied sticker or photo to the configured pack,
-// creating the pack when it does not exist yet.
+// saveSticker 把被回复的贴纸或图片加进配置好的贴纸包，
+// 贴纸包还不存在时先创建。
 func (s *yvluService) saveSticker(ctx context.Context, inv *command.Invocation) error {
 	config, err := s.store.Read()
 	if err != nil {
@@ -544,9 +540,8 @@ func (s *yvluService) saveSticker(ctx context.Context, inv *command.Invocation) 
 
 	var document *tg.InputDocument
 	if existing, ok := bot.DocumentOf(reply.Raw); ok && isStickerDocument(reply.Raw) {
-		// An existing sticker is added by reference: re-uploading it would
-		// strip its emoji and its set membership, and re-encoding a WebP
-		// through PNG would lose quality for nothing.
+		// 现成的贴纸按引用添加：重新上传会丢掉它的 emoji 和所属贴纸包，
+		// 而把 WebP 经 PNG 重新编码一遍，只会白白损失画质。
 		document = existing
 	}
 	if document == nil {
@@ -591,7 +586,7 @@ func (s *yvluService) saveSticker(ctx context.Context, inv *command.Invocation) 
 	return inv.Edit(ctx, feedback("success", title, "贴纸包：t.me/addstickers/"+config.StickerSet))
 }
 
-// render posts the payload and returns the image plus its extension.
+// render 提交 payload，返回图片及其扩展名。
 func (s *yvluService) render(ctx context.Context, payload *quotePayload) ([]byte, string, error) {
 	encoded, err := json.Marshal(payload)
 	if err != nil {
@@ -620,7 +615,7 @@ func (s *yvluService) render(ctx context.Context, payload *quotePayload) ([]byte
 	return nil, "", fail("quote 服务返回了非图片数据")
 }
 
-// build assembles the payload from the replied messages.
+// build 用被回复的消息组装 payload。
 func (s *yvluService) build(ctx context.Context, inv *command.Invocation, reply *bot.Message, options *yvluOptions) (*quotePayload, error) {
 	messages := []*bot.Message{reply}
 	if options.Count > 1 {
@@ -670,9 +665,8 @@ func (s *yvluService) build(ctx context.Context, inv *command.Invocation, reply 
 			item.Text = options.FakeText
 			item.Entities = convertEntities(options.FakeEnts, utf16Len(inv.Text)-utf16Len(options.FakeText))
 		case index == 0 && inv.Message.QuoteText != "":
-			// The operator replied to part of a message rather than all of
-			// it. Quoting the whole thing would be quoting something they
-			// deliberately narrowed, so the selection wins.
+			// 操作者回复的是消息的一部分而不是全部。引用整条消息，
+			// 就无视了对方有意缩小的范围，所以以选中的部分为准。
 			item.Text = inv.Message.QuoteText
 			item.Entities = convertEntities(inv.Message.QuoteEntities, 0)
 		default:
@@ -706,14 +700,12 @@ func (s *yvluService) build(ctx context.Context, inv *command.Invocation, reply 
 	return payload, nil
 }
 
-// following reads the count messages starting at the replied one.
+// following 从被回复的那条开始，读取 count 条消息。
 //
-// Message ids are not contiguous in a real chat — other people's messages,
-// deletions and service messages all consume them — so stepping ids one by
-// one skips messages and asks for ones that do not exist. This walks the
-// history the way the plugin did, by position rather than by id:
-// getHistory positions at offset_id and a negative add_offset moves that
-// many places towards the newer end.
+// 真实聊天里的消息 ID 并不连续——别人的消息、删除的消息、服务消息都会
+// 占用 ID——所以逐个递增 ID 会漏掉消息，还会去请求根本不存在的消息。
+// 这里沿用原插件的做法，按位置而不是按 ID 遍历历史：getHistory 定位到
+// offset_id，负的 add_offset 再往较新的一端挪动相应的条数。
 func (s *yvluService) following(ctx context.Context, inv *command.Invocation, reply *bot.Message, count int) ([]*bot.Message, error) {
 	peer, err := inv.Client.InputPeer(reply.Peer)
 	if err != nil {
@@ -736,10 +728,10 @@ func (s *yvluService) following(ctx context.Context, inv *command.Invocation, re
 			ordered = append(ordered, envelope)
 		}
 	}
-	// getHistory answers newest first.
+	// getHistory 返回的顺序是新的在前。
 	sort.Slice(ordered, func(a, b int) bool { return ordered[a].ID < ordered[b].ID })
 	if len(ordered) == 0 || ordered[0].ID != reply.ID {
-		// The replied message must lead, even if history did not return it.
+		// 被回复的消息必须排在最前面，即使历史记录里没有返回它。
 		ordered = append([]*bot.Message{reply}, ordered...)
 	}
 	if len(ordered) > count {
@@ -748,11 +740,10 @@ func (s *yvluService) following(ctx context.Context, inv *command.Invocation, re
 	return ordered, nil
 }
 
-// author resolves who a quoted message is attributed to.
+// author 确定一条被引用的消息该算在谁名下。
 //
-// A forwarded message is attributed to whoever wrote it, not to whoever
-// forwarded it: quoting a forward and seeing the forwarder's name on it
-// would put words in the wrong mouth.
+// 转发的消息算在原作者名下，而不是转发者：引用一条转发消息，
+// 却在上面看到转发者的名字，就等于把话安到了别人头上。
 func (s *yvluService) author(ctx context.Context, inv *command.Invocation, message *bot.Message, options *yvluOptions) (*quoteFrom, error) {
 	if options.FakeSender != nil {
 		if user, ok := options.FakeSender.(*tg.InputPeerUser); ok {
@@ -782,19 +773,17 @@ func (s *yvluService) author(ctx context.Context, inv *command.Invocation, messa
 	return nil, fail("无法获取消息发送者信息")
 }
 
-// Budgets for the optional parts of a quote. None of these is the point
-// of the command: a quote renders without an avatar, without the admin
-// title and without the media embedded. So each is capped well below the
-// command's own deadline, and a miss degrades the picture instead of
-// holding the whole thing open.
+// 语录中可选部分的时间预算。这些都不是命令的重点：没有头像、没有管理员
+// 头衔、没有嵌入媒体，语录照样能渲染。所以每一项的上限都远低于命令本身
+// 的期限，超时只会让图片少点东西，而不会把整个命令拖住。
 const (
 	avatarBudget = 20 * time.Second
 	mediaBudget  = 45 * time.Second
 	tagBudget    = 10 * time.Second
 )
 
-// avatar downloads the author's profile photo as a data URL, or nil when
-// there is none — an avatarless quote still renders.
+// avatar 把作者的头像下载成 data URL，没有头像时返回 nil——
+// 没有头像的语录照样能渲染。
 func (s *yvluService) avatar(ctx context.Context, inv *command.Invocation, message *bot.Message, options *yvluOptions) *quotePhot {
 	ctx, cancel := context.WithTimeout(ctx, avatarBudget)
 	defer cancel()
@@ -806,16 +795,15 @@ func (s *yvluService) avatar(ctx context.Context, inv *command.Invocation, messa
 		}
 		peer = resolved
 	}
-	// A cached entry skips a cross-data-centre download entirely, which is
-	// most of what a quote spends its time on.
+	// 命中缓存就完全省掉一次跨数据中心的下载，
+	// 而一条语录的大部分时间正是花在这上面。
 	key := avatarKey(inv, peer)
 	if key != "" {
 		if photo, ok := s.cachedAvatar(key); ok {
 			return photo
 		}
 	}
-	// Small first, then large: a peer whose small photo will not download
-	// often still has the big one.
+	// 先下小图，再下大图：小图下载不了的 peer，往往还能拿到大图。
 	data, err := inv.Client.DownloadProfilePhoto(ctx, peer, false, 2<<20)
 	if err != nil || len(data) == 0 {
 		data, err = inv.Client.DownloadProfilePhoto(ctx, peer, true, 2<<20)
@@ -838,8 +826,7 @@ func (s *yvluService) avatar(ctx context.Context, inv *command.Invocation, messa
 	return photo
 }
 
-// avatarKey identifies one rendered avatar: the peer plus the id of the
-// photo it is wearing.
+// avatarKey 标识一张渲染好的头像：peer 加上它当前所用头像的 photo id。
 func avatarKey(inv *command.Invocation, peer tg.InputPeerClass) string {
 	switch value := peer.(type) {
 	case *tg.InputPeerSelf:
@@ -860,8 +847,8 @@ func avatarKey(inv *command.Invocation, peer tg.InputPeerClass) string {
 	return ""
 }
 
-// describeMedia attaches whatever the quoted message carried: a picture is
-// embedded, a video is transcoded, and everything else is described.
+// describeMedia 附上被引用消息携带的媒体：图片直接嵌入，视频转码，
+// 其余的只做文字描述。
 func (s *yvluService) describeMedia(ctx context.Context, inv *command.Invocation, message *bot.Message, item *quoteMessage) {
 	if message.Raw == nil {
 		return
@@ -908,8 +895,7 @@ func (s *yvluService) describeDocument(ctx context.Context, inv *command.Invocat
 	}
 	switch {
 	case sticker:
-		// A sticker is the quote's own output format; embedding one would
-		// nest a sticker inside a sticker.
+		// 贴纸本身就是语录的输出格式；再嵌入贴纸就成了贴纸套贴纸。
 		return
 	case audio != nil && !audio.Voice:
 		title := audio.Title
@@ -947,9 +933,8 @@ func (s *yvluService) describeDocument(ctx context.Context, inv *command.Invocat
 	}
 }
 
-// embedVideo transcodes a short animation so the quote can show it moving.
-// A failure here is not fatal: the quote still renders with the media
-// described rather than shown.
+// embedVideo 把短动画转码，让语录里能显示会动的画面。这里失败并不致命：
+// 语录照样渲染，只是媒体改为文字描述而不直接显示。
 func (s *yvluService) embedVideo(ctx context.Context, inv *command.Invocation, message *bot.Message, document *tg.Document, item *quoteMessage) {
 	if document.Size > 8<<20 {
 		return
@@ -990,7 +975,7 @@ func extensionFor(mimeType string) string {
 	return ".bin"
 }
 
-// replyBlock renders what a quoted message was itself replying to.
+// replyBlock 生成被引用消息本身所回复的那条内容。
 func (s *yvluService) replyBlock(ctx context.Context, inv *command.Invocation, message *bot.Message) *quoteReply {
 	if message.ReplyToID == 0 {
 		return nil
@@ -999,8 +984,7 @@ func (s *yvluService) replyBlock(ctx context.Context, inv *command.Invocation, m
 	if err != nil || replied == nil {
 		return nil
 	}
-	// When the replier selected part of the message, that selection is
-	// what they were answering.
+	// 回复者如果只选中了消息的一部分，那他回应的就是选中的那部分。
 	text, entities := replied.Text, []tg.MessageEntityClass(nil)
 	if replied.Raw != nil {
 		if carried, ok := replied.Raw.GetEntities(); ok {
@@ -1033,8 +1017,7 @@ func (s *yvluService) replyBlock(ctx context.Context, inv *command.Invocation, m
 	return block
 }
 
-// isStickerDocument reports a message whose document carries the sticker
-// attribute.
+// isStickerDocument 判断消息里的文件是否带有贴纸属性。
 func isStickerDocument(message *tg.Message) bool {
 	media, ok := message.GetMedia()
 	if !ok {
@@ -1056,13 +1039,11 @@ func isStickerDocument(message *tg.Message) bool {
 	return false
 }
 
-// forwardAuthor reads the original writer out of a forwarded message's
-// header, or nil when the message was not forwarded.
+// forwardAuthor 从转发消息的头部读出原作者；消息不是转发来的就返回 nil。
 //
-// The header may name a peer, or only a name: forwarding from someone who
-// hides their account leaves a string and nothing to resolve. Both are
-// worth attributing, so a nameless fallback keeps the quote honest rather
-// than silently crediting the forwarder.
+// 头部可能给出一个 peer，也可能只有一个名字：从隐藏了账号的人那里转发，
+// 只留下一个字符串，没有可解析的对象。两种情况都值得署名，所以连名字都
+// 没有时也要兜底，让语录保持真实，而不是悄悄算到转发者头上。
 func forwardAuthor(inv *command.Invocation, message *bot.Message) *quoteFrom {
 	if message.Raw == nil {
 		return nil
@@ -1101,8 +1082,8 @@ func forwardAuthor(inv *command.Invocation, message *bot.Message) *quoteFrom {
 	return &quoteFrom{ID: int64(nameHash(name)), FirstName: name, Name: name}
 }
 
-// nameHash gives a stable id to an author who has none, so the renderer
-// still colours them consistently across a run.
+// nameHash 给没有 ID 的作者一个稳定的 ID，这样在同一次生成里，
+// 渲染服务仍会给他们一致的配色。
 func nameHash(text string) int32 {
 	var value int32
 	for _, r := range text {
@@ -1114,8 +1095,7 @@ func nameHash(text string) int32 {
 	return value
 }
 
-// forwardLabel names where a forwarded message came from, for the little
-// "forwarded from" line above the text.
+// forwardLabel 给出转发消息的来源，用在正文上方那行小字 "forwarded from" 里。
 func forwardLabel(inv *command.Invocation, message *bot.Message) *quoteFwd {
 	from := forwardAuthor(inv, message)
 	if from == nil {
@@ -1131,10 +1111,10 @@ func forwardLabel(inv *command.Invocation, message *bot.Message) *quoteFwd {
 	return &quoteFwd{Label: label}
 }
 
-// senderTag reads the author's admin title in this group.
+// senderTag 读取作者在本群的管理员头衔。
 //
-// It is what distinguishes "群主" or a custom rank from an ordinary member
-// in the rendered quote, and it only exists for channels and supergroups.
+// 渲染出的语录靠它把 "群主" 或自定义头衔和普通成员区分开；
+// 只有频道和超级群才有这个信息。
 func (s *yvluService) senderTag(ctx context.Context, inv *command.Invocation, message *bot.Message, authorID int64) string {
 	ctx, cancel := context.WithTimeout(ctx, tagBudget)
 	defer cancel()
