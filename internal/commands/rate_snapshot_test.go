@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -75,4 +76,45 @@ func TestRateSnapshot(t *testing.T) {
 		out.WriteString(section(fmt.Sprintf("%q", query), append(calls, requested...), ""))
 	}
 	golden(t, "rate", out.String())
+}
+
+// 稳定币本身作为币种时，要按「自己对自己是 1」计价；BUSD 已停牌，不能再拿来中转。
+func TestRateStablecoins(t *testing.T) {
+	for query, wanted := range map[string]string{
+		"CNY USDT 7000": "985.92 USDT",
+		"USDT CNY":      "1 USDT = 7.10 CNY",
+		"USDT EUR 100":  "92.00 EUR",
+	} {
+		calls, requested := runRate(t, query, rateHandle)
+		reply := calls[len(calls)-1]
+		if !strings.Contains(reply, wanted) {
+			t.Errorf("%q：回复里没有 %q\n%s", query, wanted, reply)
+		}
+		for _, url := range requested {
+			if strings.HasSuffix(url, "=USDTUSDT") || strings.Contains(url, "BUSD") {
+				t.Errorf("%q：不该请求 %s", query, url)
+			}
+		}
+	}
+}
+
+// TestRateLive 用真实的币安和汇率接口跑几条稳定币查询，确认修好的是线上真实的情况。
+// 默认跳过：MIBOT_RATE_LIVE=1 ./commands.test -test.run RateLive -test.v
+func TestRateLive(t *testing.T) {
+	if os.Getenv("MIBOT_RATE_LIVE") != "1" {
+		t.Skip("设置 MIBOT_RATE_LIVE=1 才连真实接口")
+	}
+	for _, query := range []string{"CNY USDT 7000", "USDT CNY", "USDC CNY", "BTC USDT", "USDT USDC"} {
+		fake := newFakeTelegram(t, dmeSelf)
+		client := fakeClient(fake, otherUser, nil)
+		message := &bot.Message{ID: dmeCommand, Peer: dmePrivate, ChatID: bot.PeerID(dmePrivate), Out: true}
+		if err := rateHandle(context.Background(), fakeInvocation(client, message, strings.Fields(query)...), newRateService()); err != nil {
+			t.Fatalf("%q: %v", query, err)
+		}
+		reply := fake.calls[len(fake.calls)-1]
+		t.Logf("%-14s %s", query, strings.ReplaceAll(reply, "\\n", " "))
+		if strings.Contains(reply, "失败") {
+			t.Errorf("%q 在真实接口上失败了", query)
+		}
+	}
 }

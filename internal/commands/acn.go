@@ -458,21 +458,33 @@ func acnStatus(ctx context.Context, inv *command.Invocation, state acnState) err
 }
 
 // acnSave 记下现在的名字，作为以后恢复用的「原始昵称」。其他子命令都要先有它。
-func acnSave(inv *command.Invocation, service *acnService, userID string) error {
+// 第一次保存和之后更新回复不同：更新只换名字，时区、样式这些设置都保留。
+func acnSave(ctx context.Context, inv *command.Invocation, service *acnService, userID string) error {
 	self := inv.Client.Self()
-	return service.store.Update(func(state *acnState) error {
+	first := false
+	var saved acnUser
+	if err := service.store.Update(func(state *acnState) error {
 		current := state.Users[userID]
 		if current == nil {
 			current = &acnUser{UserID: userID, Timezone: "Asia/Shanghai", Mode: "time"}
 			state.Users[userID] = current
 		}
+		first = current.OriginalFirstName == ""
 		current.OriginalFirstName = cleanNickname(self.FirstName)
 		current.OriginalLastName = cleanNickname(self.LastName)
 		if current.Timezone == "" {
 			current.Timezone = "Asia/Shanghai"
 		}
+		saved = *current
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	names := "姓名：" + command.Code(saved.OriginalFirstName) + "\n姓氏：" + command.Code(orDefault(saved.OriginalLastName, "(空)"))
+	if first {
+		return inv.Edit(ctx, "🎉 <b>昵称已保存</b>\n\n"+names+"\n\n接下来用 "+command.Code(inv.Prefix+"acn on")+" 开启自动更新。")
+	}
+	return inv.Edit(ctx, "✅ <b>原始昵称已更新</b>，其他设置保留\n\n"+names)
 }
 
 // toggle 开启或关闭自动改名。开启时立刻改一次；关闭时换回原始昵称。
@@ -674,7 +686,7 @@ func acnHandle(ctx context.Context, inv *command.Invocation, service *acnService
 	case "status":
 		return acnStatus(ctx, inv, state)
 	case "save":
-		return acnSave(inv, service, userID)
+		return acnSave(ctx, inv, service, userID)
 	}
 	user := state.Users[userID]
 	if user == nil || user.OriginalFirstName == "" {

@@ -61,3 +61,22 @@ func TestAcnSnapshot(t *testing.T) {
 	}
 	golden(t, "acn", out.String())
 }
+
+// 第一次保存要提示下一步；之后再保存只换名字，并说明其他设置都还在。
+func TestAcnSaveTwice(t *testing.T) {
+	calls, _ := runAcn(t, []string{"save", "tz Asia/Tokyo", "save", "config"}, func(ctx context.Context, service *acnService, inv *command.Invocation) error {
+		return acnHandle(ctx, inv, service)
+	})
+	if len(calls) != 4 {
+		t.Fatalf("应该有 4 条回复，实际 %d 条：\n%s", len(calls), strings.Join(calls, "\n"))
+	}
+	if !strings.Contains(calls[0], "昵称已保存") || !strings.Contains(calls[0], ".acn on") {
+		t.Errorf("第一次保存没有提示下一步：%s", calls[0])
+	}
+	if !strings.Contains(calls[2], "原始昵称已更新") || !strings.Contains(calls[2], "其他设置保留") {
+		t.Errorf("再次保存的回复不对：%s", calls[2])
+	}
+	if !strings.Contains(calls[3], "Asia/Tokyo") {
+		t.Errorf("再次保存把时区设置冲掉了：%s", calls[3])
+	}
+}

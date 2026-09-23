@@ -7,6 +7,7 @@ edit # text=true:"📊 自动更新: 运行中\n启用用户: #" media=false
 edit # text=true:"❌ 请先 .acn save" media=false
 
 ## save | config | mode | mode | mode | mode | config
+edit # text=true:"🎉 昵称已保存\n\n姓名：Cat\n姓氏：S\n\n接下来用 .acn on 开启自动更新。" media=false
 edit # text=true:"🔧 您的配置状态\n用户: #\n自动更新: off\n原始姓名: Cat\n原始姓氏: S\n模式: time\n时区: Asia/Shanghai\n时间显示: on\n时钟表情: off\n时区显示: off\n时区格式: GMT\n文字样式: normal\n组件顺序: name,text,time,weather,emoji,timezone\n文案数: #\n天气显示: off\n天气地点: 未设置\n天气预览: 暂无缓存\n昵称更新时间: 尚未更新" media=false
 edit # text=true:"✅ 显示模式: text" media=false
 edit # text=true:"✅ 显示模式: both" media=false
@@ -43,6 +44,7 @@ edit # text=true:"🔧 您的配置状态\n用户: #\n自动更新: off\n原始�
 
 
 ## save | tz list | tz on | tz format utc | tz format custom:东八区 | tz format bad | tz Asia/Tokyo | tz set Europe/London | tz Nowhere/Nope | tz off | config
+edit # text=true:"🎉 昵称已保存\n\n姓名：Cat\n姓氏：S\n\n接下来用 .acn on 开启自动更新。" media=false
 edit # text=true:"Asia/Shanghai\nAsia/Tokyo\nEurope/London\nAmerica/New_York" media=false
 edit # text=true:"✅ 时区显示已开启" media=false
 edit # text=true:"✅ 时区格式已更新" media=false
@@ -83,6 +85,7 @@ edit # text=true:"🔧 您的配置状态\n用户: #\n自动更新: off\n原始�
 
 
 ## save | emoji on | time off | emoji maybe | style mono | style weird | style normal | order | order time,name,time | order bogus | config
+edit # text=true:"🎉 昵称已保存\n\n姓名：Cat\n姓氏：S\n\n接下来用 .acn on 开启自动更新。" media=false
 edit # text=true:"✅ 时钟Emoji已开启" media=false
 edit # text=true:"✅ 时间显示已关闭" media=false
 edit # text=true:"请使用 .acn emoji on/off" media=false
@@ -123,6 +126,7 @@ edit # text=true:"🔧 您的配置状态\n用户: #\n自动更新: off\n原始�
 
 
 ## save | on | update | now | off | reset | config | nonsense
+edit # text=true:"🎉 昵称已保存\n\n姓名：Cat\n姓氏：S\n\n接下来用 .acn on 开启自动更新。" media=false
 profile first="Cat #:#" last="S"
 edit # text=true:"✅ 动态昵称已启用" media=false
 profile first="Cat #:#" last="S"
@@ -165,6 +169,7 @@ edit # text=true:"❌ 未知命令: nonsense" media=false
 
 
 ## save | text list | text add 你好 | text add 世界 | text list | config
+edit # text=true:"🎉 昵称已保存\n\n姓名：Cat\n姓氏：S\n\n接下来用 .acn on 开启自动更新。" media=false
 edit # text=true:"📝 无随机文本" media=false
 edit # text=true:"❌ 没有可添加的文案（每条最长 # 字符）" media=false
 edit # text=true:"❌ 没有可添加的文案（每条最长 # 字符）" media=false

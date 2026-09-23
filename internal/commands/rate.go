@@ -42,7 +42,12 @@ func asRate(err error, target *rateFailure) bool {
 var (
 	rateCodePattern = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9-]{0,63}$`)
 	rateArgPattern  = regexp.MustCompile(`^[a-zA-Z0-9.+-]+$`)
-	rateBridges     = []string{"USDT", "BUSD", "USDC"}
+	// rateBridges 是取美元价时借道的稳定币，按顺序试。
+	//
+	// 不再用 BUSD：它已经停止交易，币安上 BUSD 交易对的价格还查得到，
+	// 但那是停牌前冻结的旧数据（同一时刻 BTCBUSD 报 42769，BTCUSDC 是 85505）。
+	// 一个币只要没有 USDT 交易对、却有旧的 BUSD 交易对，就会被报出过时的价格。
+	rateBridges = []string{"USDT", "USDC"}
 )
 
 type rateCurrency struct {
@@ -441,12 +446,22 @@ func (p *ratePricer) binance(pair string) (float64, error) {
 	return price, nil
 }
 
+// inBridge 取一个币用某种稳定币计价的价格。币本身就是这种稳定币时，价格就是 1：
+// 币安上没有 USDTUSDT 这样的交易对，以前查 USDT 本身（比如帮助里的示例
+// .rate CNY USDT 7000）一律失败。
+func (p *ratePricer) inBridge(coin, bridge string) (float64, error) {
+	if coin == bridge {
+		return 1, nil
+	}
+	return p.binance(coin + bridge)
+}
+
 // cryptoFiat 算一个币值多少法币：先经稳定币取美元价，再乘美元对该法币的汇率。
 // 几个中转稳定币挨个试，全失败时报最后一个原因。
 func (p *ratePricer) cryptoFiat(crypto, fiat string) (float64, error) {
 	last := "交易对不可用"
 	for _, bridge := range rateBridges {
-		price, err := p.binance(crypto + bridge)
+		price, err := p.inBridge(crypto, bridge)
 		if err != nil {
 			if p.ctx.Err() != nil {
 				return 0, err
@@ -485,14 +500,14 @@ func (p *ratePricer) cryptoCrypto(first, second string) (float64, error) {
 		return 0, err
 	}
 	for _, bridge := range rateBridges {
-		a, err := p.binance(first + bridge)
+		a, err := p.inBridge(first, bridge)
 		if err != nil {
 			if p.ctx.Err() != nil {
 				return 0, err
 			}
 			continue
 		}
-		b, err := p.binance(second + bridge)
+		b, err := p.inBridge(second, bridge)
 		if err != nil {
 			if p.ctx.Err() != nil {
 				return 0, err
