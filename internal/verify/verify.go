@@ -72,6 +72,7 @@ var Cases = []Case{
 	{Command: "ids", Expect: "注册时间"},
 	{Command: "dc", Expect: "数据中心"},
 	{Command: "ip 8.8.8.8", Expect: "Google", Network: true, Wait: 30 * time.Second},
+	{Command: "ping example.com", Expect: "HTTP", Network: true, Wait: 30 * time.Second},
 	{Command: "eatgif list", Expect: "头像动图", Network: true, Wait: 60 * time.Second},
 	{Command: "eat", Expect: "头像表情包", Network: true, Wait: 60 * time.Second},
 	{Command: "whois example.com", Expect: "example.com", Network: true, Wait: 60 * time.Second},
