@@ -149,10 +149,34 @@ func InputUser(peer tg.InputPeerClass) (tg.InputUserClass, bool) {
 	return nil, false
 }
 
-// ParseHTML 把 Telegram 风格的 HTML 转成纯文本加实体。
+// ParseHTML 把 HTML 转成纯文本和格式实体，不解析 tg://user?id= 提及（只留文字）。
+// 能访问 Client 时用它的 parseHTML，那个会把见过的用户变成真正的提及。
 func ParseHTML(text string) (string, []tg.MessageEntityClass, error) {
+	return parseHTML(text, nil)
+}
+
+func (c *Client) parseHTML(text string) (string, []tg.MessageEntityClass, error) {
+	return parseHTML(text, c.peers)
+}
+
+// parseHTML 把 HTML 转成纯文本和格式实体。
+//
+// <a href="tg://user?id=…"> 只有在 peers 里查得到那个用户的 access hash 时才变成提及，
+// 查不到就只留文字。gotd 默认会造一个不带 access hash 的提及，它的文档说这只适合
+// 机器人账号；teleproto 的做法也是查得到才转成提及。
+func parseHTML(text string, peers *PeerCache) (string, []tg.MessageEntityClass, error) {
+	resolver := func(id int64) (tg.InputUserClass, error) {
+		if peers != nil {
+			if peer, ok := peers.InputPeer(&tg.PeerUser{UserID: id}); ok {
+				if user, ok := peer.(*tg.InputPeerUser); ok {
+					return &tg.InputUser{UserID: user.UserID, AccessHash: user.AccessHash}, nil
+				}
+			}
+		}
+		return nil, fmt.Errorf("user %d is not cached", id)
+	}
 	builder := &entity.Builder{}
-	if err := html.HTML(strings.NewReader(text), builder, html.Options{}); err != nil {
+	if err := html.HTML(strings.NewReader(text), builder, html.Options{UserResolver: resolver}); err != nil {
 		return "", nil, err
 	}
 	plain, entities := builder.Complete()
@@ -179,7 +203,7 @@ func (c *Client) SendHTML(ctx context.Context, peer tg.InputPeerClass, text stri
 // 要是把自己发出的消息重新分发一遍，某个命令发出以前缀开头的文本时，
 // 就会触发它自己。只有 --verify 需要这些更新，因为它得从内部驱动分发器。
 func (c *Client) SendHTMLRaw(ctx context.Context, peer tg.InputPeerClass, text string, options SendOptions) (int, tg.UpdatesClass, error) {
-	plain, entities, err := ParseHTML(text)
+	plain, entities, err := c.parseHTML(text)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -234,7 +258,7 @@ func (c *Client) SendSelf(ctx context.Context, text string) (int, error) {
 
 // EditMessage 替换消息文本。MESSAGE_NOT_MODIFIED 也算成功。
 func (c *Client) EditMessage(ctx context.Context, peer tg.InputPeerClass, id int, text string, linkPreview bool) error {
-	plain, entities, err := ParseHTML(text)
+	plain, entities, err := c.parseHTML(text)
 	if err != nil {
 		return err
 	}
@@ -385,7 +409,7 @@ func (c *Client) SendDocument(ctx context.Context, peer tg.InputPeerClass, name,
 	if err != nil {
 		return err
 	}
-	plain, entities, err := ParseHTML(caption)
+	plain, entities, err := c.parseHTML(caption)
 	if err != nil {
 		return err
 	}
@@ -456,7 +480,7 @@ func (c *Client) SendDocumentWith(ctx context.Context, peer tg.InputPeerClass, d
 	if err != nil {
 		return err
 	}
-	plain, entities, err := ParseHTML(options.Caption)
+	plain, entities, err := c.parseHTML(options.Caption)
 	if err != nil {
 		return err
 	}
@@ -480,7 +504,7 @@ func (c *Client) SendPhoto(ctx context.Context, peer tg.InputPeerClass, name str
 	if err != nil {
 		return err
 	}
-	plain, entities, err := ParseHTML(caption)
+	plain, entities, err := c.parseHTML(caption)
 	if err != nil {
 		return err
 	}
