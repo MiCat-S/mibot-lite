@@ -9,8 +9,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,32 +37,45 @@ import (
 // reading 是一次完整的测量结果，不管是用哪种方式测的。
 type reading struct {
 	// Source 是产生这次结果的工具名，用在注明来源的那一行里。
-	Source     string
-	Latency    time.Duration
-	Jitter     time.Duration
-	Download   float64
-	Upload     float64
-	Server     string
-	ISP        string
-	Link       string
-	ExternalIP string
+	Source   string
+	Latency  time.Duration
+	Jitter   time.Duration
+	Download float64
+	Upload   float64
+	// DownloadBytes、UploadBytes 是测速过程实际收发的字节数，工具没报时为 0。
+	DownloadBytes float64
+	UploadBytes   float64
+	Server        string
+	ServerID      int
+	ISP           string
+	Link          string
+	ExternalIP    string
+	// Timestamp 是工具记录的测速时刻，原样保留，显示时再换成 UTC。
+	Timestamp string
+	// ASN 和 Country 是出口地址所属的自治系统和国家代码，另外查询得到，查不到为空。
+	ASN     string
+	Country string
 }
 
 // ooklaResult 对应官方 CLI 的 `speedtest -f json` 输出，其中的带宽数值
 // 单位是字节每秒。
 type ooklaResult struct {
-	Ping struct {
+	Timestamp string `json:"timestamp"`
+	Ping      struct {
 		Latency float64 `json:"latency"`
 		Jitter  float64 `json:"jitter"`
 	} `json:"ping"`
 	Download struct {
 		Bandwidth float64 `json:"bandwidth"`
+		Bytes     float64 `json:"bytes"`
 	} `json:"download"`
 	Upload struct {
 		Bandwidth float64 `json:"bandwidth"`
+		Bytes     float64 `json:"bytes"`
 	} `json:"upload"`
 	ISP    string `json:"isp"`
 	Server struct {
+		ID       int    `json:"id"`
 		Name     string `json:"name"`
 		Location string `json:"location"`
 		Country  string `json:"country"`
@@ -75,13 +90,18 @@ type ooklaResult struct {
 
 // pythonResult 对应 `speedtest-cli --json` 的输出，其中的数值单位是比特每秒。
 type pythonResult struct {
-	Download float64 `json:"download"`
-	Upload   float64 `json:"upload"`
-	Ping     float64 `json:"ping"`
-	Server   struct {
-		Name    string `json:"name"`
-		Country string `json:"country"`
-		Sponsor string `json:"sponsor"`
+	Download      float64 `json:"download"`
+	Upload        float64 `json:"upload"`
+	Ping          float64 `json:"ping"`
+	Timestamp     string  `json:"timestamp"`
+	BytesSent     float64 `json:"bytes_sent"`
+	BytesReceived float64 `json:"bytes_received"`
+	Server        struct {
+		// speedtest-cli 把服务器 ID 写成字符串。
+		ID      json.Number `json:"id"`
+		Name    string      `json:"name"`
+		Country string      `json:"country"`
+		Sponsor string      `json:"sponsor"`
 	} `json:"server"`
 	Client struct {
 		ISP string `json:"isp"`
@@ -102,10 +122,57 @@ var ooklaDigests = map[string]string{
 
 var ooklaArchives = map[string]string{"amd64": "x86_64", "arm64": "aarch64"}
 
+// errNotOokla 表示一个叫 speedtest 的程序不是 Ookla 官方 CLI。
+var errNotOokla = errors.New("不是 Ookla 官方 CLI")
+
+// probeVersion 运行 path --version，返回它报的第一行。输出里没有
+// "Speedtest by Ookla" 就返回 errNotOokla：Python 版 speedtest-cli 也会装一个
+// 叫 speedtest 的命令，参数和输出格式都不同，当成官方 CLI 调用只会失败。
+func probeVersion(path, home string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		return "", err
+	}
+	tool := exec.CommandContext(ctx, path, "--version")
+	tool.Env = append(os.Environ(), "HOME="+home)
+	output, err := tool.Output()
+	first, _, _ := strings.Cut(strings.TrimSpace(string(output)), "\n")
+	first = strings.TrimSpace(first)
+	if len(first) > 160 {
+		first = first[:160]
+	}
+	if err != nil {
+		return first, err
+	}
+	if !strings.Contains(strings.ToLower(string(output)), "speedtest by ookla") {
+		return first, errNotOokla
+	}
+	return first, nil
+}
+
+// ooklaChecks 缓存 PATH 上各个 speedtest 是不是官方 CLI，键是路径、大小和修改时间，
+// 同一个文件只运行一次 --version。
+var ooklaChecks sync.Map
+
+func isOokla(path, home string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	key := path + "|" + strconv.FormatInt(info.Size(), 10) + "|" + info.ModTime().String()
+	if known, ok := ooklaChecks.Load(key); ok {
+		return known.(bool)
+	}
+	_, err = probeVersion(path, home)
+	ooklaChecks.Store(key, err == nil)
+	return err == nil
+}
+
 // externalTool 查找已安装的 speedtest 命令，优先用 Ookla 官方的，
-// 本命令自己装的那份也算在内。
+// 本命令自己装的那份也算在内。PATH 上的 speedtest 要先确认是官方 CLI 才用。
 func externalTool(dataDir string) (string, string) {
-	if path, err := exec.LookPath("speedtest"); err == nil {
+	if path, err := exec.LookPath("speedtest"); err == nil && isOokla(path, filepath.Join(dataDir, "speedtest")) {
 		return path, "ookla"
 	}
 	local := filepath.Join(dataDir, "speedtest", "speedtest")
@@ -232,7 +299,11 @@ func runExternal(ctx context.Context, path, kind, home string, server int) (*rea
 		}
 		return nil, fmt.Errorf("%s failed: %w", kind, err)
 	}
-	output := out.Bytes()
+	return parseResult(kind, out.Bytes())
+}
+
+// parseResult 把工具的输出换成 reading。kind 是 "ookla" 或 "python"。
+func parseResult(kind string, output []byte) (*reading, error) {
 	// Ookla 每行输出一个 JSON 对象，最后一行是结果。
 	line := output
 	if index := strings.LastIndexByte(strings.TrimSpace(string(output)), '\n'); index >= 0 {
@@ -250,8 +321,9 @@ func runExternal(ctx context.Context, path, kind, home string, server int) (*rea
 			Jitter: durationFromMillis(parsed.Ping.Jitter),
 			// Ookla 报的是字节每秒。
 			Download: parsed.Download.Bandwidth * 8, Upload: parsed.Upload.Bandwidth * 8,
-			Server: where, ISP: parsed.ISP, Link: parsed.Result.URL,
-			ExternalIP: parsed.Interface.ExternalIP,
+			DownloadBytes: parsed.Download.Bytes, UploadBytes: parsed.Upload.Bytes,
+			Server: where, ServerID: parsed.Server.ID, ISP: parsed.ISP, Link: parsed.Result.URL,
+			ExternalIP: parsed.Interface.ExternalIP, Timestamp: parsed.Timestamp,
 		}, nil
 	}
 	var parsed pythonResult
@@ -259,11 +331,13 @@ func runExternal(ctx context.Context, path, kind, home string, server int) (*rea
 		return nil, kit.Fail("无法解析 speedtest-cli 的输出")
 	}
 	where := strings.TrimSpace(parsed.Server.Sponsor + " " + parsed.Server.Name)
+	serverID, _ := strconv.Atoi(parsed.Server.ID.String())
 	return &reading{
 		Source: "speedtest-cli", Latency: durationFromMillis(parsed.Ping),
 		Download: parsed.Download, Upload: parsed.Upload,
-		Server: where, ISP: parsed.Client.ISP, Link: parsed.Share,
-		ExternalIP: parsed.Client.IP,
+		DownloadBytes: parsed.BytesReceived, UploadBytes: parsed.BytesSent,
+		Server: where, ServerID: serverID, ISP: parsed.Client.ISP, Link: parsed.Share,
+		ExternalIP: parsed.Client.IP, Timestamp: parsed.Timestamp,
 	}, nil
 }
 
@@ -474,6 +548,71 @@ func formatLatency(d time.Duration) string {
 	return fmt.Sprintf("%.1f ms", float64(d.Microseconds())/1000)
 }
 
+// formatVolume 把字节数按 1000 进位显示，和带宽的单位一致。
+func formatVolume(bytes float64) string {
+	switch {
+	case bytes >= 1e9:
+		return fmt.Sprintf("%.2f GB", bytes/1e9)
+	case bytes >= 1e6:
+		return fmt.Sprintf("%.1f MB", bytes/1e6)
+	case bytes >= 1e3:
+		return fmt.Sprintf("%.1f KB", bytes/1e3)
+	}
+	return fmt.Sprintf("%.0f B", bytes)
+}
+
+// formatTimestamp 把工具报的时刻换成 UTC 显示；解析不了就原样给出。
+func formatTimestamp(value string) string {
+	value = strings.TrimSpace(value)
+	if when, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return when.UTC().Format("2006-01-02 15:04:05") + " UTC"
+	}
+	if len(value) > 40 {
+		value = value[:40]
+	}
+	return value
+}
+
+// countryFlag 把两个大写字母的国家代码换成国旗表情，代码不对时返回空。
+func countryFlag(code string) string {
+	if len(code) != 2 || code[0] < 'A' || code[0] > 'Z' || code[1] < 'A' || code[1] > 'Z' {
+		return ""
+	}
+	return string([]rune{0x1F1E6 + rune(code[0]-'A'), 0x1F1E6 + rune(code[1]-'A')})
+}
+
+// egress 是出口地址所属的自治系统和国家。
+type egress struct {
+	ASN     string
+	Country string
+}
+
+// lookupEgress 向 ip-api.com 查出口地址的 ASN 和国家代码，查不到返回空值。
+// ip-api 的免费接口只有明文 HTTP；发出去的只有这台机器自己的出口地址。
+func lookupEgress(ctx context.Context, address string) egress {
+	if net.ParseIP(address) == nil {
+		return egress{}
+	}
+	var answer struct {
+		Status      string `json:"status"`
+		AS          string `json:"as"`
+		CountryCode string `json:"countryCode"`
+	}
+	endpoint := "http://ip-api.com/json/" + address + "?fields=status,as,countryCode"
+	if err := httpx.GetJSON(ctx, endpoint, 8*time.Second, 64<<10, &answer); err != nil || answer.Status != "success" {
+		return egress{}
+	}
+	asn, _, _ := strings.Cut(strings.TrimSpace(answer.AS), " ")
+	if len(asn) > 32 {
+		asn = asn[:32]
+	}
+	code := strings.ToUpper(strings.TrimSpace(answer.CountryCode))
+	if countryFlag(code) == "" {
+		code = ""
+	}
+	return egress{ASN: asn, Country: code}
+}
+
 func speedtestHelp(dataDir, prefix string, pinned int) string {
 	p := command.Escape(prefix)
 	tool, kind := externalTool(dataDir)
@@ -491,7 +630,9 @@ func speedtestHelp(dataDir, prefix string, pinned int) string {
 		"speedtest &lt;ID&gt;</code> 只这一次用指定服务器\n• <code>" + p +
 		"speedtest set &lt;ID&gt;</code> 设为默认服务器\n• <code>" + p +
 		"speedtest clear</code> 恢复自动挑选\n• <code>" + p +
-		"speedtest config</code> 看当前设置\n\n<b>当前来源</b>\n" + command.Escape(source) +
+		"speedtest config</code> 看当前设置\n• <code>" + p +
+		"speedtest diagnose</code> 检查 CLI 能否运行\n• <code>" + p +
+		"speedtest fix</code> / <code>update</code> 重新下载官方 CLI（版本固定为 " + ooklaVersion + "）\n\n<b>当前来源</b>\n" + command.Escape(source) +
 		"\n\n<b>当前服务器</b>\n" + command.Escape(server) +
 		"\n\n用 Ookla 官方 CLI 测：它自己挑就近的测速服务器，报得出 ISP，还会给一张结果图。没装的话首次" +
 		"运行会把官方静态构件下载到部署目录（校验 SHA-256，不写系统目录），之后直接复用。\n\n" +
@@ -502,24 +643,42 @@ func speedtestHelp(dataDir, prefix string, pinned int) string {
 func render(result *reading, elapsed time.Duration, note string) string {
 	lines := []string{"🚀 <b>网络测速</b>", ""}
 	if result.Server != "" {
-		lines = append(lines, "📍 节点: "+command.Code(result.Server))
+		server := "📍 节点: " + command.Code(result.Server)
+		if result.ServerID > 0 {
+			server += " · ID " + command.Code(strconv.Itoa(result.ServerID))
+		}
+		lines = append(lines, server)
 	}
-	if result.ISP != "" {
-		lines = append(lines, "🏢 运营商: "+command.Code(result.ISP))
+	if isp := strings.TrimSpace(result.ISP + " " + result.ASN); isp != "" {
+		lines = append(lines, "🏢 运营商: "+command.Code(isp))
 	}
 	if result.ExternalIP != "" {
-		lines = append(lines, "🌐 出口: "+command.Code(maskAddress(result.ExternalIP)))
+		address := "🌐 出口: " + command.Code(maskAddress(result.ExternalIP))
+		if flag := countryFlag(result.Country); flag != "" {
+			address += " " + flag + " " + result.Country
+		}
+		lines = append(lines, address)
 	}
 	lines = append(lines, "")
 	latency := "⏱ 延迟: " + command.Code(formatLatency(result.Latency))
 	if result.Jitter > 0 {
 		latency += "（抖动 " + command.Escape(formatLatency(result.Jitter)) + "）"
 	}
+	transfer := func(label string, bits, bytes float64) string {
+		line := label + command.Code(formatSpeed(bits))
+		if bytes > 0 {
+			line += "（共 " + command.Escape(formatVolume(bytes)) + "）"
+		}
+		return line
+	}
 	lines = append(lines,
 		latency,
-		"⬇️ 下载: "+command.Code(formatSpeed(result.Download)),
-		"⬆️ 上传: "+command.Code(formatSpeed(result.Upload)),
-		"")
+		transfer("⬇️ 下载: ", result.Download, result.DownloadBytes),
+		transfer("⬆️ 上传: ", result.Upload, result.UploadBytes))
+	if result.Timestamp != "" {
+		lines = append(lines, "🕒 时间: "+command.Code(formatTimestamp(result.Timestamp)))
+	}
+	lines = append(lines, "")
 	if note != "" {
 		lines = append(lines, "<i>"+command.Escape(note)+"</i>")
 	}
@@ -540,6 +699,8 @@ type speedtestDocument struct {
 type speedtester struct {
 	dataDir  string
 	settings *store.Store[speedtestDocument]
+	// egress 查出口地址的 ASN 和国家；为 nil 时不查（测试里不连外网）。
+	egress func(ctx context.Context, address string) egress
 	// running 保证同一时间只跑一次测速：两次同时跑会互相抢带宽，测出来的都不准。
 	running sync.Mutex
 }
@@ -653,6 +814,9 @@ func (s *speedtester) measure(ctx context.Context, inv *command.Invocation, tool
 // deliver 把结果连同 Speedtest 的结果图一起发出去，数字作为图说明；
 // 图发不出去就退回成改文字。
 //
+// 命令本身是回复某条消息时，结果图也回复那条消息，与 MiBox 一致。命令消息随后会删掉，
+// 所以不回复命令自己；在话题里 ReplyToID 是话题的首条消息，图也就留在同一个话题里。
+//
 // 两种失败各记各的原因：聊天禁止发媒体、对话解析不出来、网络出错是三种不同的问题，
 // 群里出现过一条什么原因都没带的 photo_failed，那条日志什么也回答不了。
 func deliver(ctx context.Context, inv *command.Invocation, text, link string) error {
@@ -665,25 +829,89 @@ func deliver(ctx context.Context, inv *command.Invocation, text, link string) er
 		inv.Log.Info("speedtest.peer_unresolved", "error", err.Error())
 		return inv.Edit(ctx, text)
 	}
-	if err := inv.Client.SendPhoto(ctx, peer, "speedtest.png", image, text, 0); err != nil {
+	if err := inv.Client.SendPhoto(ctx, peer, "speedtest.png", image, text, inv.Message.ReplyToID); err != nil {
 		inv.Log.Info("speedtest.photo_failed", "error", err.Error())
 		return inv.Edit(ctx, text)
 	}
 	return inv.Client.DeleteMessage(ctx, inv.Message)
 }
 
+// diagnose 列出能找到的每个 speedtest 程序、它能不能运行，以及测速时会用哪一个。
+func (s *speedtester) diagnose(ctx context.Context, inv *command.Invocation) error {
+	lines := []string{"🩺 <b>Speedtest 诊断</b>", ""}
+	describe := func(label, path string) {
+		version, err := probeVersion(path, s.home())
+		switch {
+		case err == nil:
+			lines = append(lines, label+": "+command.Code(path)+"\n  "+command.Escape(version))
+		case errors.Is(err, errNotOokla):
+			lines = append(lines, label+": "+command.Code(path)+"\n  不是 Ookla 官方 CLI（可能是 Python 版 speedtest-cli），不会当官方 CLI 用")
+		default:
+			lines = append(lines, label+": "+command.Code(path)+"\n  无法运行："+command.Escape(command.Brief(err)))
+		}
+	}
+	if path, err := exec.LookPath("speedtest"); err == nil {
+		describe("系统 speedtest", path)
+	} else {
+		lines = append(lines, "系统 speedtest: 未安装")
+	}
+	local := filepath.Join(s.home(), "speedtest")
+	if _, err := os.Stat(local); err == nil {
+		describe("本地 CLI", local)
+	} else {
+		lines = append(lines, "本地 CLI: 未安装，首次测速或 "+command.Code(inv.Prefix+"speedtest fix")+" 时下载")
+	}
+	if path, err := exec.LookPath("speedtest-cli"); err == nil {
+		lines = append(lines, "speedtest-cli: "+command.Code(path))
+	}
+	lines = append(lines, "")
+	if tool, kind := externalTool(s.dataDir); tool != "" {
+		lines = append(lines, "测速时使用 "+command.Escape(kind)+"："+command.Code(tool))
+	} else {
+		lines = append(lines, "测速时会先下载 Ookla 官方 CLI "+ooklaVersion)
+	}
+	lines = append(lines, "<i>本地 CLI 无法运行时用 "+command.Escape(inv.Prefix+"speedtest fix")+" 重新下载</i>")
+	return inv.Edit(ctx, strings.Join(lines, "\n"))
+}
+
+// reinstall 重新下载本地 CLI，覆盖可能已经损坏的那份。下载和校验都通过之后才替换，
+// 失败时原来的文件不动。版本由摘要固定，所以 update 和 fix 做的是同一件事。
+func (s *speedtester) reinstall(ctx context.Context, inv *command.Invocation, done string) error {
+	if err := inv.Edit(ctx, "🚀 <b>网络测速</b>\n\n正在重新下载 Ookla 官方 CLI "+ooklaVersion+"…"); err != nil {
+		return err
+	}
+	path, err := installOokla(ctx, s.dataDir)
+	if err != nil {
+		inv.Log.Warn("speedtest.install_failed", "error", err.Error())
+		return installProblem(ctx, inv, err)
+	}
+	version, err := probeVersion(path, s.home())
+	if err != nil {
+		return inv.EditText(ctx, "❌ 下载好的 CLI 无法运行："+command.Brief(err))
+	}
+	return inv.Edit(ctx, "✅ Ookla CLI "+done+"\n路径："+command.Code(path)+"\n"+command.Escape(version))
+}
+
 func (s *speedtester) handle(ctx context.Context, inv *command.Invocation) error {
 	if handled, err := s.setting(ctx, inv); handled {
 		return err
+	}
+	first := strings.ToLower(inv.Arg(0))
+	if first == "diagnose" {
+		return s.diagnose(ctx, inv)
 	}
 	if !s.running.TryLock() {
 		return inv.EditText(ctx, "已有一个测速在进行，请稍候")
 	}
 	defer s.running.Unlock()
 
-	first := strings.ToLower(inv.Arg(0))
-	if first == "list" || first == "servers" || first == "列表" {
+	switch first {
+	case "list", "servers", "列表":
 		return s.list(ctx, inv)
+	case "fix":
+		return s.reinstall(ctx, inv, "已重新下载")
+	case "update":
+		return s.reinstall(ctx, inv, "已更新到 "+ooklaVersion)
 	}
 	// 单独一个数字表示只这一次用那台服务器，不改默认设置。
 	server, once := s.pinned(), false
@@ -718,17 +946,47 @@ func (s *speedtester) handle(ctx context.Context, inv *command.Invocation) error
 	if once && note == "" {
 		note = "本次指定了服务器，未改动默认设置"
 	}
+	if s.egress != nil && result.ExternalIP != "" {
+		found := s.egress(ctx, result.ExternalIP)
+		result.ASN, result.Country = found.ASN, found.Country
+	}
 	return deliver(ctx, inv, render(result, time.Since(started), note), result.Link)
 }
 
 // Register 注册 .speedtest 和它的简写 .st。
 func Register(a *app.App) {
-	tester := &speedtester{dataDir: a.DataDir(),
+	tester := &speedtester{dataDir: a.DataDir(), egress: lookupEgress,
 		settings: kit.NewStore(a, "speedtest.json", func() speedtestDocument { return speedtestDocument{} })}
 	a.Registry.Register(
-		&command.Command{Name: "speedtest", Description: "测量服务器网络速度", Usage: "[list|set ID|clear|ID]",
+		&command.Command{Name: "speedtest", Description: "测量服务器网络速度", Usage: "[list|set ID|clear|ID|diagnose|fix|update]",
 			Help: tester.help, Timeout: 5 * time.Minute, Handle: tester.handle},
 		&command.Command{Name: "st", Description: "speedtest 的简写", Hidden: true,
 			Help: tester.help, Timeout: 5 * time.Minute, Handle: tester.handle},
 	)
+}
+
+// ConvertMiBox 把 MiBox 的测速设置换成本命令的 speedtest.json。
+//
+// MiBox v2 的设置在 assets/speedtest/v2-config.json，v1 的在 assets/speedtest/speedtest.json，
+// 两者都用 default_server_id 记默认服务器（数字，没设时为 null 或不存在），这里只取这一项。
+// 两版还有一项首选消息类型（photo/sticker/file/txt），本命令只发图片或文字，没有对应设置。
+func ConvertMiBox(raw []byte) ([]byte, error) {
+	var source map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &source); err != nil {
+		return nil, fmt.Errorf("MiBox 测速设置不是 JSON 对象：%w", err)
+	}
+	var document speedtestDocument
+	if value, ok := source["default_server_id"]; ok {
+		var number json.Number
+		if json.Unmarshal(value, &number) == nil {
+			if id, err := strconv.Atoi(number.String()); err == nil && id > 0 {
+				document.Server = id
+			}
+		}
+	}
+	encoded, err := json.MarshalIndent(document, "", " ")
+	if err != nil {
+		return nil, err
+	}
+	return append(encoded, '\n'), nil
 }

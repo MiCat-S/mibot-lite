@@ -153,14 +153,19 @@ func Register(a *app.App) {
 	data := kit.NewStore(a, "whois.json", func() whoisData { return whoisData{Cache: map[string]whoisItem{}} })
 	help := func(prefix string) string {
 		return "🔍 <b>WHOIS 域名查询</b>\n\n• " + command.Code(prefix+"whois example.com") + "\n• " + command.Code(prefix+"whois") + " 回复含域名的消息\n• " +
+			command.Code(prefix+"whois batch a.com b.com") + " 批量查询，最多 " + itoa(maxBatch) + " 个\n• " +
 			command.Code(prefix+"whois history") + " 查看历史\n• " + command.Code(prefix+"whois clear") + " 清除历史\n查询结果缓存 24 小时。"
 	}
-	a.Registry.Register(&command.Command{Name: "whois", Description: "查询域名注册信息", Usage: "域名", Help: help, Timeout: 40 * time.Second,
+	// 批量查询最多 10 个域名，每个最长 15 秒，所以总超时要放宽到能跑完一整批。
+	a.Registry.Register(&command.Command{Name: "whois", Description: "查询域名注册信息", Usage: "域名|batch 域名…|history|clear", Help: help, Timeout: 3 * time.Minute,
 		Handle: func(ctx context.Context, inv *command.Invocation) error {
 			raw := inv.Arg(0)
 			lower := strings.ToLower(raw)
 			if lower == "help" || lower == "h" {
 				return inv.Edit(ctx, help(inv.Prefix))
+			}
+			if lower == "batch" {
+				return whoisBatch(ctx, inv, data, inv.Args[1:], help)
 			}
 			if raw == "" {
 				if reply, err := inv.Client.GetReply(ctx, inv.Message); err == nil && reply != nil {
@@ -215,6 +220,44 @@ func Register(a *app.App) {
 			}
 			return kit.SendPages(ctx, inv, whoisReport(name, result))
 		}})
+}
+
+// maxBatch 是一次批量查询最多的域名数，与 MiBox 相同。
+const maxBatch = 10
+
+// whoisBatch 依次查询多个域名，只汇报每个查没查到；详细结果进了缓存和历史，
+// 之后单独查某个域名会直接用缓存。
+func whoisBatch(ctx context.Context, inv *command.Invocation, data *store.Store[whoisData], inputs []string, help func(string) string) error {
+	if len(inputs) == 0 {
+		return inv.Edit(ctx, help(inv.Prefix))
+	}
+	if len(inputs) > maxBatch {
+		return inv.EditText(ctx, "批量查询最多支持 "+itoa(maxBatch)+" 个域名")
+	}
+	if err := inv.Edit(ctx, "🔍 正在批量查询 "+itoa(len(inputs))+" 个域名…"); err != nil {
+		return err
+	}
+	results := make([]string, 0, len(inputs))
+	for _, input := range inputs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		name, ok := normalizeDomain(input)
+		if !ok {
+			results = append(results, "❌ "+command.Escape(input)+"：格式无效")
+			continue
+		}
+		result, err := whoisQuery(ctx, name, data)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		if err != nil || result == "" {
+			results = append(results, "❌ "+command.Code(name)+"：查询失败")
+			continue
+		}
+		results = append(results, "✅ "+command.Code(name))
+	}
+	return inv.Edit(ctx, "<b>WHOIS 批量查询</b>\n\n"+strings.Join(results, "\n"))
 }
 
 func whoisQuery(ctx context.Context, name string, data *store.Store[whoisData]) (string, error) {

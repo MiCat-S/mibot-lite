@@ -126,7 +126,7 @@ func TestExplainCLI(t *testing.T) {
 // 当初就是这样漏掉的。
 func TestSpeedtestHelpDocumentsEverySubcommand(t *testing.T) {
 	text := speedtestHelp(t.TempDir(), ".", 0)
-	for _, wanted := range []string{".speedtest list", ".speedtest set", ".speedtest clear", ".speedtest config", ".st"} {
+	for _, wanted := range []string{".speedtest list", ".speedtest set", ".speedtest clear", ".speedtest config", ".speedtest diagnose", ".speedtest fix", "update", ".st"} {
 		if !strings.Contains(text, wanted) {
 			t.Errorf("the help never mentions %q", wanted)
 		}

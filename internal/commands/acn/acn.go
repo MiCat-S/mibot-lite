@@ -2,11 +2,17 @@
 package acn
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"log/slog"
+	"math"
 	"net/url"
+	"reflect"
 	"regexp"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -22,10 +28,37 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/store"
 )
 
+// acnID 是账号 id。MiBox 的 v1 插件把它写成数字，v2 写成字符串，两种都要能读；
+// 写出时一律是字符串。
+type acnID string
+
+// UnmarshalJSON 接受字符串、数字和 null。
+func (id *acnID) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	switch {
+	case string(trimmed) == "null":
+		*id = ""
+		return nil
+	case len(trimmed) > 0 && trimmed[0] == '"':
+		var text string
+		if err := json.Unmarshal(trimmed, &text); err != nil {
+			return err
+		}
+		*id = acnID(text)
+		return nil
+	}
+	var number json.Number
+	if err := json.Unmarshal(trimmed, &number); err != nil {
+		return err
+	}
+	*id = acnID(number.String())
+	return nil
+}
+
 // acnUser 是一个账号的动态昵称设置。JSON 字段名与 MiBox 的
 // autochangename.json 一致，导入的文件可以原样读取。
 type acnUser struct {
-	UserID            string `json:"user_id"`
+	UserID            acnID  `json:"user_id"`
 	Timezone          string `json:"timezone"`
 	OriginalFirstName string `json:"original_first_name"`
 	OriginalLastName  string `json:"original_last_name"`
@@ -35,14 +68,87 @@ type acnUser struct {
 	TextIndex         int    `json:"text_index"`
 	ShowClockEmoji    bool   `json:"show_clock_emoji"`
 	ShowTime          *bool  `json:"show_time"`
-	ShowTimezone      bool   `json:"show_timezone"`
-	TimezoneFormat    string `json:"timezone_format"`
-	DisplayOrder      string `json:"display_order"`
-	TextStyle         string `json:"text_style"`
-	WeatherEnabled    bool   `json:"weather_enabled"`
-	WeatherLocation   string `json:"weather_location"`
-	WeatherCompact    string `json:"weather_compact"`
-	WeatherCacheTS    int64  `json:"weather_cache_ts"`
+	// HourFormat 是 "12" 或 "24"，来自 MiBox v2 的 acn time 12|24。
+	HourFormat     string `json:"hour_format,omitempty"`
+	ShowTimezone   bool   `json:"show_timezone"`
+	TimezoneFormat string `json:"timezone_format"`
+	DisplayOrder   string `json:"display_order"`
+	// DisplayComponents 是 acn show 选定的组件。nil 表示没选过，文件里不写这个字段；
+	// 空列表照样写成 []。拼昵称时两者都按不限定处理，与 MiBox 一致。
+	DisplayComponents []string `json:"displayComponents,omitzero"`
+	TextStyle         string   `json:"text_style"`
+	WeatherEnabled    bool     `json:"weather_enabled"`
+	WeatherLocation   string   `json:"weather_location"`
+	WeatherCompact    string   `json:"weather_compact"`
+	WeatherCacheTS    int64    `json:"weather_cache_ts"`
+
+	// extra 是本程序不认识的字段。写回时原样带上，免得切回 MiBox 时丢设置。
+	extra map[string]json.RawMessage
+}
+
+// acnUserKeys 是 acnUser 认识的 JSON 字段名。
+var acnUserKeys = func() map[string]bool {
+	keys := map[string]bool{}
+	fields := reflect.TypeOf(acnUser{})
+	for index := 0; index < fields.NumField(); index++ {
+		name, _, _ := strings.Cut(fields.Field(index).Tag.Get("json"), ",")
+		if name != "" && name != "-" {
+			keys[name] = true
+		}
+	}
+	return keys
+}()
+
+// UnmarshalJSON 读出认识的字段，其余字段留在 extra 里。
+func (u *acnUser) UnmarshalJSON(data []byte) error {
+	type plain acnUser
+	var known plain
+	if err := json.Unmarshal(data, &known); err != nil {
+		return err
+	}
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(data, &all); err != nil {
+		return err
+	}
+	for key := range all {
+		if acnUserKeys[key] {
+			delete(all, key)
+		}
+	}
+	known.extra = nil
+	if len(all) > 0 {
+		known.extra = all
+	}
+	*u = acnUser(known)
+	return nil
+}
+
+// MarshalJSON 写出认识的字段，再按键名顺序接上 extra 里的字段。
+func (u acnUser) MarshalJSON() ([]byte, error) {
+	type plain acnUser
+	encoded, err := json.Marshal(plain(u))
+	if err != nil || len(u.extra) == 0 {
+		return encoded, err
+	}
+	keys := make([]string, 0, len(u.extra))
+	for key := range u.extra {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var out bytes.Buffer
+	out.Write(encoded[:len(encoded)-1])
+	for _, key := range keys {
+		name, err := json.Marshal(key)
+		if err != nil {
+			return nil, err
+		}
+		out.WriteByte(',')
+		out.Write(name)
+		out.WriteByte(':')
+		out.Write(u.extra[key])
+	}
+	out.WriteByte('}')
+	return out.Bytes(), nil
 }
 
 type acnState struct {
@@ -55,15 +161,32 @@ type acnService struct {
 	store *store.Store[acnState]
 }
 
-const acnDefaultOrder = "name,text,time,weather,emoji,timezone"
+// acnDefaultOrder 是没设过顺序时的顺序，与 MiBox 新建用户时写入的一致。
+// 顺序里没列出的组件按 acnComponents 的次序接在后面，所以实际是
+// name,time,text,weather,emoji,timezone。
+const acnDefaultOrder = "name,time"
 
 var acnComponents = []string{"name", "text", "time", "weather", "emoji", "timezone"}
+
+var acnStyles = []string{"normal", "italic", "double", "sans", "mono", "outline"}
+
+// showDefaults 是 acn show 在各模式下默认显示的组件。
+var showDefaults = map[string][]string{"time": {"time"}, "text": {"text", "time"}, "both": {"text", "time"}}
 
 func acnDefaults() acnState {
 	return acnState{SchemaVersion: 1, Users: map[string]*acnUser{}, RandomTexts: []string{}}
 }
 
+// newAcnUser 是第一次 acn save 时建立的设置，默认值与 MiBox v2 相同。
+func newAcnUser(userID string) *acnUser {
+	showTime := true
+	return &acnUser{UserID: acnID(userID), Timezone: "Asia/Shanghai", Mode: "time", ShowTime: &showTime,
+		HourFormat: "24", TimezoneFormat: "GMT", DisplayOrder: acnDefaultOrder, TextStyle: "normal"}
+}
+
 func (u *acnUser) showTime() bool { return u.ShowTime == nil || *u.ShowTime }
+
+func validMode(mode string) bool { return mode == "time" || mode == "text" || mode == "both" }
 
 // validZone 判断一个时区标识符能否加载。
 func validZone(zone string) bool {
@@ -74,76 +197,64 @@ func validZone(zone string) bool {
 	return err == nil
 }
 
-// zoneLabel 按所选的格式显示时区。
-//
-// MiBox 为 "simp" 带了一张 200 条的缩写表；Go 自带的时区数据库本来就
-// 知道缩写，所以 time.Format("MST") 一句就顶替了整张表，
-// 遇到夏令时切换也照样正确。
-func zoneLabel(zone, format string) string {
+// cleanComponents 只留认识的组件并去重；nil 保持 nil。
+func cleanComponents(components []string) []string {
+	if components == nil {
+		return nil
+	}
+	cleaned := []string{}
+	for _, component := range components {
+		if slices.Contains(acnComponents, component) && !slices.Contains(cleaned, component) {
+			cleaned = append(cleaned, component)
+		}
+	}
+	return cleaned
+}
+
+// normalizeUser 规整从文件读到的一份设置，规则与 MiBox v2 的 normalizeUser 相同。
+func normalizeUser(id string, user *acnUser) {
+	user.UserID = acnID(id)
+	if !validZone(user.Timezone) {
+		user.Timezone = "Asia/Shanghai"
+	}
+	if !validMode(user.Mode) {
+		user.Mode = "time"
+	}
+	if user.HourFormat != "12" {
+		user.HourFormat = "24"
+	}
+	if !slices.Contains(acnStyles, user.TextStyle) {
+		user.TextStyle = "normal"
+	}
+	if user.TextIndex < 0 {
+		user.TextIndex = 0
+	}
+	if user.OriginalFirstName == "" {
+		user.Enabled = false
+	}
+	user.DisplayComponents = cleanComponents(user.DisplayComponents)
+}
+
+// clockEmoji 返回该时区在 now 这一刻的钟点对应的 🕐 系列钟面表情。
+func clockEmoji(zone string, now time.Time) string {
 	location, err := time.LoadLocation(zone)
 	if err != nil {
 		return ""
 	}
-	now := time.Now().In(location)
-	if strings.HasPrefix(strings.ToLower(format), "custom:") {
-		return format[len("custom:"):]
-	}
-	_, offset := now.Zone()
-	sign := "+"
-	if offset < 0 {
-		sign, offset = "-", -offset
-	}
-	hours, minutes := offset/3600, (offset%3600)/60
-	switch strings.ToUpper(strings.TrimSpace(format)) {
-	case "SIMP":
-		abbreviation := now.Format("MST")
-		if strings.HasPrefix(abbreviation, "+") || strings.HasPrefix(abbreviation, "-") {
-			break
-		}
-		return abbreviation
-	case "OFFSET":
-		return sign + pad2(hours) + ":" + pad2(minutes)
-	case "UTC":
-		if hours == 0 && minutes == 0 {
-			return "UTC"
-		}
-		if minutes != 0 {
-			return "UTC" + sign + pad2(hours) + ":" + pad2(minutes)
-		}
-		return "UTC" + sign + strconv.Itoa(hours)
-	}
-	if hours == 0 && minutes == 0 {
-		return "GMT"
-	}
-	if minutes != 0 {
-		return "GMT" + sign + pad2(hours) + ":" + pad2(minutes)
-	}
-	return "GMT" + sign + strconv.Itoa(hours)
-}
-
-func pad2(value int) string {
-	if value < 10 {
-		return "0" + strconv.Itoa(value)
-	}
-	return strconv.Itoa(value)
-}
-
-// clockEmoji 返回该时区当前钟点对应的 🕐 系列钟面表情。
-func clockEmoji(zone string) string {
-	location, err := time.LoadLocation(zone)
-	if err != nil {
-		return ""
-	}
-	hour := time.Now().In(location).Hour() % 12
+	hour := now.In(location).Hour() % 12
 	return string(rune(0x1f550 + (hour+11)%12))
 }
 
-func zoneTime(zone string) string {
+// zoneTime 按 12 或 24 小时制显示该时区在 now 这一刻的时间，如 "02:32 PM" 或 "14:32"。
+func zoneTime(zone, hourFormat string, now time.Time) string {
 	location, err := time.LoadLocation(zone)
 	if err != nil {
 		return ""
 	}
-	return time.Now().In(location).Format("15:04")
+	if hourFormat == "12" {
+		return now.In(location).Format("03:04 PM")
+	}
+	return now.In(location).Format("15:04")
 }
 
 // styleRanges 给出每种文字样式下，各类字符要平移到的 Unicode 区段。
@@ -187,6 +298,124 @@ func applyTextStyle(text, style string) string {
 	return b.String()
 }
 
+// composeName 按设置拼出新昵称，规则与 MiBox v2 的 updateUser 相同：
+//   - 时间在任何模式下都显示，只要没关掉时间显示；
+//   - 文案在 text/both 模式下显示；
+//   - acn show 选定了组件时，时间和文案只在选中时显示；
+//   - 时钟表情、时区、天气各由自己的开关决定；
+//   - 顺序按 display_order，没列出的组件按 acnComponents 的次序接在后面，空的跳过。
+//
+// weather 是已经取好的天气文字。
+func composeName(user *acnUser, texts []string, weather string, now time.Time) string {
+	selected := map[string]bool{}
+	for _, component := range user.DisplayComponents {
+		selected[component] = true
+	}
+	includes := func(component string) bool { return len(selected) == 0 || selected[component] }
+	parts := map[string]string{"name": user.OriginalFirstName, "weather": weather}
+	if (user.Mode == "text" || user.Mode == "both" || selected["text"]) && includes("text") && len(texts) > 0 {
+		index := user.TextIndex % len(texts)
+		if index < 0 {
+			index += len(texts)
+		}
+		parts["text"] = texts[index]
+	}
+	if user.showTime() && includes("time") {
+		parts["time"] = zoneTime(user.Timezone, user.HourFormat, now)
+	}
+	if user.ShowClockEmoji {
+		parts["emoji"] = clockEmoji(user.Timezone, now)
+	}
+	if user.ShowTimezone {
+		parts["timezone"] = zoneLabel(user.Timezone, user.TimezoneFormat, now)
+	}
+
+	order := user.DisplayOrder
+	if strings.TrimSpace(order) == "" {
+		order = acnDefaultOrder
+	}
+	var pieces []string
+	seen := map[string]bool{}
+	for _, key := range append(strings.Split(order, ","), acnComponents...) {
+		key = strings.TrimSpace(key)
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		value := parts[key]
+		if value == "" {
+			continue
+		}
+		if key != "name" {
+			value = applyTextStyle(value, user.TextStyle)
+		}
+		pieces = append(pieces, value)
+	}
+	return strings.Join(pieces, " ")
+}
+
+// withComponent 在顺序里加上或去掉一个组件：开启时接到末尾，关闭时拿掉。
+// 顺序为空时从默认顺序算起，与 MiBox v2 的 updateOrderComponent 相同。
+func withComponent(order, component string, enabled bool) string {
+	if strings.TrimSpace(order) == "" {
+		order = acnDefaultOrder
+	}
+	var parts []string
+	present := false
+	for _, part := range strings.Split(order, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if part == component {
+			present = true
+			if !enabled {
+				continue
+			}
+		}
+		parts = append(parts, part)
+	}
+	if enabled && !present {
+		parts = append(parts, component)
+	}
+	return strings.Join(parts, ",")
+}
+
+// applyOrder 设置顺序，并让各开关与顺序一致：列出的时间、时钟表情、时区打开，
+// 没列出的关掉；列出了天气就打开天气。与 MiBox 的 acn order 相同。
+func applyOrder(user *acnUser, components []string) {
+	user.DisplayOrder = strings.Join(components, ",")
+	showTime := slices.Contains(components, "time")
+	user.ShowTime = &showTime
+	user.ShowClockEmoji = slices.Contains(components, "emoji")
+	user.ShowTimezone = slices.Contains(components, "timezone")
+	if slices.Contains(components, "weather") {
+		user.WeatherEnabled = true
+	}
+}
+
+// toggleShown 在 acn show 的组件列表里开启或关闭一个组件；还没选过时从当前模式的默认值算起。
+func toggleShown(user *acnUser, component string, on bool) {
+	current := slices.Clone(user.DisplayComponents)
+	if current == nil {
+		current = slices.Clone(showDefaults[user.Mode])
+	}
+	if on {
+		if !slices.Contains(current, component) {
+			current = append(current, component)
+		}
+	} else {
+		current = slices.DeleteFunc(current, func(value string) bool { return value == component })
+	}
+	if current == nil {
+		current = []string{}
+	}
+	user.DisplayComponents = current
+	if component == "weather" {
+		user.WeatherEnabled = on
+	}
+}
+
 // acnCities 把常见的中文城市名换成地理编码接口认识的名字。
 var acnCities = map[string]string{"北京": "Beijing", "上海": "Shanghai", "广州": "Guangzhou", "深圳": "Shenzhen",
 	"成都": "Chengdu", "杭州": "Hangzhou", "武汉": "Wuhan", "西安": "Xi'an", "重庆": "Chongqing", "南京": "Nanjing",
@@ -200,8 +429,27 @@ var weatherIcons = map[int]string{0: "☀️", 1: "🌤️", 2: "⛅", 3: "☁�
 	55: "🌧️", 56: "🌨️", 57: "🌨️", 61: "🌧️", 63: "🌧️", 65: "🌧️", 66: "🌨️", 67: "🌨️", 71: "❄️", 73: "❄️",
 	75: "❄️", 77: "🌨️", 80: "🌦️", 81: "🌧️", 82: "⛈️", 85: "🌨️", 86: "🌨️", 95: "⛈️", 96: "⛈️", 99: "⛈️"}
 
+// roundHalfUp 与 JavaScript 的 Math.round 一致：恰好一半时往正无穷方向进位，
+// 负数也一样（-2.5 → -2）。int(x+0.5) 会把负数往零截断，-3.2 得到 -2。
+func roundHalfUp(value float64) float64 {
+	floor := math.Floor(value)
+	if value-floor >= 0.5 {
+		return floor + 1
+	}
+	return floor
+}
+
+// formatWeather 把天气代码和气温排成昵称里的样子，如 "☀️ 21°C"。
+func formatWeather(code int, temperature float64) string {
+	icon, ok := weatherIcons[code]
+	if !ok {
+		icon = "🌤️"
+	}
+	return icon + " " + strconv.Itoa(int(roundHalfUp(temperature))) + "°C"
+}
+
 // fetchWeather 读取当前天气，任何一步失败都返回 ""。
-func fetchWeather(ctx context.Context, location string) (string, bool) {
+func fetchWeather(ctx context.Context, location string) string {
 	city := strings.TrimSpace(location)
 	if mapped, ok := acnCities[city]; ok {
 		city = mapped
@@ -214,7 +462,7 @@ func fetchWeather(ctx context.Context, location string) (string, bool) {
 	}
 	if err := httpx.GetJSON(ctx, "https://geocoding-api.open-meteo.com/v1/search?count=1&language=zh&format=json&name="+url.QueryEscape(city),
 		10*time.Second, 256<<10, &geo); err != nil || len(geo.Results) == 0 {
-		return "", false
+		return ""
 	}
 	var forecast struct {
 		Current struct {
@@ -227,13 +475,35 @@ func fetchWeather(ctx context.Context, location string) (string, bool) {
 		"&longitude=" + strconv.FormatFloat(geo.Results[0].Longitude, 'f', 4, 64)
 	if err := httpx.GetJSON(ctx, endpoint, 10*time.Second, 256<<10, &forecast); err != nil ||
 		forecast.Current.Temperature == nil || forecast.Current.Code == nil {
-		return "", true
+		return ""
 	}
-	icon, ok := weatherIcons[*forecast.Current.Code]
-	if !ok {
-		icon = "🌤️"
+	return formatWeather(*forecast.Current.Code, *forecast.Current.Temperature)
+}
+
+// weatherCacheFresh 判断缓存的天气还能不能用：取到过天气的缓存 30 分钟，
+// 没取到（地点查不到、接口出错）的也记下来，5 分钟内不再重试。
+func weatherCacheFresh(user *acnUser, now time.Time) bool {
+	if user.WeatherCacheTS <= 0 {
+		return false
 	}
-	return icon + " " + strconv.Itoa(int(*forecast.Current.Temperature+0.5)) + "°C", true
+	ttl := 5 * time.Minute
+	if user.WeatherCompact != "" {
+		ttl = 30 * time.Minute
+	}
+	return now.Sub(time.UnixMilli(user.WeatherCacheTS)) < ttl
+}
+
+// currentWeather 返回要显示的天气。缓存可用就用缓存，否则现取；fetched 为真表示
+// 这次是现取的，结果不论成败都要写回缓存。includeDisabled 为真时，天气关着也取（给预览用）。
+func currentWeather(ctx context.Context, user *acnUser, includeDisabled bool, now time.Time) (string, bool) {
+	if (!includeDisabled && !user.WeatherEnabled) || user.WeatherLocation == "" {
+		return "", false
+	}
+	if weatherCacheFresh(user, now) {
+		return user.WeatherCompact, false
+	}
+	text := fetchWeather(ctx, user.WeatherLocation)
+	return text, ctx.Err() == nil
 }
 
 // apply 为一个账号重新拼出昵称并提交上去。
@@ -251,59 +521,9 @@ func (s *acnService) apply(ctx context.Context, client *bot.Client, userID strin
 			return false, nil
 		}
 	}
-	parts := map[string]string{"name": user.OriginalFirstName}
-	if (user.Mode == "text" || user.Mode == "both") && len(state.RandomTexts) > 0 {
-		parts["text"] = state.RandomTexts[user.TextIndex%len(state.RandomTexts)]
-	}
-	if user.showTime() && (user.Mode == "time" || user.Mode == "both") {
-		parts["time"] = zoneTime(user.Timezone)
-	}
-	if user.ShowClockEmoji {
-		parts["emoji"] = clockEmoji(user.Timezone)
-	}
-	if user.ShowTimezone {
-		parts["timezone"] = zoneLabel(user.Timezone, user.TimezoneFormat)
-	}
-	weather, fetched := "", false
-	if user.WeatherEnabled && user.WeatherLocation != "" {
-		cacheFor := 5 * time.Minute
-		if user.WeatherCompact != "" {
-			cacheFor = 30 * time.Minute
-		}
-		if user.WeatherCacheTS > 0 && time.Since(time.UnixMilli(user.WeatherCacheTS)) < cacheFor {
-			weather = user.WeatherCompact
-		} else {
-			weather, fetched = fetchWeather(ctx, user.WeatherLocation)
-		}
-	}
-	parts["weather"] = weather
-
-	order := user.DisplayOrder
-	if strings.TrimSpace(order) == "" {
-		order = acnDefaultOrder
-	}
-	var sequence []string
-	seen := map[string]bool{}
-	for _, key := range append(strings.Split(order, ","), acnComponents...) {
-		key = strings.TrimSpace(key)
-		if key == "" || seen[key] || parts[key] == "" && key != "name" {
-			continue
-		}
-		seen[key] = true
-		sequence = append(sequence, key)
-	}
-	var pieces []string
-	for _, key := range sequence {
-		value := parts[key]
-		if value == "" {
-			continue
-		}
-		if key != "name" {
-			value = applyTextStyle(value, user.TextStyle)
-		}
-		pieces = append(pieces, value)
-	}
-	firstName := kit.TruncateRunes(strings.Join(pieces, " "), 64)
+	now := time.Now()
+	weather, fetched := currentWeather(ctx, user, false, now)
+	firstName := kit.TruncateRunes(composeName(user, state.RandomTexts, weather, now), 64)
 
 	request := &tg.AccountUpdateProfileRequest{}
 	request.SetFirstName(firstName)
@@ -335,7 +555,7 @@ func (s *acnService) apply(ctx context.Context, client *bot.Client, userID strin
 		}
 		current.LastUpdate = time.Now().UTC().Format(time.RFC3339)
 		if fetched {
-			current.WeatherCompact, current.WeatherCacheTS = weather, time.Now().UnixMilli()
+			current.WeatherCompact, current.WeatherCacheTS = weather, now.UnixMilli()
 		}
 		if textCount > 0 && current.Mode != "time" {
 			current.TextIndex = (current.TextIndex + 1) % textCount
@@ -364,8 +584,11 @@ func acnHelp(prefix string) string {
 		"acn reset</code> 恢复原始昵称并停用\n• <code>" + p + "acn status</code> / <code>config</code> 查看状态\n\n<b>时区</b>\n• <code>" + p +
 		"acn tz Asia/Shanghai</code> 设置时区\n• <code>" + p + "acn tz on</code> / <code>off</code> 是否显示时区\n• <code>" + p +
 		"acn tz format GMT|UTC|simp|offset|custom:文字</code>\n\n<b>外观</b>\n• <code>" + p + "acn emoji on</code> / <code>off</code> 时钟表情\n• <code>" + p +
-		"acn time on</code> / <code>off</code> 时间显示\n• <code>" + p + "acn style normal|italic|double|sans|mono|outline</code>\n• <code>" + p +
-		"acn order name,text,time,weather,emoji,timezone</code>\n\n<b>文案</b>\n• <code>" + p + "acn text add 摸鱼中</code>（支持多行）\n• <code>" + p +
+		"acn time on</code> / <code>off</code> 时间显示\n• <code>" + p + "acn time 12</code> / <code>24</code> 12 或 24 小时制\n• <code>" + p +
+		"acn style normal|italic|double|sans|mono|outline</code>\n• <code>" + p +
+		"acn order name,text,time,weather,emoji,timezone</code>（同时开关其中的时间、表情、时区）\n• <code>" + p +
+		"acn show time|text|weather on</code> / <code>off</code> 只显示选中的组件，<code>" + p + "acn show reset</code> 恢复\n\n<b>文案</b>\n• <code>" + p +
+		"acn text add 摸鱼中</code>（支持多行）\n• <code>" + p +
 		"acn text list</code> / <code>del 序号</code> / <code>clear</code>\n• <code>" + p + "acn text on</code> / <code>off</code>\n\n<b>天气</b>\n• <code>" + p +
 		"acn weather set 北京</code> 设置地点并开启\n• <code>" + p + "acn weather on</code> / <code>off</code>\n天气缓存 30 分钟。"
 }
@@ -385,13 +608,7 @@ func Register(a *app.App) {
 				delete(state.Users, id)
 				continue
 			}
-			user.UserID = id
-			if !validZone(user.Timezone) {
-				user.Timezone = "Asia/Shanghai"
-			}
-			if user.Mode == "" {
-				user.Mode = "time"
-			}
+			normalizeUser(id, user)
 		}
 		if len(state.RandomTexts) > 100 {
 			state.RandomTexts = state.RandomTexts[:100]
@@ -401,7 +618,7 @@ func Register(a *app.App) {
 
 	handle := func(ctx context.Context, inv *command.Invocation) error { return acnHandle(ctx, inv, service) }
 	a.Registry.Register(
-		&command.Command{Name: "acn", Description: "管理动态昵称", Usage: "save|on|off|mode|tz|text|weather|update|reset|status", Help: acnHelp, Handle: handle},
+		&command.Command{Name: "acn", Description: "管理动态昵称", Usage: "save|on|off|mode|tz|text|show|time|weather|update|reset|status", Help: acnHelp, Handle: handle},
 		&command.Command{Name: "autochangename", Description: "acn 的全称", Hidden: true, Help: acnHelp, Handle: handle},
 	)
 
@@ -440,14 +657,30 @@ type acnCall struct {
 	sub     string
 }
 
-// mutate 修改自己那一份配置并存盘。
-func (c *acnCall) mutate(apply func(*acnUser)) error {
-	return c.service.store.Update(func(state *acnState) error {
+// mutate 修改自己那一份配置并存盘，返回改好的设置。
+func (c *acnCall) mutate(apply func(*acnUser)) (acnUser, error) {
+	var updated acnUser
+	err := c.service.store.Update(func(state *acnState) error {
 		if current := state.Users[c.userID]; current != nil {
 			apply(current)
+			updated = *current
 		}
 		return nil
 	})
+	return updated, err
+}
+
+// change 修改设置；自动更新开着的话，立刻按新设置改一次名字，不用等到下一分钟。
+// 这一次改名失败只记日志，设置照样生效，下一分钟还会再试。
+func (c *acnCall) change(apply func(*acnUser)) (acnUser, error) {
+	updated, err := c.mutate(apply)
+	if err != nil || !updated.Enabled {
+		return updated, err
+	}
+	if _, err := c.service.apply(c.ctx, c.inv.Client, c.userID, true); err != nil && c.ctx.Err() == nil {
+		c.inv.Log.Warn("acn.refresh_failed", slog.String("error", err.Error()))
+	}
+	return updated, nil
 }
 
 func acnStatus(ctx context.Context, inv *command.Invocation, state acnState) error {
@@ -457,19 +690,44 @@ func acnStatus(ctx context.Context, inv *command.Invocation, state acnState) err
 			enabled++
 		}
 	}
-	return inv.Edit(ctx, "📊 自动更新: "+command.Code("运行中")+"\n启用用户: "+command.Code(strconv.Itoa(enabled)))
+	running := "已停止"
+	if enabled > 0 {
+		running = "运行中"
+	}
+	return inv.Edit(ctx, "📊 自动更新: "+command.Code(running)+"\n启用用户: "+command.Code(strconv.Itoa(enabled)))
+}
+
+// currentSelf 现查一次自己的资料。连接时缓存的那份不会随着在 Telegram 里改名而更新，
+// 保存「原始昵称」必须用现在的名字。
+func currentSelf(ctx context.Context, client *bot.Client) (*tg.User, error) {
+	users, err := client.API().UsersGetUsers(ctx, []tg.InputUserClass{&tg.InputUserSelf{}})
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range users {
+		if user, ok := entry.(*tg.User); ok {
+			return user, nil
+		}
+	}
+	return nil, errors.New("users.getUsers 没有返回自己的资料")
 }
 
 // acnSave 记下现在的名字，作为以后恢复用的「原始昵称」。其他子命令都要先有它。
 // 第一次保存和之后更新回复不同：更新只换名字，时区、样式这些设置都保留。
 func acnSave(ctx context.Context, inv *command.Invocation, service *acnService, userID string) error {
-	self := inv.Client.Self()
+	self, err := currentSelf(ctx, inv.Client)
+	if err != nil {
+		if ctx.Err() != nil {
+			return err
+		}
+		return inv.EditText(ctx, "❌ 读取当前昵称失败："+kit.RPCCode(err))
+	}
 	first := false
 	var saved acnUser
 	if err := service.store.Update(func(state *acnState) error {
 		current := state.Users[userID]
 		if current == nil {
-			current = &acnUser{UserID: userID, Timezone: "Asia/Shanghai", Mode: "time"}
+			current = newAcnUser(userID)
 			state.Users[userID] = current
 		}
 		first = current.OriginalFirstName == ""
@@ -493,7 +751,7 @@ func acnSave(ctx context.Context, inv *command.Invocation, service *acnService, 
 // toggle 开启或关闭自动改名。开启时立刻改一次；关闭时换回原始昵称。
 func (c *acnCall) toggle() error {
 	enabled := c.sub == "on" || c.sub == "enable"
-	if err := c.mutate(func(user *acnUser) { user.Enabled = enabled }); err != nil {
+	if _, err := c.mutate(func(user *acnUser) { user.Enabled = enabled }); err != nil {
 		return err
 	}
 	if enabled {
@@ -514,23 +772,31 @@ func (c *acnCall) mode() error {
 	if next == "" {
 		next = "time"
 	}
-	if err := c.mutate(func(user *acnUser) { user.Mode = next }); err != nil {
+	if _, err := c.change(func(user *acnUser) { user.Mode = next }); err != nil {
 		return err
 	}
 	return c.inv.Edit(c.ctx, "✅ 显示模式: "+command.Code(next))
 }
 
-// timezone 处理 tz 的几种写法：list、on/off、format，其余当成要设的时区。
+// timezone 处理 tz 的几种写法：不带参数看说明，list、on/off、format，其余当成要设的时区。
 func (c *acnCall) timezone() error {
 	value := strings.ToLower(c.inv.Arg(1))
 	switch value {
+	case "":
+		p := command.Escape(c.inv.Prefix)
+		return c.inv.Edit(c.ctx, "🌍 <b>时区管理</b>\n\n• <code>"+p+"acn tz Asia/Shanghai</code> - 设置时区\n• <code>"+p+
+			"acn tz list</code> - 时区列表\n• <code>"+p+"acn tz on/off</code> - 显示控制\n• <code>"+p+"acn tz format GMT</code> - 格式设置")
 	case "list":
 		return c.inv.EditText(c.ctx, "Asia/Shanghai\nAsia/Tokyo\nEurope/London\nAmerica/New_York")
 	case "on", "off":
-		if err := c.mutate(func(user *acnUser) { user.ShowTimezone = value == "on" }); err != nil {
+		on := value == "on"
+		if _, err := c.change(func(user *acnUser) {
+			user.ShowTimezone = on
+			user.DisplayOrder = withComponent(user.DisplayOrder, "timezone", on)
+		}); err != nil {
 			return err
 		}
-		return c.inv.EditText(c.ctx, "✅ 时区显示已"+map[bool]string{true: "开启", false: "关闭"}[value == "on"])
+		return c.inv.EditText(c.ctx, "✅ 时区显示已"+map[bool]string{true: "开启", false: "关闭"}[on])
 	case "format":
 		return c.timezoneFormat()
 	}
@@ -541,22 +807,27 @@ func (c *acnCall) timezone() error {
 	if !validZone(zone) {
 		return c.inv.EditText(c.ctx, "❌ 无效的时区标识符")
 	}
-	if err := c.mutate(func(user *acnUser) { user.Timezone = zone }); err != nil {
+	if _, err := c.change(func(user *acnUser) { user.Timezone = zone }); err != nil {
 		return err
 	}
 	return c.inv.Edit(c.ctx, "✅ 时区已更新为: "+command.Code(zone))
 }
 
 // timezoneFormat 设时区的显示格式：GMT、UTC、SIMP、OFFSET，或者 custom: 后面跟自定义文字。
+// 不带参数时显示当前格式。
 func (c *acnCall) timezoneFormat() error {
 	format := strings.TrimSpace(c.inv.Rest(2))
+	if format == "" {
+		return c.inv.Edit(c.ctx, "🌐 <b>时区格式设置</b>\n当前: "+command.Code(kit.OrDefault(c.user.TimezoneFormat, "GMT"))+
+			"\n可用: GMT, UTC, simp, offset, custom:文字")
+	}
 	lower := strings.ToLower(format)
-	valid := lower == "gmt" || lower == "utc" || lower == "simp" || lower == "offset" || strings.HasPrefix(lower, "custom:")
-	if !valid {
+	custom := strings.HasPrefix(lower, "custom:") && len(format) > len("custom:")
+	if !custom && lower != "gmt" && lower != "utc" && lower != "simp" && lower != "offset" {
 		return c.inv.EditText(c.ctx, "❌ 无效的时区格式")
 	}
-	if err := c.mutate(func(user *acnUser) {
-		if strings.HasPrefix(lower, "custom:") {
+	if _, err := c.change(func(user *acnUser) {
+		if custom {
 			user.TimezoneFormat = "custom:" + format[len("custom:"):]
 		} else {
 			user.TimezoneFormat = strings.ToUpper(format)
@@ -567,83 +838,160 @@ func (c *acnCall) timezoneFormat() error {
 	return c.inv.EditText(c.ctx, "✅ 时区格式已更新")
 }
 
-// flag 开关时钟表情（emoji）或时间显示（time）。
+// flag 开关时钟表情（emoji）或时间显示（time）；time 还能切换 12/24 小时制。
+// 不带参数时显示当前状态。
 func (c *acnCall) flag() error {
-	enabled, err := kit.OnOff(c.inv.Arg(1))
-	if err != nil {
-		return c.inv.EditText(c.ctx, "请使用 "+c.inv.Prefix+"acn "+c.sub+" on/off")
+	arg := strings.ToLower(c.inv.Arg(1))
+	label := "时间显示"
+	usage := "请使用 " + c.inv.Prefix + "acn time on/off 或 " + c.inv.Prefix + "acn time 12/24"
+	current := c.user.showTime()
+	if c.sub == "emoji" {
+		label, usage, current = "时钟Emoji", "请使用 "+c.inv.Prefix+"acn emoji on/off", c.user.ShowClockEmoji
 	}
-	if err := c.mutate(func(user *acnUser) {
+	if arg == "" {
+		text := "<b>" + label + "</b>\n当前: " + command.Code(map[bool]string{true: "开启", false: "关闭"}[current])
+		if c.sub == "time" {
+			text += "\n时间制式: " + command.Code(hourFormatOf(c.user)+" 小时制")
+		}
+		return c.inv.Edit(c.ctx, text+"\n"+command.Escape(usage))
+	}
+	if c.sub == "time" {
+		format := arg
+		if arg == "format" {
+			format = strings.ToLower(c.inv.Arg(2))
+		}
+		format = strings.TrimSuffix(format, "h")
+		if format == "12" || format == "24" {
+			if _, err := c.change(func(user *acnUser) { user.HourFormat = format }); err != nil {
+				return err
+			}
+			example := "（如 14:32）"
+			if format == "12" {
+				example = "（如 02:32 PM）"
+			}
+			return c.inv.EditText(c.ctx, "✅ 已切换为 "+format+" 小时制"+example)
+		}
+	}
+	enabled, err := kit.OnOff(arg)
+	if err != nil {
+		return c.inv.EditText(c.ctx, usage)
+	}
+	if _, err := c.change(func(user *acnUser) {
 		if c.sub == "emoji" {
 			user.ShowClockEmoji = enabled
-		} else {
-			value := enabled
-			user.ShowTime = &value
+			user.DisplayOrder = withComponent(user.DisplayOrder, "emoji", enabled)
+			return
 		}
+		value := enabled
+		user.ShowTime = &value
+		user.DisplayOrder = withComponent(user.DisplayOrder, "time", enabled)
 	}); err != nil {
 		return err
-	}
-	label := "时间显示"
-	if c.sub == "emoji" {
-		label = "时钟Emoji"
 	}
 	return c.inv.EditText(c.ctx, "✅ "+label+"已"+map[bool]string{true: "开启", false: "关闭"}[enabled])
 }
 
+func hourFormatOf(user *acnUser) string {
+	if user.HourFormat == "12" {
+		return "12"
+	}
+	return "24"
+}
+
 func (c *acnCall) style() error {
 	style := strings.ToLower(c.inv.Arg(1))
-	if style != "normal" {
-		if _, ok := styleRanges[style]; !ok {
-			return c.inv.EditText(c.ctx, "可用样式: normal, italic, double, sans, mono, outline")
-		}
+	if !slices.Contains(acnStyles, style) {
+		return c.inv.EditText(c.ctx, "可用样式: "+strings.Join(acnStyles, ", "))
 	}
-	if err := c.mutate(func(user *acnUser) { user.TextStyle = style }); err != nil {
+	if _, err := c.change(func(user *acnUser) { user.TextStyle = style }); err != nil {
 		return err
 	}
 	return c.inv.EditText(c.ctx, "✅ 文字样式: "+style)
 }
 
-// order 查看或设置昵称里各部分的顺序；重复的只留第一次出现的。
+// order 查看或设置昵称里各部分的顺序；不分大小写，重复的只留第一次出现的。
+// 设置顺序的同时按顺序开关时间、时钟表情和时区，列出天气就打开天气。
 func (c *acnCall) order() error {
-	values := strings.FieldsFunc(c.inv.Rest(1), func(r rune) bool { return r == ',' || r == ' ' })
+	values := strings.FieldsFunc(strings.ToLower(c.inv.Rest(1)), func(r rune) bool { return r == ',' || r == ' ' })
 	if len(values) == 0 {
-		order := c.user.DisplayOrder
-		if order == "" {
-			order = acnDefaultOrder
-		}
-		return c.inv.Edit(c.ctx, "当前顺序: "+command.Code(order))
+		return c.inv.Edit(c.ctx, "当前顺序: "+command.Code(kit.OrDefault(c.user.DisplayOrder, acnDefaultOrder)))
 	}
+	var invalid, unique []string
 	for _, value := range values {
 		if !slices.Contains(acnComponents, value) {
-			return c.inv.EditText(c.ctx, "❌ 无效组件")
-		}
-	}
-	var unique []string
-	seen := map[string]bool{}
-	for _, value := range values {
-		if !seen[value] {
-			seen[value] = true
+			invalid = append(invalid, value)
+		} else if !slices.Contains(unique, value) {
 			unique = append(unique, value)
 		}
 	}
-	order := strings.Join(unique, ",")
-	if err := c.mutate(func(user *acnUser) { user.DisplayOrder = order }); err != nil {
+	if len(invalid) > 0 {
+		return c.inv.Edit(c.ctx, "❌ 无效组件: "+command.Code(strings.Join(invalid, ", "))+"\n可用: "+strings.Join(acnComponents, ", "))
+	}
+	if _, err := c.change(func(user *acnUser) { applyOrder(user, unique) }); err != nil {
 		return err
 	}
-	return c.inv.Edit(c.ctx, "✅ 显示顺序: "+command.Code(order))
+	return c.inv.Edit(c.ctx, "✅ 显示顺序: "+command.Code(strings.Join(unique, ",")))
+}
+
+// show 管理 acn show 选定的组件：只管时间、文案和天气，表情和时区有各自的命令。
+func (c *acnCall) show() error {
+	action := strings.ToLower(c.inv.Arg(1))
+	target := strings.ToLower(c.inv.Arg(2))
+	p := command.Escape(c.inv.Prefix)
+	if action == "" || action == "help" || action == "h" {
+		current := c.user.DisplayComponents
+		if current == nil {
+			current = showDefaults[c.user.Mode]
+		}
+		return c.inv.Edit(c.ctx, "🎛️ <b>显示组件管理</b>\n\n当前组件: "+command.Code(strings.Join(current, ", "))+
+			"\n\n• <code>"+p+"acn show time on/off</code>\n• <code>"+p+"acn show text on/off</code>\n• <code>"+p+
+			"acn show weather on/off</code>\n• <code>"+p+"acn show reset</code>")
+	}
+	if action == "reset" {
+		updated, err := c.change(func(user *acnUser) { user.DisplayComponents = slices.Clone(showDefaults[user.Mode]) })
+		if err != nil {
+			return err
+		}
+		return c.inv.Edit(c.ctx, "✅ <b>已重置为默认值</b>\n\n当前模式默认组件: "+command.Code(strings.Join(updated.DisplayComponents, ", ")))
+	}
+	if action != "time" && action != "text" && action != "weather" {
+		return c.inv.Edit(c.ctx, "❌ <b>acn show 仅支持管理 time/text/weather</b>")
+	}
+	if target != "on" && target != "off" {
+		return c.inv.Edit(c.ctx, "❌ <b>请指定 on 或 off</b>\n使用: <code>"+p+"acn show "+action+" on/off</code>")
+	}
+	if action == "weather" && target == "on" && strings.TrimSpace(c.user.WeatherLocation) == "" {
+		return c.inv.Edit(c.ctx, "❌ <b>请先设置天气地点</b>\n使用 <code>"+p+"acn weather set 北京</code>")
+	}
+	updated, err := c.change(func(user *acnUser) { toggleShown(user, action, target == "on") })
+	if err != nil {
+		return err
+	}
+	return c.inv.Edit(c.ctx, "✅ <b>组件已"+map[bool]string{true: "开启", false: "关闭"}[target == "on"]+"</b>\n当前组件: "+
+		command.Code(strings.Join(updated.DisplayComponents, ", ")))
 }
 
 func (c *acnCall) config() error {
 	user := c.user
+	nextText := "(空)"
+	if count := len(c.state.RandomTexts); count > 0 {
+		nextText = strconv.Itoa((user.TextIndex%count+count)%count + 1)
+	}
+	weatherTime := "尚未获取"
+	if user.WeatherCacheTS > 0 {
+		weatherTime = time.UnixMilli(user.WeatherCacheTS).UTC().Format(time.RFC3339)
+	}
 	rows := [][2]string{
-		{"用户", user.UserID}, {"自动更新", kit.OnOffText(user.Enabled)}, {"原始姓名", user.OriginalFirstName},
+		{"用户", string(user.UserID)}, {"自动更新", kit.OnOffText(user.Enabled)}, {"原始姓名", user.OriginalFirstName},
 		{"原始姓氏", kit.OrDefault(user.OriginalLastName, "(空)")}, {"模式", user.Mode}, {"时区", user.Timezone},
-		{"时间显示", kit.OnOffText(user.showTime())}, {"时钟表情", kit.OnOffText(user.ShowClockEmoji)},
+		{"时间显示", kit.OnOffText(user.showTime())}, {"时间制式", hourFormatOf(user) + " 小时制"},
+		{"时钟表情", kit.OnOffText(user.ShowClockEmoji)},
 		{"时区显示", kit.OnOffText(user.ShowTimezone)}, {"时区格式", kit.OrDefault(user.TimezoneFormat, "GMT")},
 		{"文字样式", kit.OrDefault(user.TextStyle, "normal")}, {"组件顺序", kit.OrDefault(user.DisplayOrder, acnDefaultOrder)},
-		{"文案数", strconv.Itoa(len(c.state.RandomTexts))},
+		{"文案数", strconv.Itoa(len(c.state.RandomTexts))}, {"下条文案序号", nextText},
 		{"天气显示", kit.OnOffText(user.WeatherEnabled)}, {"天气地点", kit.OrDefault(user.WeatherLocation, "未设置")},
-		{"天气预览", kit.OrDefault(user.WeatherCompact, "暂无缓存")}, {"昵称更新时间", kit.OrDefault(user.LastUpdate, "尚未更新")},
+		{"天气预览", kit.OrDefault(user.WeatherCompact, "暂无缓存")}, {"天气更新时间", weatherTime},
+		{"昵称更新时间", kit.OrDefault(user.LastUpdate, "尚未更新")},
 	}
 	lines := []string{"<b>🔧 您的配置状态</b>"}
 	for _, row := range rows {
@@ -666,7 +1014,7 @@ func (c *acnCall) update() error {
 
 // reset 关掉自动改名并换回原始昵称。
 func (c *acnCall) reset() error {
-	if err := c.mutate(func(user *acnUser) { user.Enabled = false }); err != nil {
+	if _, err := c.mutate(func(user *acnUser) { user.Enabled = false }); err != nil {
 		return err
 	}
 	if err := c.service.restore(c.ctx, c.inv.Client, c.user); err != nil {
@@ -704,15 +1052,17 @@ func acnHandle(ctx context.Context, inv *command.Invocation, service *acnService
 	case "tz", "timezone":
 		return call.timezone()
 	case "text":
-		return acnText(ctx, inv, service, state, userID, call.mutate)
+		return call.text()
 	case "emoji", "time":
 		return call.flag()
 	case "style":
 		return call.style()
 	case "order":
 		return call.order()
+	case "show":
+		return call.show()
 	case "weather":
-		return acnWeather(ctx, inv, user, call.mutate)
+		return call.weather()
 	case "config":
 		return call.config()
 	case "update", "now":
@@ -723,7 +1073,8 @@ func acnHandle(ctx context.Context, inv *command.Invocation, service *acnService
 	return inv.Edit(ctx, "❌ 未知命令: "+command.Code(sub))
 }
 
-func acnText(ctx context.Context, inv *command.Invocation, service *acnService, state acnState, userID string, mutate func(func(*acnUser)) error) error {
+func (c *acnCall) text() error {
+	ctx, inv, service, state := c.ctx, c.inv, c.service, c.state
 	action := strings.ToLower(inv.Arg(1))
 	switch action {
 	case "list":
@@ -792,16 +1143,22 @@ func acnText(ctx context.Context, inv *command.Invocation, service *acnService, 
 		return inv.EditText(ctx, "✅ 文本已删除")
 	case "on", "off":
 		enabled := action == "on"
-		if err := mutate(func(user *acnUser) {
+		if _, err := c.change(func(user *acnUser) {
 			if enabled {
-				if user.showTime() {
-					user.Mode = "both"
-				} else {
+				user.Mode = "both"
+				if !user.showTime() {
 					user.Mode = "text"
+				}
+				if user.DisplayComponents != nil && !slices.Contains(user.DisplayComponents, "text") {
+					user.DisplayComponents = append(user.DisplayComponents, "text")
 				}
 			} else {
 				user.Mode = "time"
+				if user.DisplayComponents != nil {
+					user.DisplayComponents = slices.DeleteFunc(user.DisplayComponents, func(value string) bool { return value == "text" })
+				}
 			}
+			user.DisplayOrder = withComponent(user.DisplayOrder, "text", enabled)
 		}); err != nil {
 			return err
 		}
@@ -810,17 +1167,30 @@ func acnText(ctx context.Context, inv *command.Invocation, service *acnService, 
 	return inv.EditText(ctx, "用法："+inv.Prefix+"acn text add|list|del|clear|on|off")
 }
 
-func acnWeather(ctx context.Context, inv *command.Invocation, user *acnUser, mutate func(func(*acnUser)) error) error {
+// weather 查看或设置天气。不带参数或 help 时显示当前设置和一次现取的预览。
+func (c *acnCall) weather() error {
+	ctx, inv, user := c.ctx, c.inv, c.user
 	action := strings.ToLower(inv.Arg(1))
-	if action == "" {
+	if action == "" || action == "help" {
+		now := time.Now()
+		preview, fetched := currentWeather(ctx, user, true, now)
+		if fetched {
+			if _, err := c.mutate(func(user *acnUser) { user.WeatherCompact, user.WeatherCacheTS = preview, now.UnixMilli() }); err != nil {
+				return err
+			}
+		}
 		return inv.Edit(ctx, "天气: "+kit.OnOffText(user.WeatherEnabled)+"\n地点: "+command.Escape(kit.OrDefault(user.WeatherLocation, "未设置"))+
-			"\n预览: "+command.Escape(kit.OrDefault(user.WeatherCompact, "暂无缓存")))
+			"\n预览: "+command.Escape(kit.OrDefault(preview, "暂无缓存")))
 	}
 	if action == "on" && user.WeatherLocation == "" {
 		return inv.EditText(ctx, "❌ 请先设置地点")
 	}
 	if action == "on" || action == "off" {
-		if err := mutate(func(user *acnUser) { user.WeatherEnabled = action == "on" }); err != nil {
+		on := action == "on"
+		if _, err := c.change(func(user *acnUser) {
+			user.WeatherEnabled = on
+			user.DisplayOrder = withComponent(user.DisplayOrder, "weather", on)
+		}); err != nil {
 			return err
 		}
 		return inv.EditText(ctx, "✅ 天气配置已更新")
@@ -832,8 +1202,9 @@ func acnWeather(ctx context.Context, inv *command.Invocation, user *acnUser, mut
 	if strings.TrimSpace(location) == "" {
 		return inv.EditText(ctx, "❌ 请提供地点")
 	}
-	if err := mutate(func(user *acnUser) {
+	if _, err := c.change(func(user *acnUser) {
 		user.WeatherLocation, user.WeatherEnabled, user.WeatherCompact, user.WeatherCacheTS = location, true, "", 0
+		user.DisplayOrder = withComponent(user.DisplayOrder, "weather", true)
 	}); err != nil {
 		return err
 	}
