@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -33,6 +35,49 @@ type saveDocument struct {
 	Target string `json:"target,omitempty"`
 	// Source 为 true 时，额外发一行指回每条消息原出处的链接。
 	Source bool `json:"source,omitempty"`
+}
+
+// miboxUser 是 MiBox 的 save 插件给一个账号存的设置。
+type miboxUser struct {
+	Target     string `json:"target"`
+	ShowSource bool   `json:"showSource"`
+}
+
+// ConvertMiBox 把 MiBox 的 assets/prometheus/config.json（{"users":{"账号ID":{"target","showSource"}}}）
+// 转成 data/save.json。
+//
+// 导入时还不知道本账号的 ID，所以从各账号的设置里挑一份：优先挑改过默认目标的，
+// 其次是打开了来源说明的，都没有就按 ID 排序取第一份。MiBox 的默认目标 "me" 就是
+// 收藏夹，转成空值。
+func ConvertMiBox(raw []byte) ([]byte, error) {
+	var config struct {
+		Users map[string]miboxUser `json:"users"`
+	}
+	if err := json.Unmarshal(raw, &config); err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(config.Users))
+	for id := range config.Users {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	var chosen miboxUser
+	for _, pick := range []func(miboxUser) bool{
+		func(user miboxUser) bool { return !isSelfTarget(user.Target) },
+		func(user miboxUser) bool { return user.ShowSource },
+		func(miboxUser) bool { return true },
+	} {
+		index := slices.IndexFunc(ids, func(id string) bool { return pick(config.Users[id]) })
+		if index >= 0 {
+			chosen = config.Users[ids[index]]
+			break
+		}
+	}
+	document := saveDocument{Source: chosen.ShowSource}
+	if !isSelfTarget(chosen.Target) {
+		document.Target = strings.TrimSpace(chosen.Target)
+	}
+	return json.MarshalIndent(document, "", " ")
 }
 
 const (
@@ -166,13 +211,31 @@ type saver struct {
 	// status 是进度行的前半段（第几条/共几条），progress 在后面接上当前步骤。
 	status   string
 	progress func(string)
+	// topic 不为 0 时，复制出的消息发到目标论坛的这个话题里。
+	topic int
+	// lastID 是最近一次存进目标对话的消息编号，读不出来时为 0；来源说明回复这一条。
+	lastID int
+	// usernames 记下这次命令里解析过的用户名，同一个用户名只查一次。
+	usernames map[string]tg.InputPeerClass
 }
 
 // peerOf 找出链接指向的对话。账号启动以来还没收到过消息的私密对话，
 // 不在 peer 缓存里，所以要读一次对话列表来认识它。
 func (s *saver) peerOf(ctx context.Context, link messageLink) (tg.InputPeerClass, error) {
 	if link.Username != "" {
-		return s.client.ResolveUsername(ctx, link.Username)
+		key := strings.ToLower(link.Username)
+		if peer, ok := s.usernames[key]; ok {
+			return peer, nil
+		}
+		peer, err := s.client.ResolveUsername(ctx, link.Username)
+		if err != nil {
+			return nil, err
+		}
+		if s.usernames == nil {
+			s.usernames = map[string]tg.InputPeerClass{}
+		}
+		s.usernames[key] = peer
+		return peer, nil
 	}
 	peer, err := s.client.InputPeerFromChatID(link.ChatID)
 	if err == nil || !errors.Is(err, bot.ErrUnaddressablePeer) || s.learned {
@@ -271,16 +334,24 @@ func (s *saver) fetch(ctx context.Context, peer tg.InputPeerClass, ids []int) ([
 	return found, nil
 }
 
+// ErrNothingToCopy 表示消息里既没有文字也没有能重新发送的媒体。
+var ErrNothingToCopy = errors.New("消息里没有能保存的内容")
+
+// CopyMessage 把一条消息的内容重新发到 to，用于禁止转发的对话：文字连同格式，
+// 媒体下载后重新上传。topic 不为 0 时发到目标论坛的那个话题里。root 是部署目录，
+// 下载的媒体暂存在它下面的 save/.partial。消息没有可发的内容时返回 ErrNothingToCopy。
+func CopyMessage(ctx context.Context, client *bot.Client, root string, message *tg.Message, to tg.InputPeerClass, topic int) error {
+	work := &saver{client: client, root: root, partial: filepath.Join(root, "save", ".partial"),
+		upload: uploader.NewUploader(client.API()).WithThreads(4), progress: func(string) {}, topic: topic}
+	return work.copy(ctx, message, to)
+}
+
 // send 转发一条消息；对话禁止转发时改为复制。
 //
 // 带 noforwards 标记的消息不去尝试转发，直接复制：转发只会被拒。
 func (s *saver) send(ctx context.Context, message *tg.Message, from, to tg.InputPeerClass) (copied bool, err error) {
 	if !message.Noforwards {
-		err := onFlood(ctx, func() error {
-			_, err := s.client.API().MessagesForwardMessages(ctx, &tg.MessagesForwardMessagesRequest{
-				FromPeer: from, ID: []int{message.ID}, RandomID: []int64{rand.Int64()}, ToPeer: to})
-			return err
-		})
+		err := s.forward(ctx, []*tg.Message{message}, from, to)
 		if err == nil {
 			return false, nil
 		}
@@ -291,27 +362,134 @@ func (s *saver) send(ctx context.Context, message *tg.Message, from, to tg.Input
 	return true, s.copy(ctx, message, to)
 }
 
+// forward 用一次请求转发这些消息；相册一起转发，到了目标对话里仍是一个相册。
+func (s *saver) forward(ctx context.Context, messages []*tg.Message, from, to tg.InputPeerClass) error {
+	ids := make([]int, len(messages))
+	randomIDs := make([]int64, len(messages))
+	for index, message := range messages {
+		ids[index], randomIDs[index] = message.ID, rand.Int64()
+	}
+	var updates tg.UpdatesClass
+	err := onFlood(ctx, func() error {
+		var err error
+		updates, err = s.client.API().MessagesForwardMessages(ctx, &tg.MessagesForwardMessagesRequest{
+			FromPeer: from, ID: ids, RandomID: randomIDs, ToPeer: to})
+		return err
+	})
+	if err == nil {
+		s.lastID = sentID(updates)
+	}
+	return err
+}
+
 // copy 从头把同样的内容重新发一遍：文字连同格式，媒体则重新下载再上传。
 func (s *saver) copy(ctx context.Context, message *tg.Message, to tg.InputPeerClass) error {
 	media, err := s.remake(ctx, message)
 	if err != nil {
 		return err
 	}
+	var updates tg.UpdatesClass
 	if media == nil {
 		if strings.TrimSpace(message.Message) == "" {
-			return errors.New("消息里没有能保存的内容")
+			return ErrNothingToCopy
 		}
 		request := &tg.MessagesSendMessageRequest{Peer: to, Message: message.Message, RandomID: rand.Int64()}
 		if len(message.Entities) > 0 {
 			request.SetEntities(message.Entities)
 		}
-		return onFlood(ctx, func() error { _, err := s.client.API().MessagesSendMessage(ctx, request); return err })
+		if s.topic > 0 {
+			request.SetReplyTo(topicReply(s.topic))
+		}
+		err = onFlood(ctx, func() error {
+			var err error
+			updates, err = s.client.API().MessagesSendMessage(ctx, request)
+			return err
+		})
+	} else {
+		request := &tg.MessagesSendMediaRequest{Peer: to, Media: media, Message: message.Message, RandomID: rand.Int64()}
+		if len(message.Entities) > 0 {
+			request.SetEntities(message.Entities)
+		}
+		if s.topic > 0 {
+			request.SetReplyTo(topicReply(s.topic))
+		}
+		err = onFlood(ctx, func() error {
+			var err error
+			updates, err = s.client.API().MessagesSendMedia(ctx, request)
+			return err
+		})
 	}
-	request := &tg.MessagesSendMediaRequest{Peer: to, Media: media, Message: message.Message, RandomID: rand.Int64()}
-	if len(message.Entities) > 0 {
-		request.SetEntities(message.Entities)
+	if err == nil {
+		s.lastID = sentID(updates)
 	}
-	return onFlood(ctx, func() error { _, err := s.client.API().MessagesSendMedia(ctx, request); return err })
+	return err
+}
+
+// topicReply 让一条新消息进入论坛的某个话题。
+func topicReply(topic int) *tg.InputReplyToMessage {
+	reply := &tg.InputReplyToMessage{ReplyToMsgID: topic}
+	reply.SetTopMsgID(topic)
+	return reply
+}
+
+// sentID 从发送或转发的应答里读出新消息的编号；一次转发多条时取最大的那个。
+// 读不出来返回 0。
+func sentID(updates tg.UpdatesClass) int {
+	var list []tg.UpdateClass
+	switch value := updates.(type) {
+	case *tg.UpdateShortSentMessage:
+		return value.ID
+	case *tg.UpdateShort:
+		list = []tg.UpdateClass{value.Update}
+	case *tg.Updates:
+		list = value.Updates
+	case *tg.UpdatesCombined:
+		list = value.Updates
+	}
+	latest := 0
+	for _, update := range list {
+		var message tg.MessageClass
+		switch value := update.(type) {
+		case *tg.UpdateNewMessage:
+			message = value.Message
+		case *tg.UpdateNewChannelMessage:
+			message = value.Message
+		}
+		if message != nil && message.GetID() > latest {
+			latest = message.GetID()
+		}
+	}
+	return latest
+}
+
+// albumRadius 是找相册其余部分时往前、往后各看的编号数。一个相册最多 10 条，
+// 中间可能夹着别人同时发的消息，所以和 MiBox 一样各看 30 个。
+const albumRadius = 30
+
+// album 读出 message 所在相册的全部消息，按编号从小到大排。
+func (s *saver) album(ctx context.Context, peer tg.InputPeerClass, message *tg.Message) ([]*tg.Message, error) {
+	group, _ := message.GetGroupedID()
+	ids := make([]int, 0, 2*albumRadius+1)
+	for id := message.ID - albumRadius; id <= message.ID+albumRadius; id++ {
+		if id > 0 {
+			ids = append(ids, id)
+		}
+	}
+	found, err := s.fetch(ctx, peer, ids)
+	if err != nil {
+		return nil, err
+	}
+	var album []*tg.Message
+	for _, candidate := range found {
+		if id, ok := candidate.GetGroupedID(); ok && id == group {
+			album = append(album, candidate)
+		}
+	}
+	if len(album) == 0 {
+		return []*tg.Message{message}, nil
+	}
+	sort.Slice(album, func(a, b int) bool { return album[a].ID < album[b].ID })
+	return album, nil
 }
 
 // remake 构造可以再次发送的媒体：图片和文件要重新上传，不带文件的类型
@@ -507,13 +685,13 @@ func saveHelp(prefix string) string {
 	return "💾 <b>保存消息</b>\n\n转发消息；遇到禁止转发的对话，就下载后重新发一份，文字格式和媒体属性都保留。\n\n" +
 		"<b>保存</b>\n" +
 		"• 回复一条消息发 <code>" + p + "save</code>\n" +
-		"• <code>" + p + "save 链接 [链接…]</code> 按链接批量保存\n" +
+		"• <code>" + p + "save 链接 [链接…]</code> 按链接批量保存；链接指向相册里的一条时，整个相册一起保存\n" +
 		"• <code>" + p + "save 链接1|链接2</code> 保存两条之间的所有消息，缺号自动跳过，一次最多 " + strconv.Itoa(saveRangeLimit) + " 条\n" +
 		"• 末尾加一个目标只这一次发到那里：<code>" + p + "save 链接 @某人</code>、<code>" + p + "save 链接 local</code>\n\n" +
 		"<b>设置</b>\n" +
 		"• <code>" + p + "save to 目标</code> 默认目标：<code>me</code>（收藏夹）、<code>@用户名</code>、对话 ID、<code>local</code>（存到服务器）\n" +
 		"• <code>" + p + "save target</code> 看当前设置\n" +
-		"• <code>" + p + "save source on|off</code> 在保存的内容后附上来源链接\n\n" +
+		"• <code>" + p + "save source on|off</code> 保存后回复一条来源说明，带原消息链接\n\n" +
 		"<b>链接</b>\n支持 <code>t.me/用户名/编号</code>、<code>t.me/c/数字/编号</code>，以及带话题的形式。私密对话要求账号是成员。\n\n" +
 		"<b>本地模式</b>\n只存媒体，纯文本跳过。文件放在部署目录的 <code>save/对话/</code> 下，旁边有同名 <code>.json</code> 记录来源。"
 }
@@ -523,12 +701,22 @@ type saveJob struct {
 	link     messageLink
 	peer     tg.InputPeerClass
 	messages []*tg.Message
+	// album 为真时 messages 是链接所指消息所在的整个相册。
+	album bool
 }
 
 // saveTally 是一次保存的结果。
 type saveTally struct {
 	saved, copied, skipped int
 	failures, files        []string
+	// sources 是保存成功的消息的出处，按保存的先后排列。
+	sources []savedSource
+}
+
+// savedSource 是一条已保存消息的出处。
+type savedSource struct {
+	link  messageLink
+	title string
 }
 
 func showSaveSettings(ctx context.Context, inv *command.Invocation, settings *store.Store[saveDocument]) error {
@@ -610,22 +798,7 @@ func collectSaveJobs(ctx context.Context, inv *command.Invocation, work *saver, 
 	case request.Range != nil:
 		return collectSaveRange(ctx, inv, work, request.Range[0], request.Range[1])
 	case len(request.Links) > 0:
-		var jobs []saveJob
-		for _, link := range request.Links {
-			peer, err := work.peerOf(ctx, link)
-			if err != nil {
-				return nil, kit.Fail(link.Raw + "：" + err.Error())
-			}
-			messages, err := work.fetch(ctx, peer, []int{link.ID})
-			if err != nil {
-				return nil, err
-			}
-			if len(messages) == 0 {
-				return nil, kit.Fail(link.Raw + " 这条消息不存在或已删除")
-			}
-			jobs = append(jobs, saveJob{link: link, peer: peer, messages: messages})
-		}
-		return jobs, nil
+		return collectSaveLinks(ctx, work, request.Links)
 	}
 	reply, err := inv.Client.GetReply(ctx, inv.Message)
 	if err != nil || reply == nil || reply.Raw == nil {
@@ -636,6 +809,42 @@ func collectSaveJobs(ctx context.Context, inv *command.Invocation, work *saver, 
 		return nil, err
 	}
 	return []saveJob{{link: messageLink{ChatID: reply.ChatID, ID: reply.ID}, peer: peer, messages: []*tg.Message{reply.Raw}}}, nil
+}
+
+// collectSaveLinks 读出每个链接指向的消息。链接指向相册里的一条时，整个相册
+// 都要保存，和 MiBox 一样；几个链接落在同一个相册里，只存一次。
+func collectSaveLinks(ctx context.Context, work *saver, links []messageLink) ([]saveJob, error) {
+	var jobs []saveJob
+	albums := map[string]bool{}
+	for _, link := range links {
+		peer, err := work.peerOf(ctx, link)
+		if err != nil {
+			return nil, kit.Fail(link.Raw + "：" + err.Error())
+		}
+		messages, err := work.fetch(ctx, peer, []int{link.ID})
+		if err != nil {
+			return nil, err
+		}
+		if len(messages) == 0 {
+			return nil, kit.Fail(link.Raw + " 这条消息不存在或已删除")
+		}
+		group, grouped := messages[0].GetGroupedID()
+		if !grouped {
+			jobs = append(jobs, saveJob{link: link, peer: peer, messages: messages})
+			continue
+		}
+		key := bot.PeerID(messages[0].PeerID) + ":" + strconv.FormatInt(group, 10)
+		if albums[key] {
+			continue
+		}
+		albums[key] = true
+		album, err := work.album(ctx, peer, messages[0])
+		if err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, saveJob{link: link, peer: peer, messages: album, album: true})
+	}
+	return jobs, nil
 }
 
 // collectSaveRange 按编号逐个读出范围内的消息，缺号跳过。
@@ -671,10 +880,29 @@ func countMessages(jobs []saveJob) int {
 }
 
 // runSaveJobs 逐条保存。单条失败只记下来接着往下走；只有命令本身被取消才中止。
+//
+// 相册先用一次请求整个转发，到了目标对话里仍是一个相册；整体转发不成（比如
+// 对话禁止转发），再逐条处理，逐条的结果和失败原因照常记下。
 func runSaveJobs(ctx context.Context, work *saver, jobs []saveJob, destination tg.InputPeerClass, local bool) (saveTally, error) {
 	var tally saveTally
 	total, index := countMessages(jobs), 0
 	for _, job := range jobs {
+		if job.album && !local && forwardable(job.messages) {
+			work.status = fmt.Sprintf("💾 %d/%d", index+1, total)
+			work.progress("")
+			err := work.forward(ctx, job.messages, job.peer, destination)
+			if ctx.Err() != nil {
+				return tally, ctx.Err()
+			}
+			if err == nil {
+				index += len(job.messages)
+				for _, message := range job.messages {
+					tally.saved++
+					tally.sources = append(tally.sources, work.sourceOf(job, message))
+				}
+				continue
+			}
+		}
 		for _, message := range job.messages {
 			index++
 			work.status = fmt.Sprintf("💾 %d/%d", index, total)
@@ -702,6 +930,7 @@ func runSaveJobs(ctx context.Context, work *saver, jobs []saveJob, destination t
 				continue
 			}
 			tally.saved++
+			tally.sources = append(tally.sources, work.sourceOf(job, message))
 			if copied {
 				tally.copied++
 			}
@@ -710,21 +939,127 @@ func runSaveJobs(ctx context.Context, work *saver, jobs []saveJob, destination t
 	return tally, nil
 }
 
-// sendSourceLine 在目标对话里补一行来源链接。和人私聊的消息没有 t.me 地址，就不发。
-func sendSourceLine(ctx context.Context, client *bot.Client, jobs []saveJob, total int, destination tg.InputPeerClass) {
-	first := jobs[0].link
-	if first.url() == "" {
+// forwardable 判断这些消息能不能直接转发：带禁止转发标记的一条都不行。
+func forwardable(messages []*tg.Message) bool {
+	for _, message := range messages {
+		if message.Noforwards {
+			return false
+		}
+	}
+	return true
+}
+
+// sourceOf 记下一条已保存消息的出处：链接的形式跟着命令里给的链接走，
+// 对话名取自 peer 缓存。
+func (s *saver) sourceOf(job saveJob, message *tg.Message) savedSource {
+	return savedSource{
+		link:  messageLink{Username: job.link.Username, ChatID: job.link.ChatID, ID: message.ID},
+		title: s.client.Peers().Title(message.PeerID),
+	}
+}
+
+// sendSourceNotice 在目标对话里回复最后存进去的那条消息，说明这些内容的出处。
+// 读不出那条消息的编号时不回复，直接发。
+func sendSourceNotice(ctx context.Context, work *saver, sources []savedSource, isRange bool, destination tg.InputPeerClass) {
+	text := sourceNotice(sources, isRange)
+	if text == "" {
 		return
 	}
-	if len(jobs) == 1 && len(jobs[0].messages) > 0 {
-		first.ID = jobs[0].messages[0].ID
+	_, _ = work.client.SendHTML(ctx, destination, text, bot.SendOptions{ReplyTo: work.lastID})
+}
+
+// sourceNotice 写出来源说明，和 MiBox 的三种格式对应：范围给出第一条和最后一条；
+// 只存了一条时给出原消息链接、对话名和编号；其余按对话分组，连续的编号合成一段，
+// 内容太长时折叠起来。和人私聊的消息没有 t.me 地址，不列出；一条都列不出时返回 ""。
+func sourceNotice(sources []savedSource, isRange bool) string {
+	var linked []savedSource
+	for _, source := range sources {
+		if source.link.url() != "" {
+			linked = append(linked, source)
+		}
 	}
-	line := "📎 来源：" + first.url()
-	if total > 1 {
-		line += fmt.Sprintf(" 等 %d 条", total)
+	if len(linked) == 0 {
+		return ""
 	}
-	_, _ = client.API().MessagesSendMessage(ctx, &tg.MessagesSendMessageRequest{
-		Peer: destination, Message: line, RandomID: rand.Int64(), NoWebpage: true})
+	if isRange {
+		first, last := linked[0], linked[len(linked)-1]
+		return "🔗 <b>范围保存来源</b>\n\n" +
+			"▶️ <b>起始消息</b>\n• " + command.Bold(first.title) + " / " + sourceAnchor(first.link) + "\n\n" +
+			"⏹ <b>结尾消息</b>\n• " + command.Bold(last.title) + " / " + sourceAnchor(last.link)
+	}
+	if len(linked) == 1 {
+		source := linked[0]
+		return "🔗 <b>消息来源</b>\n\n" +
+			`📝 <a href="` + command.Escape(source.link.url()) + `">查看原消息</a>` + "\n" +
+			"👤 来源对话：" + command.Bold(source.title) + "\n" +
+			"#️⃣ 消息 ID：" + command.Code(strconv.Itoa(source.link.ID))
+	}
+	type chatGroup struct {
+		key, title string
+		link       messageLink
+		ids        []int
+	}
+	var groups []*chatGroup
+	byKey := map[string]*chatGroup{}
+	for _, source := range linked {
+		key := source.link.ChatID + "@" + strings.ToLower(source.link.Username)
+		group, ok := byKey[key]
+		if !ok {
+			group = &chatGroup{key: key, title: source.title, link: source.link}
+			byKey[key] = group
+			groups = append(groups, group)
+		}
+		group.ids = append(group.ids, source.link.ID)
+	}
+	sort.SliceStable(groups, func(a, b int) bool {
+		if groups[a].title != groups[b].title {
+			return groups[a].title < groups[b].title
+		}
+		return groups[a].key < groups[b].key
+	})
+	sections := make([]string, 0, len(groups))
+	for _, group := range groups {
+		spans := idSpans(group.ids)
+		parts := make([]string, 0, len(spans))
+		count := 0
+		for _, span := range spans {
+			start, end := group.link, group.link
+			start.ID, end.ID = span[0], span[1]
+			count += span[1] - span[0] + 1
+			if span[0] == span[1] {
+				parts = append(parts, sourceAnchor(start))
+			} else {
+				parts = append(parts, sourceAnchor(start)+"-"+sourceAnchor(end))
+			}
+		}
+		sections = append(sections, "👤 "+command.Bold(group.title)+"（"+strconv.Itoa(count)+" 条）："+strings.Join(parts, ", "))
+	}
+	body := strings.Join(sections, "\n")
+	if len([]rune(body)) > 350 || len(sections) > 6 {
+		body = "<blockquote expandable>" + body + "</blockquote>"
+	}
+	return "🔗 <b>批量保存来源</b>\n\n" + body
+}
+
+// sourceAnchor 把消息编号写成指向原消息的链接。
+func sourceAnchor(link messageLink) string {
+	return `<a href="` + command.Escape(link.url()) + `">` + strconv.Itoa(link.ID) + `</a>`
+}
+
+// idSpans 把编号去重排序，连续的合成 [起, 止] 一段。
+func idSpans(ids []int) [][2]int {
+	sorted := append([]int(nil), ids...)
+	sort.Ints(sorted)
+	var spans [][2]int
+	for _, id := range sorted {
+		last := len(spans) - 1
+		if last >= 0 && id <= spans[last][1]+1 {
+			spans[last][1] = max(spans[last][1], id)
+			continue
+		}
+		spans = append(spans, [2]int{id, id})
+	}
+	return spans
 }
 
 // renderSaveResult 把结果写成给人看的一段话，失败最多列前 5 条。
@@ -797,8 +1132,8 @@ func saveHandle(ctx context.Context, inv *command.Invocation, settings *store.St
 	if err != nil {
 		return err
 	}
-	if current.Source && !local && tally.saved > 0 {
-		sendSourceLine(ctx, inv.Client, jobs, total, destination)
+	if current.Source && !local {
+		sendSourceNotice(ctx, work, tally.sources, request.Range != nil, destination)
 	}
 	return inv.EditText(ctx, renderSaveResult(tally, target, root))
 }
