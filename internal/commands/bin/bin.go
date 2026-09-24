@@ -4,6 +4,7 @@ package bin
 import (
 	"context"
 	"encoding/json"
+	"html"
 	"regexp"
 	"strings"
 	"time"
@@ -31,9 +32,13 @@ type binResult struct {
 	} `json:"bank"`
 }
 
+// schemeNames 的键是去掉空格的小写卡组织名：binlist 给的是 amex 这样的简写，
+// bincheck 给的是 AMERICAN EXPRESS 这样的全称。
 var schemeNames = map[string]string{
 	"visa": "Visa", "mastercard": "Mastercard", "amex": "American Express", "diners": "Diners Club",
 	"discover": "Discover", "jcb": "JCB", "unionpay": "UnionPay", "maestro": "Maestro", "mir": "MIR",
+	"americanexpress": "American Express", "dinersclub": "Diners Club", "dinersclubinternational": "Diners Club",
+	"chinaunionpay": "UnionPay",
 }
 
 var cardTypes = map[string]string{"credit": "贷记卡", "debit": "借记卡", "charge": "签账卡", "prepaid": "预付卡"}
@@ -47,6 +52,70 @@ var (
 	cardLevel    = regexp.MustCompile(`(?i)BUSINESS|CORPORATE|PLATINUM|GOLD|CLASSIC|SIGNATURE|INFINITE|WORLD|PREMIUM|REWARDS`)
 	businessCard = regexp.MustCompile(`(?i)BUSINESS|CORPORATE|COMMERCIAL`)
 )
+
+// bincheckInfo 是从 bincheck.io 详情页里读出的卡组织、发卡行和国家。
+type bincheckInfo struct {
+	Scheme  string
+	Bank    string
+	Country string
+}
+
+var (
+	// bincheck.io 是网页不是接口，要的信息都在 og:description 那一句里；
+	// 属性的先后顺序不固定，两种都认。
+	ogDescription = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']*)["']`),
+		regexp.MustCompile(`(?i)<meta[^>]+content=["']([^"']*)["'][^>]+property=["']og:description["']`),
+	}
+	// 描述有两种写法，和 MiBox 一样先试号码重复出现的那种，再试普通的那种，比如
+	// "This number: 545807 is a valid BIN number MASTERCARD issued by GAZPROMBANK in RUSSIAN FEDERATION"。
+	bincheckPatterns = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)valid BIN number\s+\d+\s+(?:is\s+)?(?:a\s+)?valid BIN number\s+([A-Z ]+)\s+issued by\s+(.+?)\s+in\s+(.+)`),
+		regexp.MustCompile(`(?i)valid BIN number\s+([A-Z ]+)\s+issued by\s+(.+?)\s+in\s+(.+)`),
+	}
+)
+
+// parseBincheck 从 bincheck.io 的详情页里读出卡组织、发卡行和国家，读不出来返回零值。
+func parseBincheck(page string) bincheckInfo {
+	var description string
+	for _, pattern := range ogDescription {
+		if match := pattern.FindStringSubmatch(page); match != nil {
+			description = html.UnescapeString(match[1])
+			break
+		}
+	}
+	for _, pattern := range bincheckPatterns {
+		if match := pattern.FindStringSubmatch(description); match != nil {
+			return bincheckInfo{
+				Scheme:  strings.Join(strings.Fields(match[1]), " "),
+				Bank:    strings.TrimSpace(match[2]),
+				Country: strings.TrimSpace(strings.TrimRight(match[3], ". ")),
+			}
+		}
+	}
+	return bincheckInfo{}
+}
+
+// bincheck 查 bincheck.io，只发前 6 位。查不到或出错返回零值，这时全用 binlist 的结果。
+func bincheck(ctx context.Context, bin string) bincheckInfo {
+	response, err := httpx.Do(ctx, httpx.Request{URL: "https://bincheck.io/details/" + bin[:6], Timeout: 8 * time.Second, MaxBytes: 2 << 20})
+	if err != nil || response.Status != 200 {
+		return bincheckInfo{}
+	}
+	return parseBincheck(string(response.Body))
+}
+
+// schemeName 把卡组织名写成常见的样子；表里没有的，每个词首字母大写。
+func schemeName(raw string) string {
+	if name, ok := schemeNames[strings.ToLower(strings.ReplaceAll(raw, " ", ""))]; ok {
+		return name
+	}
+	words := strings.Fields(strings.ToLower(raw))
+	for index, word := range words {
+		words[index] = strings.ToUpper(word[:1]) + word[1:]
+	}
+	return kit.OrDash(strings.Join(words, " "))
+}
 
 // binDigits 只保留输入内容里的前 8 位数字。用得上的只有发卡行前缀；
 // 卡号其余部分没有理由离开这台机器，所以在发出任何请求之前就丢掉。
@@ -67,11 +136,10 @@ func binDigits(input string) (string, bool) {
 	return value, true
 }
 
-func renderBIN(bin string, result binResult) string {
-	scheme := schemeNames[strings.ToLower(result.Scheme)]
-	if scheme == "" {
-		scheme = kit.OrDash(result.Scheme)
-	}
+// renderBIN 写出查询结果。卡组织、发卡行和国家优先用 bincheck.io 的，和 MiBox 一样；
+// 其余各项只有 binlist 有。
+func renderBIN(bin string, result binResult, checked bincheckInfo) string {
+	scheme := schemeName(kit.OrDefault(checked.Scheme, result.Scheme))
 	kind := cardTypes[strings.ToLower(result.Type)]
 	if kind == "" {
 		kind = kit.OrDash(result.Type)
@@ -80,9 +148,9 @@ func renderBIN(bin string, result binResult) string {
 	if match := cardLevel.FindString(result.Brand); match != "" {
 		level = strings.ToUpper(match)
 	}
-	country, currency := "—", "—"
+	country, currency := kit.OrDash(checked.Country), "—"
 	if result.Country != nil {
-		name := strings.TrimSpace(strings.TrimSuffix(result.Country.Name, " (the)"))
+		name := kit.OrDefault(checked.Country, strings.TrimSpace(strings.TrimSuffix(result.Country.Name, " (the)")))
 		country = strings.TrimSpace(result.Country.Emoji + " " + name)
 		if result.Country.Currency != "" {
 			currency = result.Country.Currency
@@ -94,6 +162,9 @@ func renderBIN(bin string, result binResult) string {
 	bank := "—"
 	if result.Bank != nil && result.Bank.Name != "" {
 		bank = result.Bank.Name
+	}
+	if checked.Bank != "" {
+		bank = checked.Bank
 	}
 	prepaid := "未知"
 	if result.Prepaid != nil {
@@ -119,7 +190,29 @@ func binHelp(prefix string) string {
 	p := command.Escape(prefix)
 	return "💳 <b>卡头查询</b>\n\n查银行卡号前 6–8 位（BIN）对应的卡组织、卡种、国家和发卡行。\n\n" +
 		"• <code>" + p + "bin 415042</code>\n\n" +
-		"只会用前 8 位去查，多输入的数字在发请求之前就丢掉了。数据来自 binlist.net，免费额度很小，查多了会限流。"
+		"只会用前 8 位去查，多输入的数字在发请求之前就丢掉了。数据来自 bincheck.io（只发前 6 位）和 binlist.net；" +
+		"卡组织、发卡行和国家优先用 bincheck.io 的。binlist.net 免费额度很小，查多了会限流。"
+}
+
+// binlist 查 lookup.binlist.net。查不成时返回给用户看的说明。
+func binlist(ctx context.Context, bin string) (binResult, string) {
+	var result binResult
+	response, err := httpx.Do(ctx, httpx.Request{URL: "https://lookup.binlist.net/" + bin,
+		Headers: map[string]string{"Accept-Version": "3"}, Timeout: 15 * time.Second, MaxBytes: 64 << 10})
+	switch {
+	case err != nil:
+		return result, "❌ 查询服务暂时连不上，稍后再试"
+	case response.Status == 404:
+		return result, "❌ 没有这个卡头的记录：" + bin
+	case response.Status == 429:
+		return result, "⏳ binlist.net 限流了，免费额度每小时只有几次，过一阵再试"
+	case !response.OK():
+		return result, "❌ 查询服务出错了，稍后再试"
+	}
+	if json.Unmarshal(response.Body, &result) != nil {
+		return binResult{}, "❌ 查询服务返回了看不懂的内容"
+	}
+	return result, ""
 }
 
 // Register 注册 .bin。
@@ -136,23 +229,16 @@ func Register(a *app.App) {
 		if err := inv.EditText(ctx, "🔍 正在查询卡头 "+bin+"…"); err != nil {
 			return err
 		}
-		response, err := httpx.Do(ctx, httpx.Request{URL: "https://lookup.binlist.net/" + bin,
-			Headers: map[string]string{"Accept-Version": "3"}, Timeout: 15 * time.Second, MaxBytes: 64 << 10})
-		switch {
-		case err != nil:
-			return inv.EditText(ctx, "❌ 查询服务暂时连不上，稍后再试")
-		case response.Status == 404:
-			return inv.EditText(ctx, "❌ 没有这个卡头的记录："+bin)
-		case response.Status == 429:
-			return inv.EditText(ctx, "⏳ binlist.net 限流了，免费额度每小时只有几次，过一阵再试")
-		case !response.OK():
-			return inv.EditText(ctx, "❌ 查询服务出错了，稍后再试")
+		checked := make(chan bincheckInfo, 1)
+		go func() { checked <- bincheck(ctx, bin) }()
+		result, failure := binlist(ctx, bin)
+		fromBincheck := <-checked
+		// 两个来源同时查。binlist 查不成时，只要 bincheck 有结果就照样给出它那几项；
+		// 两边都没有才报错。
+		if failure != "" && fromBincheck == (bincheckInfo{}) {
+			return inv.EditText(ctx, failure)
 		}
-		var result binResult
-		if json.Unmarshal(response.Body, &result) != nil {
-			return inv.EditText(ctx, "❌ 查询服务返回了看不懂的内容")
-		}
-		return inv.Edit(ctx, renderBIN(bin, result))
+		return inv.Edit(ctx, renderBIN(bin, result, fromBincheck))
 	}
 	a.Registry.Register(&command.Command{Name: "bin", Description: "查卡头对应的发卡行", Usage: "卡号前6-8位", Help: binHelp, Handle: binHandle})
 }

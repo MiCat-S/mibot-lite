@@ -213,9 +213,16 @@ func apiError(response httpx.Response) error {
 	return kit.Failf("fish.audio 返回 HTTP %d：%s", response.Status, reason)
 }
 
-// downloadCover 下载封面，只接受 https 链接，最大 5 MB；失败就不加封面。
+// coverLink 判断封面链接能不能用：http 或 https，并且带主机名。MiBox 对封面链接
+// 不设限制，从那边导入的 http 链接也要照常能用。
+func coverLink(link string) bool {
+	parsed, err := url.Parse(link)
+	return err == nil && (parsed.Scheme == "https" || parsed.Scheme == "http") && parsed.Host != ""
+}
+
+// downloadCover 下载封面，只接受 http 和 https 链接，最大 5 MB；失败就不加封面。
 func downloadCover(ctx context.Context, link string) []byte {
-	if parsed, err := url.Parse(link); err != nil || parsed.Scheme != "https" {
+	if !coverLink(link) {
 		return nil
 	}
 	response, err := httpx.Do(ctx, httpx.Request{URL: link, Timeout: 30 * time.Second, MaxBytes: 5 << 20})
@@ -436,7 +443,7 @@ func (s *service) key(ctx context.Context, inv *command.Invocation) error {
 }
 
 func (s *service) setCover(ctx context.Context, inv *command.Invocation, link string) error {
-	if parsed, err := url.Parse(link); err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+	if !coverLink(link) {
 		return inv.EditText(ctx, "用法："+inv.Prefix+"t fm https://图片链接")
 	}
 	config, err := s.store.Read()

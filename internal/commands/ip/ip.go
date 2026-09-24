@@ -42,14 +42,9 @@ var (
 	domainInText = regexp.MustCompile(`\b(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}\b`)
 )
 
-// findAddress 从被回复的消息里挑出要查的东西：有 IP 地址就用地址，
-// 没有就用域名。URL 按其中的主机名算。
+// findAddress 从一段文字里挑出要查的东西：有 IP 地址就用地址，没有就用域名，
+// 和 MiBox 的顺序一样；链接里的主机名也按域名认出来。都没有返回 ""。
 func findAddress(text string) string {
-	for _, field := range strings.Fields(text) {
-		if parsed, err := url.Parse(field); err == nil && parsed.Host != "" {
-			return parsed.Hostname()
-		}
-	}
 	if match := ipv4Pattern.FindString(text); match != "" && net.ParseIP(match) != nil {
 		return match
 	}
@@ -59,6 +54,18 @@ func findAddress(text string) string {
 		}
 	}
 	return domainInText.FindString(text)
+}
+
+// replyQuery 从被回复的消息里取要查的东西：IP 或域名；都没有的话，
+// 和 MiBox 一样取第一个词交给查询服务去认。
+func replyQuery(text string) string {
+	if found := findAddress(text); found != "" {
+		return found
+	}
+	if fields := strings.Fields(text); len(fields) > 0 {
+		return fields[0]
+	}
+	return ""
 }
 
 func renderIP(result ipResult) string {
@@ -115,7 +122,7 @@ func Register(a *app.App) {
 		}
 		if query == "" && inv.Message.ReplyToID != 0 {
 			if reply, err := inv.Client.GetReply(ctx, inv.Message); err == nil && reply != nil {
-				query = findAddress(reply.Text)
+				query = replyQuery(reply.Text)
 			}
 		}
 		if query == "" {

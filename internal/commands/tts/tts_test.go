@@ -55,6 +55,22 @@ func TestRolesAndVoice(t *testing.T) {
 	}
 }
 
+// 封面链接接受 http 和 https（MiBox 导入的可能是 http），别的协议不接受。
+func TestCoverLink(t *testing.T) {
+	for link, want := range map[string]bool{
+		"https://example.com/a.png": true,
+		"http://example.com/a.png":  true,
+		"file:///etc/passwd":        false,
+		"ftp://example.com/a.png":   false,
+		"https://":                  false,
+		"图片":                        false,
+	} {
+		if got := coverLink(link); got != want {
+			t.Errorf("coverLink(%q) = %v，应为 %v", link, got, want)
+		}
+	}
+}
+
 // MiBox 的 tts_data.json 原样读得进来。
 func TestReadsMiBoxData(t *testing.T) {
 	raw := `{"users":{"42":{"apiKey":"k","defaultRole":"丁真","defaultRoleId":"54a5170264694bfc8e9ad98df7bd89c3"}},"roles":{"丁真":"54a5170264694bfc8e9ad98df7bd89c3"},"covers":{"薯薯":"https://raw.githubusercontent.com/Yu9191/-/main/image.png"}}`

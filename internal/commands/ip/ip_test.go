@@ -8,14 +8,29 @@ import (
 
 func TestFindAddress(t *testing.T) {
 	for text, want := range map[string]string{
-		"连不上 8.8.8.8 了":                 "8.8.8.8",
-		"看这个 https://example.com/a?b=1": "example.com",
-		"example.org 挂了吗":               "example.org",
-		"2001:4860:4860::8888":          "2001:4860:4860::8888",
-		"没有地址":                          "",
+		"连不上 8.8.8.8 了":                  "8.8.8.8",
+		"看这个 https://example.com/a?b=1":  "example.com",
+		"example.org 挂了吗":                "example.org",
+		"2001:4860:4860::8888":           "2001:4860:4860::8888",
+		"example.com 解析到 1.1.1.1":        "1.1.1.1",
+		"https://example.net/ 和 9.9.9.9": "9.9.9.9",
+		"没有地址":                           "",
 	} {
 		if got := findAddress(text); got != want {
 			t.Errorf("findAddress(%q) = %q, want %q", text, got, want)
+		}
+	}
+}
+
+// 被回复的消息里找不到 IP 和域名时，取第一个词。
+func TestReplyQuery(t *testing.T) {
+	for text, want := range map[string]string{
+		"看看 example.org": "example.org",
+		"localhost 挂了":   "localhost",
+		"  \n":           "",
+	} {
+		if got := replyQuery(text); got != want {
+			t.Errorf("replyQuery(%q) = %q, want %q", text, got, want)
 		}
 	}
 }
