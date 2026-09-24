@@ -87,7 +87,8 @@ type miboxImport struct {
 // miboxImports 按顺序处理；同一个目标有 v2 和 v1 两个来源时，v2 排在前面，
 // 目标写过一次后面的就跳过——v2 的数据更新，而且 v2 启动时已经并入过 v1 的。
 var miboxImports = []miboxImport{
-	{source: "assets/ai/config.json", target: "ai.json"},
+	// ai：补上 MiBox v2 只在读取时才套用的默认值（openai 类型默认走 responses、搜索模型沿用对话模型）。
+	{source: "assets/ai/config.json", target: "ai.json", convert: ai.ConvertMiBox},
 	{source: "assets/sum/database.json", target: "sum.json"},
 	{source: "assets/da/database.json", target: "da.json"},
 	{source: "assets/dme/config.json", target: "dme.json"},
