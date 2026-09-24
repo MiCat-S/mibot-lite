@@ -320,11 +320,21 @@ func (c *Client) DeleteMessage(ctx context.Context, message *Message) error {
 
 // Forward 把消息从一个对话转发到另一个对话。
 func (c *Client) Forward(ctx context.Context, from, to tg.InputPeerClass, ids []int) error {
+	return c.ForwardToTopic(ctx, from, to, ids, 0)
+}
+
+// ForwardToTopic 把消息从一个对话转发到另一个对话；topic 不为 0 时转发到
+// 目标论坛的那个话题里，否则进入默认话题。
+func (c *Client) ForwardToTopic(ctx context.Context, from, to tg.InputPeerClass, ids []int, topic int) error {
 	randomIDs := make([]int64, len(ids))
 	for index := range ids {
 		randomIDs[index] = rand.Int64()
 	}
-	_, err := c.api.MessagesForwardMessages(ctx, &tg.MessagesForwardMessagesRequest{FromPeer: from, ID: ids, RandomID: randomIDs, ToPeer: to})
+	request := &tg.MessagesForwardMessagesRequest{FromPeer: from, ID: ids, RandomID: randomIDs, ToPeer: to}
+	if topic > 0 {
+		request.SetTopMsgID(topic)
+	}
+	_, err := c.api.MessagesForwardMessages(ctx, request)
 	return err
 }
 
