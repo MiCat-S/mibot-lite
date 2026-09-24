@@ -190,6 +190,10 @@ func Prepare(ctx context.Context, options Options) (*App, error) {
 		Device:         telegram.DeviceConfig{DeviceModel: cfg.DeviceModel},
 		Logger:         protocol,
 		UpdateHandler:  app.gaps,
+		// 60 秒以内的限流在连接层等过去再重试，最多 5 次，命令不用各自处理。
+		// 这和 MiBox 所用库（teleproto）的默认 floodSleepThreshold、requestRetries 一致；
+		// 从 MiBox 移植来的命令都默认有这层保护，gotd 没有，得自己补上。
+		Middlewares: []telegram.Middleware{bot.FloodWaiter{Logger: app.Logger, MaxWait: 60 * time.Second, Attempts: 5}},
 	}
 	if cfg.Proxy != nil {
 		var auth *proxy.Auth

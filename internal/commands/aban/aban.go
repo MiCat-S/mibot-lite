@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gotd/td/tg"
@@ -38,8 +39,36 @@ type abanService struct {
 	mu    sync.Mutex
 }
 
-// abanCacheTTL 是管理群列表的缓存复用时长；`.refresh` 会提前丢弃缓存。
-const abanCacheTTL = 12 * time.Hour
+// abanCacheTTL 是管理群列表的缓存复用时长：一天扫一次对话列表，其余时候用缓存；
+// `.refresh` 会提前丢弃缓存。MiBox 的缓存不过期，新加入的群要手动 .refresh 才认。
+const abanCacheTTL = 24 * time.Hour
+
+// abanParallel 是跨群操作同时进行的请求数，和 MiBox 一样是 4。
+const abanParallel = 4
+
+// fresh 表示缓存还能用，这次不用扫描对话列表。
+func (s *abanService) fresh() bool {
+	cached, err := s.store.Read()
+	return err == nil && len(cached.Groups) > 0 && time.Since(time.UnixMilli(cached.UpdatedAt)) < abanCacheTTL
+}
+
+// eachGroup 对每个群执行 work，最多 abanParallel 个同时进行，全部结束才返回。
+func eachGroup(ctx context.Context, groups []managedGroup, work func(managedGroup)) {
+	slots := make(chan struct{}, abanParallel)
+	var wait sync.WaitGroup
+	for _, group := range groups {
+		if ctx.Err() != nil {
+			break
+		}
+		slots <- struct{}{}
+		wait.Add(1)
+		go func() {
+			defer func() { <-slots; wait.Done() }()
+			work(group)
+		}()
+	}
+	wait.Wait()
+}
 
 // banRights 是完全封禁：目标既不能看也不能发。
 func banRights(until int) tg.ChatBannedRights {
@@ -150,7 +179,8 @@ func resolveTarget(ctx context.Context, inv *command.Invocation) (tg.InputPeerCl
 	return peer, sender.UserID, info.DisplayName(), nil
 }
 
-// targetIsAdmin 判断目标在某个群组里是否有管理员权限。
+// targetIsAdmin 判断目标在某个群组里是否有管理员权限。被限流到查不了时按「是」算：
+// 宁可多要一次确认，也不能悄悄跳过确认把管理员封掉。
 func targetIsAdmin(ctx context.Context, client *bot.Client, chat tg.InputPeerClass, target tg.InputPeerClass) bool {
 	channel, ok := bot.InputChannel(chat)
 	if !ok {
@@ -158,7 +188,8 @@ func targetIsAdmin(ctx context.Context, client *bot.Client, chat tg.InputPeerCla
 	}
 	result, err := client.API().ChannelsGetParticipant(ctx, &tg.ChannelsGetParticipantRequest{Channel: channel, Participant: target})
 	if err != nil {
-		return false
+		_, flooded := bot.FloodWait(err)
+		return flooded
 	}
 	client.Peers().RememberUsers(result.Users)
 	switch result.Participant.(type) {
@@ -457,8 +488,10 @@ func abanBatch(ctx context.Context, inv *command.Invocation, service *abanServic
 		}
 		return err
 	}
-	if err := inv.EditText(ctx, "⏳ 正在读取管理群列表…"); err != nil {
-		return err
+	if !service.fresh() {
+		if err := inv.EditText(ctx, "⏳ 正在读取管理群列表（每天一次）…"); err != nil {
+			return err
+		}
 	}
 	groups, err := service.managedGroups(ctx, inv.Client, false)
 	if err != nil {
@@ -474,13 +507,16 @@ func abanBatch(ctx context.Context, inv *command.Invocation, service *abanServic
 		}
 	}
 	if !confirmed {
-		adminIn := 0
-		for _, group := range groups {
+		var adminIn atomic.Int32
+		eachGroup(ctx, groups, func(group managedGroup) {
 			if group.Channel && targetIsAdmin(ctx, inv.Client, group.input(), target) {
-				adminIn++
+				adminIn.Add(1)
 			}
+		})
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-		if adminIn > 0 {
+		if adminIn := int(adminIn.Load()); adminIn > 0 {
 			return inv.Edit(ctx, "⚠️ 目标在 "+strconv.Itoa(adminIn)+" 个管理群中具有管理员身份，请在命令后加上 "+command.Code("true")+" 确认执行")
 		}
 	}
@@ -501,24 +537,30 @@ func abanBatch(ctx context.Context, inv *command.Invocation, service *abanServic
 	}
 	success, failed, skipped := 0, 0, 0
 	reasons := map[string]int{}
-	for _, group := range groups {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
+	var tally sync.Mutex
+	eachGroup(ctx, groups, func(group managedGroup) {
 		if !group.Channel && !ban {
 			// 基本群没有什么可解封的：那里从来没有人被封禁过。
+			tally.Lock()
 			skipped++
-			continue
+			tally.Unlock()
+			return
 		}
+		// 连接层已经等过 60 秒以内的限流；这里再兜一次，照 MiBox 对单个群重试一次。
 		err := kit.RetryFlood(ctx, 1, func() error {
 			return applyRights(ctx, inv.Client, group.input(), target, rights, ban)
 		})
+		tally.Lock()
+		defer tally.Unlock()
 		if err == nil {
 			success++
-			continue
+			return
 		}
 		failed++
 		reasons[kit.RPCCode(err)]++
+	})
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	var detail []string
