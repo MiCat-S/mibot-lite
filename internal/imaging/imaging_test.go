@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"image"
 	"image/color"
+	"image/draw"
 	"image/png"
 	"testing"
 )
@@ -179,5 +180,34 @@ func TestWebPSize(t *testing.T) {
 	}
 	if _, _, err := WebPSize(bytes.Repeat([]byte{0}, 40)); err == nil {
 		t.Fatal("zeroed bytes should not parse as WebP")
+	}
+}
+
+// 旋转 90 度后宽高互换，画布正好装下；四个角外面是透明的。
+func TestRotateExpand(t *testing.T) {
+	source := image.NewRGBA(image.Rect(0, 0, 40, 10))
+	draw.Draw(source, source.Bounds(), image.NewUniform(color.RGBA{G: 255, A: 255}), image.Point{}, draw.Src)
+	turned := RotateExpand(source, 90)
+	if bounds := turned.Bounds(); bounds.Dx() < 10 || bounds.Dx() > 11 || bounds.Dy() < 40 || bounds.Dy() > 41 {
+		t.Fatalf("旋转 90 度后是 %v，应约为 10x40", bounds)
+	}
+	diagonal := RotateExpand(source, 45)
+	if _, _, _, alpha := diagonal.At(0, 0).RGBA(); alpha != 0 {
+		t.Errorf("45 度时左上角应该透明，alpha=%d", alpha)
+	}
+	if _, g, _, _ := diagonal.At(diagonal.Bounds().Dx()/2, diagonal.Bounds().Dy()/2).RGBA(); g>>8 < 250 {
+		t.Errorf("中心应该还是绿色，g=%d", g>>8)
+	}
+}
+
+func TestOpacity(t *testing.T) {
+	source := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	draw.Draw(source, source.Bounds(), image.NewUniform(color.RGBA{R: 200, A: 255}), image.Point{}, draw.Src)
+	half := Opacity(source, 0.5)
+	if r, _, _, a := half.At(1, 1).RGBA(); r>>8 != 100 || a>>8 != 128 {
+		t.Errorf("半透明后应为 r=100 a=128，实际 r=%d a=%d", r>>8, a>>8)
+	}
+	if source.Pix[0] != 200 {
+		t.Error("Opacity 改动了原图")
 	}
 }

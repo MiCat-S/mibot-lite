@@ -30,9 +30,11 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/commands/restart"
 	"github.com/MiCat-S/mibot-lite/internal/commands/save"
 	"github.com/MiCat-S/mibot-lite/internal/commands/speedtest"
+	"github.com/MiCat-S/mibot-lite/internal/commands/sticker"
 	"github.com/MiCat-S/mibot-lite/internal/commands/sudo"
 	"github.com/MiCat-S/mibot-lite/internal/commands/sum"
 	"github.com/MiCat-S/mibot-lite/internal/commands/tr"
+	"github.com/MiCat-S/mibot-lite/internal/commands/tts"
 	"github.com/MiCat-S/mibot-lite/internal/commands/update"
 	"github.com/MiCat-S/mibot-lite/internal/commands/whois"
 	"github.com/MiCat-S/mibot-lite/internal/commands/yvlu"
@@ -64,6 +66,8 @@ func RegisterAll(a *app.App) {
 	acn.Register(a)
 	yvlu.Register(a)
 	eatgif.Register(a)
+	sticker.Register(a)
+	tts.Register(a)
 	prefix.Register(a)
 	alias.Register(a)
 	sudo.Register(a)
@@ -80,6 +84,8 @@ var miboxFiles = map[string]string{
 	"assets/aban/aban_cache.json":               "aban.json",
 	"assets/autochangename/autochangename.json": "acn.json",
 	"assets/yvlu/config.json":                   "yvlu.json",
+	"assets/t/tts_data.json":                    "t.json",
+	"assets/sticker/config.json":                "sticker.json",
 }
 
 // ImportMiBox 从 MiBox 部署中复制插件数据文件。

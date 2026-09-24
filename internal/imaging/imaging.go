@@ -1,5 +1,5 @@
-// Package imaging 是两个命令要用到的那一点像素处理：.yvlu 缩放头像，
-// .eatgif 把头像透过蒙版贴到动画帧上。
+// Package imaging 是几个命令要用到的那一点像素处理：.yvlu 缩放头像，
+// .eatgif 和 .eat 把头像透过蒙版贴到底图上。
 //
 // 只用 Go 标准库，缩放器用 golang.org/x/image。MiBox 用的是 sharp，
 // 它绑定 libvips——一个共享库、一份图像缓存和一个线程池，在整个进程
@@ -21,6 +21,7 @@ import (
 	"math"
 
 	xdraw "golang.org/x/image/draw"
+	_ "golang.org/x/image/webp"
 )
 
 // MaxDimension 是本包解码或生成的所有图像的尺寸上限。
@@ -40,8 +41,8 @@ func DecodePNG(data []byte) (image.Image, error) {
 	return png.Decode(bytes.NewReader(data))
 }
 
-// Decode 读取 PNG 或 JPEG，按字节内容自动判断。Telegram 给的头像是
-// JPEG，动画素材是 PNG。
+// Decode 读取 PNG、JPEG 或 WebP，按字节内容自动判断。Telegram 给的头像是
+// JPEG，动画素材是 PNG，静态贴纸是 WebP。
 func Decode(data []byte) (image.Image, error) {
 	config, _, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
@@ -123,6 +124,33 @@ func Rotate(source image.Image, degrees float64) *image.RGBA {
 		sin, cos, centreY - sin*centreX - cos*centreY,
 	}
 	xdraw.CatmullRom.Transform(target, matrix, source, bounds, draw.Src, nil)
+	return target
+}
+
+// RotateExpand 把图像绕中心旋转 degrees 度，画布扩大到正好装下旋转后的图，
+// 空出来的角是透明的。和 sharp 的 rotate 一样；.eat 的印章要的是这个。
+func RotateExpand(source image.Image, degrees float64) *image.RGBA {
+	bounds := source.Bounds()
+	radians := degrees * math.Pi / 180
+	sin, cos := math.Abs(math.Sin(radians)), math.Abs(math.Cos(radians))
+	width := int(math.Ceil(float64(bounds.Dx())*cos + float64(bounds.Dy())*sin))
+	height := int(math.Ceil(float64(bounds.Dx())*sin + float64(bounds.Dy())*cos))
+	padded := image.NewRGBA(image.Rect(0, 0, max(width, 1), max(height, 1)))
+	offset := image.Pt((padded.Bounds().Dx()-bounds.Dx())/2, (padded.Bounds().Dy()-bounds.Dy())/2)
+	draw.Draw(padded, bounds.Sub(bounds.Min).Add(offset), source, bounds.Min, draw.Src)
+	return Rotate(padded, degrees)
+}
+
+// Opacity 把整张图的不透明度乘以 factor（0 到 1）。像素是预乘的，
+// 所以四个通道一起乘。
+func Opacity(source image.Image, factor float64) *image.RGBA {
+	bounds := source.Bounds()
+	target := image.NewRGBA(image.Rect(0, 0, bounds.Dx(), bounds.Dy()))
+	draw.Draw(target, target.Bounds(), source, bounds.Min, draw.Src)
+	factor = math.Min(math.Max(factor, 0), 1)
+	for index := range target.Pix {
+		target.Pix[index] = uint8(math.Round(float64(target.Pix[index]) * factor))
+	}
 	return target
 }
 

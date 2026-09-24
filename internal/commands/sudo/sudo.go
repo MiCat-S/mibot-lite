@@ -45,6 +45,8 @@ var delegable = map[string][]string{
 	"st":        {"set", "clear", "auto", "自动"},
 	"yvlu":      {"config"},
 	"eatgif":    {"clear"},
+	"eat":       {"set"},
+	"eat2":      {"set"},
 	"ai":        {"config", "model", "reasoning", "service", "prompt", "collapse", "timeout", "telegraph"},
 	"sum":       {"config", "list", "run", "del", "disable", "enable", "add"},
 	"ban":       nil, "unban": nil, "kick": nil, "mute": nil, "unmute": nil,

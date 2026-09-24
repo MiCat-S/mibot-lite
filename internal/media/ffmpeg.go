@@ -1,5 +1,6 @@
-// Package media 调用外部的 ffmpeg，完成唯一一件用纯 Go 做代价过高的
-// 事：VP9 编码，Telegram 视频贴纸必须是这个格式。
+// Package media 调用外部的 ffmpeg，完成用纯 Go 做代价过高的编码：
+// Telegram 视频贴纸要的 VP9，静态贴纸要的 WebP（Go 只有 WebP 解码器），
+// 以及语音消息要的 Opus。
 //
 // ffmpeg 是子进程，空闲时没有任何开销；把编码器链接进常驻的程序则
 // 正好相反。
@@ -12,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -111,6 +113,106 @@ func ToStickerWebM(ctx context.Context, directory string, input []byte, extensio
 		return nil, err
 	}
 	return readBounded(filepath.Join(directory, "converted.webm"), 20<<20)
+}
+
+// StickerWebP 把一张 PNG 编码成静态贴纸用的 WebP。
+func StickerWebP(ctx context.Context, directory string, png []byte) ([]byte, error) {
+	binary, err := FFmpeg()
+	if err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(filepath.Join(directory, "sticker.png"), png, 0o600); err != nil {
+		return nil, err
+	}
+	args := []string{"-nostdin", "-v", "error", "-i", "sticker.png", "-frames:v", "1",
+		"-c:v", "libwebp", "-lossless", "0", "-quality", "95", "-y", "sticker.webp"}
+	if err := run(ctx, binary, directory, args); err != nil {
+		return nil, err
+	}
+	return readBounded(filepath.Join(directory, "sticker.webp"), 5<<20)
+}
+
+// VoiceOgg 把一段音频转成 Telegram 语音消息要的 Ogg Opus。
+func VoiceOgg(ctx context.Context, directory string, audio []byte) ([]byte, error) {
+	binary, err := FFmpeg()
+	if err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(filepath.Join(directory, "speech.mp3"), audio, 0o600); err != nil {
+		return nil, err
+	}
+	args := []string{"-nostdin", "-v", "error", "-i", "speech.mp3", "-vn",
+		"-c:a", "libopus", "-b:a", "64k", "-vbr", "on", "-y", "voice.ogg"}
+	if err := run(ctx, binary, directory, args); err != nil {
+		return nil, err
+	}
+	return readBounded(filepath.Join(directory, "voice.ogg"), 20<<20)
+}
+
+// Tags 是写进 MP3 的 ID3 信息。
+type Tags struct {
+	Title, Artist, Album string
+	// Cover 是封面图片（JPEG 或 PNG），为空时不加封面。
+	Cover []byte
+}
+
+// TaggedMP3 给一段 MP3 重新编码并写上标题、歌手、专辑和封面，
+// 播放器里显示成一首歌。
+func TaggedMP3(ctx context.Context, directory string, audio []byte, tags Tags) ([]byte, error) {
+	binary, err := FFmpeg()
+	if err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(filepath.Join(directory, "speech.mp3"), audio, 0o600); err != nil {
+		return nil, err
+	}
+	args := []string{"-nostdin", "-v", "error", "-i", "speech.mp3"}
+	if len(tags.Cover) > 0 {
+		if err := os.WriteFile(filepath.Join(directory, "cover.img"), tags.Cover, 0o600); err != nil {
+			return nil, err
+		}
+		args = append(args, "-i", "cover.img", "-map", "0:a", "-map", "1:v",
+			"-c:v", "mjpeg", "-disposition:v", "attached_pic",
+			"-metadata:s:v", "title=Album cover", "-metadata:s:v", "comment=Cover (front)")
+	} else {
+		args = append(args, "-map", "0:a")
+	}
+	args = append(args, "-c:a", "libmp3lame", "-q:a", "2", "-id3v2_version", "3",
+		"-metadata", "title="+tags.Title, "-metadata", "artist="+tags.Artist, "-metadata", "album="+tags.Album,
+		"-y", "song.mp3")
+	if err := run(ctx, binary, directory, args); err != nil {
+		return nil, err
+	}
+	return readBounded(filepath.Join(directory, "song.mp3"), 30<<20)
+}
+
+// durationLine 是 ffmpeg 读输入时打印的时长，如 "Duration: 00:00:03.52"。
+var durationLine = regexp.MustCompile(`Duration: (\d+):(\d{2}):(\d{2})\.(\d+)`)
+
+// Duration 读出目录里一个音频文件的时长（向上取整到秒），读不出来返回 0。
+// 只给 ffmpeg 输入不给输出时，它打印完文件信息就以错误退出，时长就在那段信息里。
+func Duration(ctx context.Context, directory, name string) int {
+	binary, err := FFmpeg()
+	if err != nil {
+		return 0
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, binary, "-nostdin", "-hide_banner", "-i", name)
+	command.Dir = directory
+	output, _ := command.CombinedOutput()
+	match := durationLine.FindStringSubmatch(string(output))
+	if match == nil {
+		return 0
+	}
+	hours, _ := strconv.Atoi(match[1])
+	minutes, _ := strconv.Atoi(match[2])
+	seconds, _ := strconv.Atoi(match[3])
+	total := hours*3600 + minutes*60 + seconds
+	if strings.Trim(match[4], "0") != "" {
+		total++
+	}
+	return total
 }
 
 // encodeTimeout 是单次运行 ffmpeg 的时限。

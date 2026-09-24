@@ -1,4 +1,5 @@
-// Package eatgif 实现 .eatgif：把双方头像合成动画贴纸。
+// Package eatgif 实现 .eatgif 和 .eat / .eat2：把头像合成表情贴纸，前者是动图，
+// 后者是静态图。两者的素材都来自 TeleBox 插件仓库，头像的摆放规则也一样。
 package eatgif
 
 import (
@@ -85,12 +86,18 @@ func (s *eatgifService) asset(ctx context.Context, relative string, limit int64)
 	if err != nil {
 		return nil, err
 	}
-	digest := sha256.Sum256([]byte(clean))
-	cache := filepath.Join(s.a.DataDir(), "eatgif", hex.EncodeToString(digest[:])+filepath.Ext(clean))
+	return fetchCached(ctx, s.a, "eatgif", clean, eatgifRoot+clean, limit)
+}
+
+// fetchCached 下载 url，缓存在 data/<directory>/ 下，文件名由 key 的哈希加上
+// key 的扩展名构成；磁盘上已有就直接用。
+func fetchCached(ctx context.Context, a *app.App, directory, key, url string, limit int64) ([]byte, error) {
+	digest := sha256.Sum256([]byte(key))
+	cache := filepath.Join(a.DataDir(), directory, hex.EncodeToString(digest[:])+filepath.Ext(key))
 	if data, err := os.ReadFile(cache); err == nil && len(data) > 0 && int64(len(data)) <= limit {
 		return data, nil
 	}
-	response, err := httpx.Do(ctx, httpx.Request{URL: eatgifRoot + clean, Timeout: 30 * time.Second, MaxBytes: limit})
+	response, err := httpx.Do(ctx, httpx.Request{URL: url, Timeout: 30 * time.Second, MaxBytes: limit})
 	if err != nil {
 		return nil, err
 	}
@@ -142,6 +149,11 @@ func (s *eatgifService) paste(ctx context.Context, canvas *image.RGBA, role *eat
 	if err != nil {
 		return err
 	}
+	return pasteWithMask(canvas, role, face, maskData)
+}
+
+// pasteWithMask 把头像缩放到遮罩大小，按需旋转、调亮度，套上遮罩后贴到 (X, Y)。
+func pasteWithMask(canvas *image.RGBA, role *eatgifRole, face image.Image, maskData []byte) error {
 	mask, err := imaging.DecodePNG(maskData)
 	if err != nil {
 		return err
@@ -177,8 +189,9 @@ func eatgifHelp(prefix string) string {
 		"eatgif list</code> 列出全部可用动画\n• <code>" + p + "eatgif clear</code> 清空素材缓存\n\n素材首次使用时从远程下载并缓存，需要主机装有 ffmpeg。"
 }
 
-// Register 注册 .eatgif。
+// Register 注册 .eatgif、.eat 和 .eat2。
 func Register(a *app.App) {
+	registerEat(a)
 	service := &eatgifService{a: a}
 	a.Registry.Register(&command.Command{Name: "eatgif", Description: "将双方头像合成为动画贴纸", Usage: "名称", Help: eatgifHelp, Timeout: 5 * time.Minute,
 		Handle: func(ctx context.Context, inv *command.Invocation) error {
@@ -327,10 +340,9 @@ type avatarPair struct{ me, you image.Image }
 //
 // 「对方」是被回复消息的发送者，用户、频道、群都可以：以频道身份发言、
 // 频道推到讨论组的消息、匿名管理员，发送者都不是用户，以前一律被拒。
-// 「自己」是发命令那条消息的发送者：戴着皮套（以频道身份）发命令时用那个频道的
-// 头像，这和 MiBox 一致；其余情况用账号本人的头像。
+// 「自己」见 ownFace。
 func (s *eatgifService) faces(ctx context.Context, inv *command.Invocation, reply *bot.Message) (*avatarPair, error) {
-	me, err := loadFace(ctx, inv.Client, speakerOf(inv.Client, inv.Message), "你")
+	me, err := loadFace(ctx, inv.Client, ownFace(inv), "你")
 	if err != nil {
 		return nil, err
 	}
@@ -346,6 +358,17 @@ func (s *eatgifService) faces(ctx context.Context, inv *command.Invocation, repl
 		return nil, err
 	}
 	return &avatarPair{me: me, you: you}, nil
+}
+
+// ownFace 是「自己」那张头像该用谁的：别人借用账号（.sudo、.sure）时用借用者的，
+// 和 MiBox 一样；否则是发命令的身份。
+func ownFace(inv *command.Invocation) tg.InputPeerClass {
+	if inv.Trigger != nil && inv.Trigger.Sender != nil {
+		if peer, err := inv.Client.InputPeer(inv.Trigger.Sender); err == nil {
+			return peer
+		}
+	}
+	return speakerOf(inv.Client, inv.Message)
 }
 
 // speakerOf 是一条自己发的消息以谁的身份发出：以频道身份发言时是那个频道，否则是本人。

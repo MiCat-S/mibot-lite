@@ -52,7 +52,7 @@ Go 函数。代价是装新命令要重新编译；换来的是一个更小的�
 .calc .rate .whois .tr .speedtest .ip .bin .ids .dc .save
 .ai .gt .sum .re .dme .da
 .ban .unban .kick .mute .unmute .sb .unsb .refresh .aban
-.acn .autochangename .yvlu .eatgif
+.acn .autochangename .yvlu .eatgif .eat .eat2 .sticker .t .ts .tk
 .sudo .sure
 ```
 
@@ -67,10 +67,10 @@ Go 函数。代价是装新命令要重新编译；换来的是一个更小的�
 
 和 MiBox 不同的是**能借出去的范围是白名单**。MiBox 让名单里的人执行任何命令，
 包括 `.sudo add` 本身，被授权的人可以再去授权别人。这里只有查询类命令
-（`.ping` `.rate` `.calc` `.whois` `.ip` 等）、`.ai` `.sum` `.gt` `.tr` `.yvlu` `.eatgif` `.re`
+（`.ping` `.rate` `.calc` `.whois` `.ip` 等）、`.ai` `.sum` `.gt` `.tr` `.yvlu` `.eatgif` `.eat` `.re`
 和单群的 `.ban` `.kick` `.mute` 这一类能借；改设置的子命令（`.ai config` 之类）、
 授权管理、删消息、改昵称或前缀别名、备份与日志、`.save`、重启更新、跨所有群的
-`.sb`、`.sysinfo` 都只限本人。判断按别名展开之后的真实命令来，起个别名绕不过去；
+`.sb`、`.sysinfo`、往你的贴纸包里存东西的 `.sticker`、按字数计费的 `.t` 都只限本人。判断按别名展开之后的真实命令来，起个别名绕不过去；
 以后新加的命令默认也不能借。名单里的人发了不能借的命令，账号只回一句没有权限。
 
 名单存在 `data/sudo.json` 和 `data/sure.json`，`.bf` 备份时会一起带上。
@@ -119,7 +119,8 @@ MIBOT_EATGIF_ASSETS=/path/to/eatgif go test ./internal/imaging/ -run RealAnimati
 - Telegram 封装：`internal/bot`
 - 命令注册与分发：`internal/command`
 - 命令实现：`internal/commands/<命令>/`，每个子目录一个命令，或共用一套数据的一组命令
-  （如 `aban` 是全部封禁命令，`ids` 含 `.dc`，`sudo` 含 `.sure`）
+  （如 `aban` 是全部封禁命令，`ids` 含 `.dc`，`sudo` 含 `.sure`，`eatgif` 含 `.eat`，
+  `.t` 在 `tts`）
 - 命令共用的小工具：`internal/commands/kit`
 
 新增一条命令：建一个 `internal/commands/xxx/` 目录，写一个 `Register(a *app.App)`，
