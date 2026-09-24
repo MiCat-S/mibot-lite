@@ -266,29 +266,56 @@ func documentThumb(ctx context.Context, client *bot.Client, document *tg.Documen
 	return decoded, nil
 }
 
-func eatList(catalog map[string]eatEntry, prefix, name string) string {
-	names := make([]string, 0, len(catalog))
-	for name := range catalog {
-		names = append(names, name)
+// eatCatalogLines 按名称排序列出每一款：名称、中文名，用到自己头像的标出来。
+func eatCatalogLines(catalog map[string]eatEntry) []string {
+	keys := make([]string, 0, len(catalog))
+	for key := range catalog {
+		keys = append(keys, key)
 	}
-	sort.Strings(names)
-	lines := []string{"<b>头像表情包</b>（" + strconv.Itoa(len(names)) + " 款）",
-		"回复一条消息发 " + command.Code(prefix+name+" 名称") + "，不写名称随机挑一款", ""}
-	for _, name := range names {
-		lines = append(lines, "• "+command.Code(name)+" - "+command.Escape(catalog[name].Name))
+	sort.Strings(keys)
+	lines := make([]string, 0, len(keys))
+	for _, key := range keys {
+		entry := catalog[key]
+		line := "• " + command.Code(key) + " " + command.Escape(entry.Name)
+		switch {
+		case entry.Me != nil && entry.You != nil:
+			line += " 👥"
+		case entry.Me != nil:
+			line += " 🙋"
+		}
+		lines = append(lines, line)
 	}
-	return strings.Join(lines, "\n")
+	return lines
 }
 
-func eatHelp(prefix string) string {
+// eatLegend 解释列表里的标记。
+const eatLegend = "👥 同时用对方和你的头像　🙋 只用你的头像　其余只用对方的"
+
+func eatList(catalog map[string]eatEntry, prefix, name string) string {
+	lines := []string{"<b>头像表情包</b>（" + strconv.Itoa(len(catalog)) + " 款）",
+		"回复一条消息发 " + command.Code(prefix+name+" 名称") + "，不写名称随机挑一款", eatLegend, ""}
+	return strings.Join(append(lines, eatCatalogLines(catalog)...), "\n")
+}
+
+// help 是 .eat 的帮助：用法，加上当前素材目录里的全部款式。目录读不到时只给用法。
+func (s *eatService) help(prefix string) string {
 	p := command.Escape(prefix)
-	return "😋 <b>头像表情包</b>\n\n把头像合成到表情图里，发成贴纸。\n\n" +
-		"• 回复一条消息发 <code>" + p + "eat 名称</code> 用对方的头像生成，不写名称随机挑一款\n" +
+	text := "😋 <b>头像表情包</b>\n\n把头像合成到表情图里，发成贴纸。\n\n" +
+		"<b>用法</b>\n" +
+		"• 回复一条消息发 <code>" + p + "eat 名称</code>，用对方的头像生成，比如 <code>" + p + "eat bc</code>；不写名称随机挑一款\n" +
 		"• <code>" + p + "eat2 名称</code> 同上，但用被回复的图片或贴纸代替头像\n" +
-		"• 不回复消息发 <code>" + p + "eat</code> 列出全部款式\n" +
+		"• 不回复消息发 <code>" + p + "eat</code> 也能看到下面这份列表\n" +
 		"• <code>" + p + "eat set</code> 重新下载素材目录；<code>" + p + "eat set 链接</code> 换成别的目录" +
-		"（要是 raw.githubusercontent.com 上的 config.json），<code>" + p + "eat set default</code> 换回默认\n\n" +
-		"有的款式会同时用到你的头像。素材来自 TeleBox 插件仓库，首次使用时下载并缓存，需要主机装有 ffmpeg。"
+		"（要是 raw.githubusercontent.com 上的 config.json），<code>" + p + "eat set default</code> 换回默认\n\n"
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	catalog, _, err := s.load(ctx, false)
+	if err != nil {
+		return text + "素材目录暂时读不到（" + command.Escape(httpx.Reason(err)) + "），稍后发 <code>" + p + "eat</code> 查看全部款式。"
+	}
+	lines := []string{"<b>全部款式</b>（" + strconv.Itoa(len(catalog)) + " 款）", eatLegend}
+	lines = append(lines, eatCatalogLines(catalog)...)
+	return text + strings.Join(lines, "\n") + "\n\n素材来自 TeleBox 插件仓库，首次使用时下载并缓存，需要主机装有 ffmpeg。"
 }
 
 // stickerOptions 是把一张 WebP 当贴纸发出去的参数：不属于任何贴纸包，alt 用款式名。
@@ -309,7 +336,7 @@ func registerEat(a *app.App) {
 		return func(ctx context.Context, inv *command.Invocation) error {
 			sub := inv.Arg(0)
 			if strings.EqualFold(sub, "help") || strings.EqualFold(sub, "h") {
-				return inv.Edit(ctx, eatHelp(inv.Prefix))
+				return kit.SendPages(ctx, inv, command.HTMLPages(service.help(inv.Prefix), 3800))
 			}
 			if strings.EqualFold(sub, "set") && inv.Message.ReplyToID == 0 {
 				return service.set(ctx, inv, name, inv.Arg(1))
@@ -359,8 +386,8 @@ func registerEat(a *app.App) {
 		}
 	}
 	a.Registry.Register(
-		&command.Command{Name: "eat", Description: "用头像生成表情包", Usage: "[名称]", Help: eatHelp, Timeout: 2 * time.Minute, Handle: handle(false)},
-		&command.Command{Name: "eat2", Description: "用图片生成表情包", Usage: "[名称]", Help: eatHelp, Timeout: 2 * time.Minute, Handle: handle(true)},
+		&command.Command{Name: "eat", Description: "用头像生成表情包", Usage: "[名称]", Help: service.help, Timeout: 2 * time.Minute, Handle: handle(false)},
+		&command.Command{Name: "eat2", Description: "用图片生成表情包", Usage: "[名称]", Help: service.help, Timeout: 2 * time.Minute, Handle: handle(true)},
 	)
 }
 

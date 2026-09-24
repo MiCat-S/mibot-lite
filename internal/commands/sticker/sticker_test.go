@@ -19,6 +19,8 @@ import (
 
 // packs 是一个只懂三个贴纸接口的假 Telegram：包名 → 已有张数，capacity 张就满。
 type packs struct {
+	// fullCode 是包满时回的错误码，默认 STICKERS_TOO_MUCH。
+	fullCode string
 	count    map[string]int
 	capacity int
 	notMine  map[string]bool
@@ -49,6 +51,9 @@ func (p *packs) Invoke(_ context.Context, input bin.Encoder, output bin.Decoder)
 			return tgerr.New(400, "STICKERSET_INVALID")
 		}
 		if p.count[name] >= p.capacity {
+			if p.fullCode != "" {
+				return tgerr.New(400, p.fullCode)
+			}
 			return tgerr.New(400, "STICKERS_TOO_MUCH")
 		}
 		p.count[name]++
@@ -120,6 +125,15 @@ func TestSaveFindsOrCreatesAPack(t *testing.T) {
 		if !slices.Equal(fake.calls, c.calls) {
 			t.Errorf("%s：请求\n  %s\n应为\n  %s", c.name, strings.Join(fake.calls, "\n  "), strings.Join(c.calls, "\n  "))
 		}
+	}
+}
+
+// 文档里另一个表示「满了」的错误码也要能换到下一个包。
+func TestSaveSkipsFullPackWithEitherCode(t *testing.T) {
+	fake := &packs{fullCode: "STICKERPACK_STICKERS_TOO_MUCH", capacity: 3, count: map[string]int{"cat_static_1": 3}}
+	pack, created, err := save(context.Background(), client(fake, "cat"), "", staticSticker())
+	if err != nil || pack != "cat_static_2" || !created {
+		t.Errorf("得到 %q created=%v err=%v，应新建 cat_static_2", pack, created, err)
 	}
 }
 

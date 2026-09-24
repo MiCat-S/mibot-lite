@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -183,17 +184,35 @@ func clampFloat(value, low, high float64) float64 {
 	return value
 }
 
-func eatgifHelp(prefix string) string {
+// help 是 .eatgif 的帮助：用法，加上当前可用的全部动画。目录读不到时只给用法。
+func (s *eatgifService) help(prefix string) string {
 	p := command.Escape(prefix)
-	return "🎬 <b>头像动图表情</b>\n\n回复一条消息（用户或频道发的都可以），把双方头像合成为动画贴纸。\n\n• <code>" + p + "eatgif 名称</code> 生成\n• <code>" + p +
-		"eatgif list</code> 列出全部可用动画\n• <code>" + p + "eatgif clear</code> 清空素材缓存\n\n素材首次使用时从远程下载并缓存，需要主机装有 ffmpeg。"
+	text := "🎬 <b>头像动图表情</b>\n\n回复一条消息（用户或频道发的都可以），把双方头像合成为动画贴纸。\n\n" +
+		"• 回复一条消息发 <code>" + p + "eatgif 名称</code> 生成\n• <code>" + p +
+		"eatgif list</code> 列出全部可用动画\n• <code>" + p + "eatgif clear</code> 清空素材缓存\n\n"
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	catalog, err := s.getCatalog(ctx)
+	if err != nil {
+		return text + "动画列表暂时读不到（" + command.Escape(httpx.Reason(err)) + "），稍后发 <code>" + p + "eatgif list</code> 查看。"
+	}
+	names := make([]string, 0, len(catalog))
+	for name := range catalog {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	lines := []string{"<b>全部动画</b>（" + strconv.Itoa(len(names)) + " 款）"}
+	for _, name := range names {
+		lines = append(lines, "• "+command.Code(name)+" "+command.Escape(catalog[name].Desc))
+	}
+	return text + strings.Join(lines, "\n") + "\n\n素材首次使用时从远程下载并缓存，需要主机装有 ffmpeg。"
 }
 
 // Register 注册 .eatgif、.eat 和 .eat2。
 func Register(a *app.App) {
 	registerEat(a)
 	service := &eatgifService{a: a}
-	a.Registry.Register(&command.Command{Name: "eatgif", Description: "将双方头像合成为动画贴纸", Usage: "名称", Help: eatgifHelp, Timeout: 5 * time.Minute,
+	a.Registry.Register(&command.Command{Name: "eatgif", Description: "将双方头像合成为动画贴纸", Usage: "名称", Help: service.help, Timeout: 5 * time.Minute,
 		Handle: func(ctx context.Context, inv *command.Invocation) error {
 			sub := strings.ToLower(inv.Arg(0))
 			if sub == "clear" {

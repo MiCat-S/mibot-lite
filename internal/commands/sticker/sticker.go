@@ -121,14 +121,15 @@ func ownUsername(self *tg.User) string {
 // friendly 把贴纸相关的接口错误翻成看得懂的话。
 func friendly(err error) error {
 	for code, text := range map[string]string{
-		"STICKERS_TOO_MUCH":        "贴纸包已满",
-		"STICKER_VIDEO_LONG":       "视频贴纸不能超过 3 秒",
-		"STICKER_PNG_DIMENSIONS":   "静态贴纸要有一边正好 512 像素",
-		"STICKERSET_INVALID":       "贴纸包名无效、已被别人占用，或者不是你建的",
-		"SHORTNAME_OCCUPY_FAILED":  "贴纸包名已被占用",
-		"STICKER_EMOJI_INVALID":    "这张贴纸的 emoji 无效",
-		"PACK_SHORT_NAME_INVALID":  "贴纸包名无效（字母开头，只能有字母、数字和下划线）",
-		"PACK_SHORT_NAME_OCCUPIED": "贴纸包名已被占用",
+		"STICKERS_TOO_MUCH":             "贴纸包已满",
+		"STICKERPACK_STICKERS_TOO_MUCH": "贴纸包已满",
+		"STICKER_VIDEO_LONG":            "视频贴纸不能超过 3 秒",
+		"STICKER_PNG_DIMENSIONS":        "静态贴纸要有一边正好 512 像素",
+		"STICKERSET_INVALID":            "贴纸包名无效、已被别人占用，或者不是你建的",
+		"SHORTNAME_OCCUPY_FAILED":       "贴纸包名已被占用",
+		"STICKER_EMOJI_INVALID":         "这张贴纸的 emoji 无效",
+		"PACK_SHORT_NAME_INVALID":       "贴纸包名无效（字母开头，只能有字母、数字和下划线）",
+		"PACK_SHORT_NAME_OCCUPIED":      "贴纸包名已被占用",
 	} {
 		if tgerr.Is(err, code) {
 			return kit.Fail(text)
@@ -140,8 +141,13 @@ func friendly(err error) error {
 	return err
 }
 
+// full 判断错误是不是「包满了」。Telegram 文档里这两个码都用来表示满。
+func full(err error) bool {
+	return tgerr.Is(err, "STICKERS_TOO_MUCH") || tgerr.Is(err, "STICKERPACK_STICKERS_TOO_MUCH")
+}
+
 // exists 查一个贴纸包在不在。包满没满不在这里查：上限以 Telegram 为准，
-// 加贴纸时它会回 STICKERS_TOO_MUCH。
+// 加贴纸时它会回满了的错误，见 full。
 func exists(ctx context.Context, api *tg.Client, name string) (bool, error) {
 	_, err := api.MessagesGetStickerSet(ctx, &tg.MessagesGetStickerSetRequest{Stickerset: &tg.InputStickerSetShortName{ShortName: name}})
 	if err == nil {
@@ -189,7 +195,7 @@ func save(ctx context.Context, client *bot.Client, target string, sticker *found
 	for index := 1; index <= autoPacks; index++ {
 		name := username + sticker.kind.suffix + "_" + strconv.Itoa(index)
 		created, err := add(ctx, api, name, title, sticker)
-		if tgerr.Is(err, "STICKERS_TOO_MUCH") {
+		if full(err) {
 			continue
 		}
 		return name, created, friendly(err)
