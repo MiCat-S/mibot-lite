@@ -59,29 +59,100 @@ func dcLabel(dc int) string {
 	return fmt.Sprintf("DC%d", dc)
 }
 
-// resolveEntity 确定要查的对象：有参数就用参数，否则用被回复消息的
-// 发送者，再没有就用 fallback。
-func resolveEntity(ctx context.Context, inv *command.Invocation, fallback tg.InputPeerClass) (tg.InputPeerClass, error) {
+// target 是要查的对象。peer 为空而 userID 不为 0 时，账号没见过这个用户，
+// 只知道 ID，查不了资料。reply 是对象取自被回复消息时的那条消息。
+type target struct {
+	peer   tg.InputPeerClass
+	userID int64
+	reply  *bot.Message
+}
+
+// unknownPeer 是账号没见过要查的对象时给出的说明。
+const unknownPeer = "没见过这个 ID，账号需要先在某个对话里遇到过对方；用 @用户名 或回复对方的消息更可靠"
+
+// resolveEntity 确定要查的对象：有参数就用参数（命令里点名提及了谁就是谁），
+// 否则用被回复消息的发送者，再没有就用 fallback。
+func resolveEntity(ctx context.Context, inv *command.Invocation, fallback tg.InputPeerClass) (target, error) {
 	if argument := strings.TrimSpace(inv.Arg(0)); argument != "" {
-		peer, err := inv.Client.ResolveTarget(ctx, argument)
-		if err != nil {
-			if errors.Is(err, bot.ErrUnaddressablePeer) {
-				return nil, errors.New("没见过这个 ID，账号需要先在某个对话里遇到过对方；用 @用户名 或回复对方的消息更可靠")
-			}
-			return nil, fmt.Errorf("找不到 %s", argument)
-		}
-		return peer, nil
+		return resolveArgument(ctx, inv, argument)
 	}
 	if inv.Message.ReplyToID != 0 {
 		reply, err := inv.Client.GetReply(ctx, inv.Message)
 		if err != nil || reply == nil {
-			return nil, errors.New("读不到被回复的消息")
+			return target{}, errors.New("读不到被回复的消息")
 		}
 		if reply.Sender != nil {
-			return inv.Client.InputPeer(reply.Sender)
+			return addressed(inv.Client, reply.Sender, reply)
 		}
 	}
-	return fallback, nil
+	return target{peer: fallback}, nil
+}
+
+// resolveArgument 解析参数。点名提及（没有用户名的人显示成可点的名字）带着用户 ID，
+// 优先用它；其余按 @用户名、带标记的 ID 解析。
+func resolveArgument(ctx context.Context, inv *command.Invocation, argument string) (target, error) {
+	if id, ok := mentionedUser(inv.Message); ok {
+		return addressed(inv.Client, &tg.PeerUser{UserID: id}, nil)
+	}
+	peer, err := inv.Client.ResolveTarget(ctx, argument)
+	if err == nil {
+		return target{peer: peer}, nil
+	}
+	if !errors.Is(err, bot.ErrUnaddressablePeer) {
+		return target{}, fmt.Errorf("找不到 %s", argument)
+	}
+	if id, parseErr := strconv.ParseInt(argument, 10, 64); parseErr == nil && id > 0 {
+		return target{userID: id}, nil
+	}
+	return target{}, errors.New(unknownPeer)
+}
+
+// mentionedUser 找出命令消息里第一个点名提及的用户。
+func mentionedUser(message *bot.Message) (int64, bool) {
+	if message.Raw == nil {
+		return 0, false
+	}
+	for _, entity := range message.Raw.Entities {
+		if mention, ok := entity.(*tg.MessageEntityMentionName); ok {
+			return mention.UserID, true
+		}
+	}
+	return 0, false
+}
+
+// addressed 把 peer 变成要查的对象。账号没见过的用户只留下 ID；没见过的对话查不了。
+func addressed(client *bot.Client, peer tg.PeerClass, reply *bot.Message) (target, error) {
+	input, err := client.InputPeer(peer)
+	if err == nil {
+		return target{peer: input, reply: reply}, nil
+	}
+	if user, ok := peer.(*tg.PeerUser); ok {
+		return target{userID: user.UserID, reply: reply}, nil
+	}
+	return target{reply: reply}, errors.New(unknownPeer)
+}
+
+// lookupDC 查出 .dc 要看的对象。被回复的人查不到时（账号没见过对方、对方是
+// 查不了资料的频道身份等），和 MiBox 一样改看被回复消息所在的对话。
+func lookupDC(ctx context.Context, inv *command.Invocation, fallback tg.InputPeerClass) (*entityInfo, error) {
+	found, err := resolveEntity(ctx, inv, fallback)
+	if err == nil && found.peer == nil {
+		err = errors.New(unknownPeer)
+	}
+	var info *entityInfo
+	if err == nil {
+		if info, err = fetchEntity(ctx, inv.Client, found.peer); err != nil {
+			err = errors.New("查询失败：" + command.Brief(err))
+		}
+	}
+	if err != nil && found.reply != nil {
+		if chat, chatErr := inv.Client.InputPeer(found.reply.Peer); chatErr == nil {
+			if fallbackInfo, fetchErr := fetchEntity(ctx, inv.Client, chat); fetchErr == nil {
+				return fallbackInfo, nil
+			}
+		}
+	}
+	return info, err
 }
 
 // entityInfo 是 .ids 和 .dc 需要的某个对象的信息。
@@ -95,6 +166,8 @@ type entityInfo struct {
 	common   int
 	members  int
 	flags    []string
+	// unknown 为真时账号没见过这个用户，只知道 ID：DC 和共同群组都查不到。
+	unknown bool
 }
 
 func fetchEntity(ctx context.Context, client *bot.Client, peer tg.InputPeerClass) (*entityInfo, error) {
@@ -249,9 +322,13 @@ func renderIDs(info *entityInfo, joined time.Time, now time.Time) string {
 		if !joined.IsZero() {
 			lines = append(lines, "• 入群时间："+command.Code(joined.Format("2006-01-02 15:04")))
 		}
-		lines = append(lines,
-			"• DC："+command.Escape(dcLabel(info.dc)),
-			"• 共同群组："+command.Code(strconv.Itoa(info.common))+" 个")
+		if info.unknown {
+			lines = append(lines, "• DC：未知", "", "<i>账号没见过这个用户，只能给出按 ID 推算的信息</i>")
+		} else {
+			lines = append(lines,
+				"• DC："+command.Escape(dcLabel(info.dc)),
+				"• 共同群组："+command.Code(strconv.Itoa(info.common))+" 个")
+		}
 	} else {
 		kind := map[string]string{"channel": "频道", "supergroup": "超级群", "group": "普通群"}[info.kind]
 		fullID := idText
@@ -295,7 +372,7 @@ func renderIDs(info *entityInfo, joined time.Time, now time.Time) string {
 func idsHelp(prefix string) string {
 	p := command.Escape(prefix)
 	return "🆔 <b>用户信息</b>\n\n" +
-		"• <code>" + p + "ids</code> 自己\n• <code>" + p + "ids @用户名</code> 或 <code>" + p + "ids 用户ID</code>\n" +
+		"• <code>" + p + "ids</code> 自己\n• <code>" + p + "ids @用户名</code> 或 <code>" + p + "ids 用户ID</code>，也可以在命令后提及对方\n" +
 		"• 回复某人的消息发 <code>" + p + "ids</code>\n\n" +
 		"显示 ID、用户名、估算的注册时间、所在 DC、共同群组数、简介和跳转链接；在超级群里还会显示入群时间。频道和群也能查。\n\n" +
 		"注册时间是按 ID 估算的，Telegram 不公开真实时间。"
@@ -305,8 +382,8 @@ func dcHelp(prefix string) string {
 	p := command.Escape(prefix)
 	return "📍 <b>所在数据中心</b>\n\n" +
 		"• <code>" + p + "dc</code> 当前对话（私聊里是对方）\n• 回复某人的消息发 <code>" + p + "dc</code>\n" +
-		"• <code>" + p + "dc @用户名</code>\n\n" +
-		"DC 读自头像存放的位置，没有公开头像的账号看不出来。"
+		"• <code>" + p + "dc @用户名</code>，也可以在命令后提及对方\n\n" +
+		"DC 读自头像存放的位置，没有公开头像的账号看不出来。被回复的人查不到时，改看那条消息所在的对话。"
 }
 
 // Register 注册 .ids 和 .dc。
@@ -315,17 +392,22 @@ func Register(a *app.App) {
 		if strings.EqualFold(inv.Arg(0), "help") || strings.EqualFold(inv.Arg(0), "h") {
 			return inv.Edit(ctx, idsHelp(inv.Prefix))
 		}
-		peer, err := resolveEntity(ctx, inv, &tg.InputPeerSelf{})
+		found, err := resolveEntity(ctx, inv, &tg.InputPeerSelf{})
 		if err != nil {
 			return inv.EditText(ctx, "❌ "+err.Error())
 		}
-		info, err := fetchEntity(ctx, inv.Client, peer)
+		if found.peer == nil {
+			// 账号没见过这个用户：和 MiBox 一样照样给出 ID、按 ID 估算的注册时间和跳转链接。
+			unknown := &entityInfo{kind: "user", id: found.userID, name: "用户 " + strconv.FormatInt(found.userID, 10), unknown: true}
+			return inv.Edit(ctx, renderIDs(unknown, time.Time{}, time.Now()))
+		}
+		info, err := fetchEntity(ctx, inv.Client, found.peer)
 		if err != nil {
 			return inv.EditText(ctx, "❌ 查询失败："+command.Brief(err))
 		}
 		var joined time.Time
 		if info.kind == "user" {
-			joined, _ = joinedAt(ctx, inv, peer)
+			joined, _ = joinedAt(ctx, inv, found.peer)
 		}
 		return inv.Edit(ctx, renderIDs(info, joined, time.Now()))
 	}
@@ -337,13 +419,9 @@ func Register(a *app.App) {
 		if err != nil {
 			here = &tg.InputPeerSelf{}
 		}
-		peer, err := resolveEntity(ctx, inv, here)
+		info, err := lookupDC(ctx, inv, here)
 		if err != nil {
 			return inv.EditText(ctx, "❌ "+err.Error())
-		}
-		info, err := fetchEntity(ctx, inv.Client, peer)
-		if err != nil {
-			return inv.EditText(ctx, "❌ 查询失败："+command.Brief(err))
 		}
 		return inv.Edit(ctx, "📍 <b>"+command.Escape(info.name)+"</b>\n所在数据中心："+command.Escape(dcLabel(info.dc)))
 	}
