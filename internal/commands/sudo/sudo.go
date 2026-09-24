@@ -209,7 +209,7 @@ func relay(ctx context.Context, a *app.App, client *bot.Client, trigger *bot.Mes
 		_, _ = client.SendRaw(ctx, peer, "⛔ "+route.Prefix+route.Command+" 只有账号本人能用", nil, trigger.ID, trigger.TopicID)
 		return
 	}
-	id, err := client.SendRaw(ctx, peer, text, entities, trigger.ReplyToID, trigger.TopicID)
+	id, err := client.SendRaw(bot.WithoutIPPrivacy(ctx), peer, text, entities, trigger.ReplyToID, trigger.TopicID)
 	if err != nil {
 		logger.Warn("delegate.send_failed", "error", err.Error())
 		return

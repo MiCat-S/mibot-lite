@@ -39,6 +39,9 @@ type Case struct {
 	Network bool
 	// Wait 覆盖默认的单个用例超时时间。
 	Wait time.Duration
+	// Reply 表示命令会删掉自己、另发一条消息作为回答（如 .status 的图片卡片）：
+	// 这时到命令之后的新消息里找 Expect，找到的那条跑完也删掉。
+	Reply bool
 }
 
 // Cases 是默认的用例集：所有不改动任何东西就能给出回复的命令。
@@ -46,7 +49,7 @@ var Cases = []Case{
 	{Command: "ping", Expect: "Pong"},
 	{Command: "version", Expect: "MiBot Lite"},
 	{Command: "memory", Expect: "RSS"},
-	{Command: "status", Expect: "运行时间"},
+	{Command: "status", Expect: "运行时间", Reply: true},
 	{Command: "sysinfo", Expect: "系统信息"},
 	{Command: "help", Expect: "命令列表"},
 	{Command: "help calc", Expect: "计算器"},
@@ -66,6 +69,7 @@ var Cases = []Case{
 	{Command: "sudo ls", Expect: "用户"},
 	{Command: "sure msg ls", Expect: "消息规则"},
 	{Command: "sticker", Expect: "收藏贴纸"},
+	{Command: "privacy", Expect: "IP 显示"},
 	{Command: "ts", Expect: "角色"},
 	{Command: "help save", Expect: "保存消息"},
 	{Command: "help bin", Expect: "卡头"},
@@ -131,6 +135,36 @@ func Run(ctx context.Context, client *bot.Client, prefix string, out io.Writer, 
 	return failed, nil
 }
 
+// awaitReply 等命令之后出现一条含有 expect 的新消息（正文或图片说明），找到后删掉它。
+// 返回看到的最后一条新消息和是否匹配。
+func awaitReply(ctx context.Context, client *bot.Client, peer tg.InputPeerClass, after int, expect string, deadline time.Time) (string, bool) {
+	answer := ""
+	for time.Now().Before(deadline) {
+		if err := sleep(ctx, 700*time.Millisecond); err != nil {
+			return answer, false
+		}
+		result, err := client.API().MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{Peer: peer, Limit: 5})
+		if err != nil {
+			continue
+		}
+		messages, _ := client.Unpack(result)
+		for _, item := range messages {
+			message, ok := item.(*tg.Message)
+			if !ok || message.ID <= after {
+				continue
+			}
+			answer = message.Message
+			if strings.Contains(message.Message, expect) {
+				removeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+				_ = client.Delete(removeCtx, peer, []int{message.ID})
+				cancel()
+				return answer, true
+			}
+		}
+	}
+	return answer, false
+}
+
 // run 发送一个命令，等处理函数把它改写。
 func run(ctx context.Context, client *bot.Client, peer tg.InputPeerClass, prefix string, item Case, dispatch Dispatch) Result {
 	wait := item.Wait
@@ -139,7 +173,8 @@ func run(ctx context.Context, client *bot.Client, peer tg.InputPeerClass, prefix
 	}
 	started := time.Now()
 	text := prefix + item.Command
-	id, err := client.SendHTML(ctx, peer, bot.Escape(text), bot.SendOptions{})
+	// 自检发的是命令本身，里面的 IP 是参数，不能被打码。
+	id, err := client.SendHTML(bot.WithoutIPPrivacy(ctx), peer, bot.Escape(text), bot.SendOptions{})
 	if err != nil {
 		return Result{Case: item, Detail: "send failed: " + err.Error(), Took: time.Since(started)}
 	}
@@ -165,7 +200,10 @@ func run(ctx context.Context, client *bot.Client, peer tg.InputPeerClass, prefix
 	// 更糟的是，命令还在往这条消息里写，消息却已经被删掉了。
 	deadline := time.Now().Add(wait)
 	answer, matched := "", false
-	for time.Now().Before(deadline) {
+	if item.Reply {
+		answer, matched = awaitReply(ctx, client, peer, id, item.Expect, deadline)
+	}
+	for !item.Reply && time.Now().Before(deadline) {
 		if err := sleep(ctx, 700*time.Millisecond); err != nil {
 			return Result{Case: item, Detail: "cancelled", Took: time.Since(started)}
 		}

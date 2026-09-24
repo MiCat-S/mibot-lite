@@ -27,6 +27,7 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/commands/ip"
 	"github.com/MiCat-S/mibot-lite/internal/commands/log"
 	"github.com/MiCat-S/mibot-lite/internal/commands/prefix"
+	"github.com/MiCat-S/mibot-lite/internal/commands/privacy"
 	"github.com/MiCat-S/mibot-lite/internal/commands/rate"
 	"github.com/MiCat-S/mibot-lite/internal/commands/re"
 	"github.com/MiCat-S/mibot-lite/internal/commands/restart"
@@ -72,6 +73,7 @@ func RegisterAll(a *app.App) {
 	eatgif.Register(a)
 	sticker.Register(a)
 	tts.Register(a)
+	privacy.Register(a)
 	prefix.Register(a)
 	alias.Register(a)
 	sudo.Register(a)
@@ -100,6 +102,7 @@ var miboxImports = []miboxImport{
 	{source: "assets/yvlu/config.json", target: "yvlu.json"},
 	{source: "assets/t/tts_data.json", target: "t.json"},
 	{source: "assets/sticker/config.json", target: "sticker.json"},
+	{source: "assets/privacy/ip.json", target: "privacy.json"},
 	// save：v2 存在自己的 config.json，v1 存在 prometheus 目录下，格式都要转换。
 	{source: "assets/save/config.json", target: "save.json", convert: save.ConvertMiBox},
 	{source: "assets/prometheus/config.json", target: "save.json", convert: save.ConvertMiBox},

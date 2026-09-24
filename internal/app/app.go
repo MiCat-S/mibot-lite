@@ -192,8 +192,11 @@ func Prepare(ctx context.Context, options Options) (*App, error) {
 		UpdateHandler:  app.gaps,
 		// 补上 MiBox 所用的 teleproto 对每个请求都做、gotd 不做的事：60 秒以内的限流和
 		// 服务端内部错误自动重试（最多 5 次），每个应答里的用户和群都记进缓存。
-		// 从 MiBox 移植来的命令都默认有这层保护。
+		// 从 MiBox 移植来的命令都默认有这层保护。发出去的消息里的 IP 按 .privacy 的设置打码，
+		// 同 MiBox v2。
 		Middlewares: []telegram.Middleware{
+			// 最外层：一次发送只打一遍码，重试时发的是同一份打过码的请求。
+			bot.IPRedactor{},
 			bot.Retrier{Logger: app.Logger, MaxWait: 60 * time.Second, Attempts: 5},
 			bot.EntityRecorder{Peers: app.peers},
 		},

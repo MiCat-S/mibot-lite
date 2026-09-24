@@ -53,10 +53,17 @@ Go 函数。代价是装新命令要重新编译；换来的是一个更小的�
 .ai .gt .sum .re .dme .da
 .ban .unban .kick .mute .unmute .sb .unsb .refresh .aban
 .acn .autochangename .yvlu .eatgif .eat .eat2 .sticker .t .ts .tk
-.sudo .sure
+.sudo .sure .privacy
 ```
 
 每条命令的用法见 `.help 命令`。
+
+### IP 打码：.privacy
+
+和 MiBox v2 一样，账号发出和编辑的每条消息里，IP 地址都会打码：默认 IPv4 遮后 2 段、
+IPv6 遮后 4 段，指向 IP 的链接会去掉，文件名里的 IP 也一样。`.privacy ip mask 2 4`
+改遮几段，`.privacy ip hide` 整个换成「[IP已隐藏]」。打码在连接层做，所有命令的输出都经过它；
+替别人代发的命令（`.sudo`、`.sure`）不打码，那些地址本来就是对方自己打出来的。
 
 ### 借用账号：.sudo 和 .sure
 
@@ -132,5 +139,8 @@ MIBOT_EATGIF_ASSETS=/path/to/eatgif go test ./internal/imaging/ -run RealAnimati
 `testdata`）只留在维护者本地，已写进 `.gitignore`。
 
 ## 许可
+
+状态卡片用的字体是 Noto Sans SC 的子集（`internal/statuscard/NotoSansSC-status-subset.ttf`），
+按 SIL Open Font License 1.1 分发，许可证见同目录的 `NotoSansSC-OFL.txt`。
 
 LGPL-2.1，与 MiBox 一致。

@@ -47,17 +47,8 @@ func Register(a *app.App) {
 		&command.Command{Name: "memory", Description: "查看内存状态", Handle: func(ctx context.Context, inv *command.Invocation) error {
 			return inv.Edit(ctx, memoryReport())
 		}},
-		&command.Command{Name: "status", Description: "查看运行状态", Handle: func(ctx context.Context, inv *command.Invocation) error {
-			lines := []string{
-				"<b>MiBot Lite 状态</b>", "",
-				"版本: " + command.Code(kit.Version(a)),
-				"运行时间: " + command.Code(formatUptime(time.Since(a.Started).Seconds())),
-				"命令数: " + command.Code(fmt.Sprint(len(registry.Commands()))),
-				"前缀: " + command.Code(strings.Join(registry.Prefixes(), " ")),
-				"PID: " + command.Code(fmt.Sprint(os.Getpid())),
-				"", memoryReport(),
-			}
-			return inv.Edit(ctx, strings.Join(lines, "\n"))
+		&command.Command{Name: "status", Description: "查看运行状态卡片", Help: statusHelp, Handle: func(ctx context.Context, inv *command.Invocation) error {
+			return status(ctx, a, registry, inv)
 		}},
 		&command.Command{Name: "sysinfo", Description: "查看详细系统信息", Handle: func(ctx context.Context, inv *command.Invocation) error {
 			machine := sysinfo.ReadHost()
@@ -195,4 +186,9 @@ func probe(ctx context.Context, target string) string {
 		return "❌ 网络测试失败或目标不可达"
 	}
 	return command.Code(fmt.Sprintf("%s: HTTP %d，%d ms", target, response.Status, time.Since(started).Milliseconds()))
+}
+
+func statusHelp(prefix string) string {
+	return "📊 <b>运行状态</b>\n\n<code>" + command.Escape(prefix) + "status</code> 发一张状态卡片：健康状态、在线时长，" +
+		"CPU、内存、磁盘、Swap 的占用；卡片下面附进程和主机的文字说明。CPU 要采样约 160 毫秒。"
 }
