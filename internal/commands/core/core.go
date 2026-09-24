@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/app"
 	"github.com/MiCat-S/mibot-lite/internal/command"
 	"github.com/MiCat-S/mibot-lite/internal/commands/kit"
+	"github.com/MiCat-S/mibot-lite/internal/httpx"
 	"github.com/MiCat-S/mibot-lite/internal/sysinfo"
 )
 
@@ -19,7 +21,13 @@ import (
 func Register(a *app.App) {
 	registry := a.Registry
 	registry.Register(
-		&command.Command{Name: "ping", Description: "测试 Telegram 延迟", Handle: func(ctx context.Context, inv *command.Invocation) error {
+		&command.Command{Name: "ping", Description: "测试 Telegram 或某个网站的延迟", Usage: "[域名]", Help: pingHelp, Handle: func(ctx context.Context, inv *command.Invocation) error {
+			switch target := inv.Arg(0); {
+			case target == "help" || target == "h":
+				return inv.Edit(ctx, pingHelp(inv.Prefix))
+			case target != "":
+				return inv.Edit(ctx, probe(ctx, target))
+			}
 			elapsed, err := inv.Client.Ping(ctx)
 			if err != nil {
 				return inv.EditText(ctx, "Telegram 延迟测试失败")
@@ -137,16 +145,54 @@ func renderHelpList(registry *command.Registry, prefix string) string {
 }
 
 func renderCommandHelp(registry *command.Registry, prefix, name string) string {
-	cmd, ok := registry.Lookup(name)
+	cmd, ok := lookupForHelp(registry, name)
 	if !ok {
 		return "未知命令: " + command.Code(name)
 	}
-	if cmd.Help != nil {
-		return cmd.Help(prefix)
+	return cmd.HelpText(prefix)
+}
+
+// lookupForHelp 找 .help 后面写的那条命令，照 MiBox 放宽：可以带前缀（.help .ping）、
+// 大小写不同、写的是别名（.help 测速 找到别名指向的命令）。
+func lookupForHelp(registry *command.Registry, name string) (*command.Command, bool) {
+	for _, candidate := range registry.Prefixes() {
+		if trimmed, ok := strings.CutPrefix(name, candidate); ok && trimmed != "" {
+			name = trimmed
+			break
+		}
 	}
-	usage := prefix + cmd.Name
-	if cmd.Usage != "" {
-		usage += " " + cmd.Usage
+	if cmd, ok := registry.Lookup(name); ok {
+		return cmd, true
 	}
-	return "<b>" + command.Escape(usage) + "</b>\n\n" + command.Escape(cmd.Description)
+	if cmd, ok := registry.Lookup(strings.ToLower(name)); ok {
+		return cmd, true
+	}
+	if expansion, ok := registry.Aliases()[name]; ok {
+		if fields := strings.Fields(expansion); len(fields) > 0 {
+			return registry.Lookup(fields[0])
+		}
+	}
+	return nil, false
+}
+
+func pingHelp(prefix string) string {
+	p := command.Escape(prefix)
+	return "🏓 <b>延迟测试</b>\n\n• <code>" + p + "ping</code> 测 Telegram 接口和消息编辑的延迟\n" +
+		"• <code>" + p + "ping example.com</code> 对 https://example.com 发一次 HEAD 请求，显示状态码和耗时（5 秒超时）"
+}
+
+// pingTarget 是 .ping 能测的目标：和 MiBox 一样只允许字母、数字和 . _ : -，最长 253 字符。
+var pingTarget = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,253}$`)
+
+// probe 对 https://target 发一次 HEAD 请求，报告状态码和耗时。
+func probe(ctx context.Context, target string) string {
+	if !pingTarget.MatchString(target) {
+		return "❌ 无效的目标：只能是域名或 IP"
+	}
+	started := time.Now()
+	response, err := httpx.Do(ctx, httpx.Request{Method: "HEAD", URL: "https://" + target, Timeout: 5 * time.Second, MaxBytes: 1})
+	if err != nil {
+		return "❌ 网络测试失败或目标不可达"
+	}
+	return command.Code(fmt.Sprintf("%s: HTTP %d，%d ms", target, response.Status, time.Since(started).Milliseconds()))
 }

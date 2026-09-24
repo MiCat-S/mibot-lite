@@ -69,6 +69,10 @@ func Register(a *app.App) {
 		store: store.New(filepath.Join(a.Root, "restart-receipt.json"), func() receiptDocument { return receiptDocument{} })}
 	service = r
 	a.Registry.Register(&command.Command{Name: "restart", Description: "重启 systemd 服务", Handle: func(ctx context.Context, inv *command.Invocation) error {
+		// 重启不收参数；带了参数（.restart help 之类）多半是想看说明，别真的重启。
+		if len(inv.Args) > 0 {
+			return inv.EditText(ctx, "用法："+inv.Prefix+"restart（不带参数）重启服务，重启完成后这条消息会改成「重启成功」")
+		}
 		return r.command(ctx, inv, "restart", "<b>MiBot Lite 重启</b>\n正在提交重启请求…", "服务重启命令执行失败。")
 	}})
 	a.Registry.AddJob(r.notifyReady)
@@ -163,8 +167,11 @@ func (r *restarter) notifyReady(ctx context.Context, client *bot.Client) {
 		return
 	}
 	text := "<b>MiBot Lite 重启成功</b>\n服务已就绪"
-	if note.Kind == "update" {
+	switch note.Kind {
+	case "update":
 		text = "<b>MiBot Lite 更新完成</b>\n新版本已就绪"
+	case "rollback":
+		text = "<b>MiBot Lite 回滚完成</b>\n已换回上一版本"
 	}
 	if err := client.EditMessage(ctx, peer, note.MessageID, text, false); err != nil {
 		client.Logger().Warn("restart.receipt_failed", slog.String("error", err.Error()))

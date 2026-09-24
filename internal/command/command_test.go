@@ -159,3 +159,17 @@ func TestUnknownWordsStillDoNotParse(t *testing.T) {
 		t.Errorf("a plain command lost its text: %+v", route)
 	}
 }
+
+func TestWantsHelpAndHelpText(t *testing.T) {
+	if !wantsHelp([]string{"--help"}) || wantsHelp([]string{"help"}) || wantsHelp([]string{"--help", "x"}) || wantsHelp(nil) {
+		t.Error("只有单独一个 --help 才拦下来")
+	}
+	plain := &Command{Name: "restart", Usage: "[x]", Description: "重启 <服务>"}
+	if got := plain.HelpText("."); got != "<b>.restart [x]</b>\n\n重启 &lt;服务&gt;" {
+		t.Errorf("没有 Help 时的帮助：%q", got)
+	}
+	custom := &Command{Name: "a", Help: func(prefix string) string { return prefix + "自定义" }}
+	if got := custom.HelpText("!"); got != "!自定义" {
+		t.Errorf("有 Help 时应该用它：%q", got)
+	}
+}

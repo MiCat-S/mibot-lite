@@ -81,6 +81,21 @@ type Command struct {
 	Hidden bool
 }
 
+// HelpText 是这条命令的详细帮助：有 Help 用 Help，否则用用法加说明。
+func (c *Command) HelpText(prefix string) string {
+	if c.Help != nil {
+		return c.Help(prefix)
+	}
+	usage := prefix + c.Name
+	if c.Usage != "" {
+		usage += " " + c.Usage
+	}
+	return "<b>" + Escape(usage) + "</b>\n\n" + Escape(c.Description)
+}
+
+// wantsHelp 判断参数是不是只有一个 --help。
+func wantsHelp(args []string) bool { return len(args) == 1 && args[0] == "--help" }
+
 // Job 是账号连上之后启动的后台任务。
 type Job func(ctx context.Context, client *bot.Client)
 
@@ -387,7 +402,14 @@ func (r *Registry) run(ctx context.Context, client *bot.Client, message, trigger
 			}
 		}()
 		started := time.Now()
-		err := command.Handle(runCtx, inv)
+		var err error
+		if wantsHelp(inv.Args) {
+			// 和 MiBox 一样，「命令 --help」只显示帮助、不执行；有的命令根本不看参数，
+			// 不拦下来的话 .restart --help 就真的重启了。
+			err = inv.Edit(runCtx, command.HelpText(inv.Prefix))
+		} else {
+			err = command.Handle(runCtx, inv)
+		}
 		switch {
 		case err == nil:
 			inv.Log.Info("command.handled", slog.String("chat", message.ChatID), slog.Int("message", message.ID), slog.Duration("took", time.Since(started)))

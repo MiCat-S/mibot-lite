@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/MiCat-S/mibot-lite/internal/app"
@@ -47,6 +48,14 @@ func Register(a *app.App) {
 			binary, err := os.Executable()
 			if err == nil {
 				binary, _ = filepath.EvalSymlinks(binary)
+			}
+			// 下载、替换程序文件、回滚都只能一个一个来：两个同时跑会互相覆盖下载的文件，
+			// 或者把留作回滚的上一版本弄丢。
+			if sub := strings.ToLower(inv.Arg(0)); sub == "run" || sub == "apply" || sub == "rollback" {
+				if !busy.TryLock() {
+					return inv.EditText(ctx, "已有一个更新或回滚正在进行，请稍候")
+				}
+				defer busy.Unlock()
 			}
 			switch strings.ToLower(inv.Arg(0)) {
 			case "", "ver", "status":
@@ -96,7 +105,7 @@ func Register(a *app.App) {
 					return err
 				}
 				_ = os.Rename(swap, previous)
-				return restart.Now(ctx, inv, "update", "<b>MiBot Lite 回滚</b>\n已换回上一版本，正在重启…", "回滚后重启失败。")
+				return restart.Now(ctx, inv, "rollback", "<b>MiBot Lite 回滚</b>\n已换回上一版本，正在重启…", "回滚后重启失败。")
 			}
 			return inv.EditText(ctx, "用法："+inv.Prefix+"update [check|run|rollback]")
 		}})
@@ -132,6 +141,9 @@ func newer(current, latest string) bool {
 	}
 	return current != latest
 }
+
+// busy 让更新和回滚同一时间只有一个在跑。
+var busy sync.Mutex
 
 func runUpdate(ctx context.Context, a *app.App, inv *command.Invocation, repo, binary string) error {
 	if !restart.Available() {
