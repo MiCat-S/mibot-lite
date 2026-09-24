@@ -27,7 +27,7 @@ func TestRenderBINFromARealResponse(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
 		t.Fatal(err)
 	}
-	text := renderBIN("415042", result, bincheckInfo{})
+	text := renderBIN("415042", result)
 	for _, wanted := range []string{"Visa", "贷记卡", "REWARDS", "Russian Federation", "卢布（RUB）", "Vtb Bank", "预付卡：未知"} {
 		if !strings.Contains(text, wanted) {
 			t.Errorf("rendering lost %q:\n%s", wanted, text)
@@ -35,43 +35,5 @@ func TestRenderBINFromARealResponse(t *testing.T) {
 	}
 	if strings.Contains(text, "(the)") {
 		t.Errorf("the country kept binlist's article:\n%s", text)
-	}
-
-	// bincheck 有结果时，卡组织、发卡行和国家用它的，其余仍取 binlist。
-	checked := bincheckInfo{Scheme: "MASTERCARD", Bank: "GAZPROMBANK", Country: "RUSSIAN FEDERATION"}
-	text = renderBIN("545807", result, checked)
-	for _, wanted := range []string{"Mastercard", "GAZPROMBANK", "🇷🇺 RUSSIAN FEDERATION", "卢布（RUB）", "贷记卡"} {
-		if !strings.Contains(text, wanted) {
-			t.Errorf("rendering with bincheck lost %q:\n%s", wanted, text)
-		}
-	}
-	if strings.Contains(text, "Vtb Bank") {
-		t.Errorf("binlist's bank was preferred over bincheck's:\n%s", text)
-	}
-	// binlist 查不成时只有 bincheck 的几项。
-	text = renderBIN("545807", binResult{}, checked)
-	if !strings.Contains(text, "RUSSIAN FEDERATION") || !strings.Contains(text, "GAZPROMBANK") {
-		t.Errorf("a bincheck-only result lost its fields:\n%s", text)
-	}
-}
-
-// bincheck.io 详情页的 og:description 两种写法，以及属性顺序反过来的 meta。
-func TestParseBincheck(t *testing.T) {
-	want := bincheckInfo{Scheme: "MASTERCARD", Bank: "GAZPROMBANK", Country: "RUSSIAN FEDERATION"}
-	pages := []string{
-		`<head><meta property="og:description" content="This number: 545807 is a valid BIN number MASTERCARD issued by GAZPROMBANK in RUSSIAN FEDERATION"></head>`,
-		`<meta content="545807 is a valid BIN number 545807 is a valid BIN number MASTERCARD issued by GAZPROMBANK in RUSSIAN FEDERATION." property="og:description" />`,
-	}
-	for _, page := range pages {
-		if got := parseBincheck(page); got != want {
-			t.Errorf("parseBincheck = %+v, want %+v\n%s", got, want, page)
-		}
-	}
-	amex := parseBincheck(`<meta property='og:description' content='valid BIN number AMERICAN EXPRESS issued by AMERICAN EXPRESS US CONSUMER in UNITED STATES'>`)
-	if schemeName(amex.Scheme) != "American Express" || amex.Bank != "AMERICAN EXPRESS US CONSUMER" {
-		t.Errorf("amex parsed as %+v", amex)
-	}
-	if got := parseBincheck(`<html><body>Not found</body></html>`); got != (bincheckInfo{}) {
-		t.Errorf("a page without the description parsed as %+v", got)
 	}
 }
