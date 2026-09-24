@@ -2,9 +2,11 @@
 package yvlu
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"image"
 	"image/color"
 	"os"
 	"regexp"
@@ -51,6 +53,8 @@ type yvluOptions struct {
 	FakeText   string
 	FakeEnts   []tg.MessageEntityClass
 	FakeSender tg.InputPeerClass
+	// FakeAuthor 是 FakeSender 的名字等信息，由 fakeAuthor 查好，每条消息都署这个名。
+	FakeAuthor *quoteFrom
 }
 
 var stickerSetName = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
@@ -417,7 +421,11 @@ func (s *yvluService) handle(ctx context.Context, inv *command.Invocation) error
 		if err != nil {
 			return kit.Failf("无法获取 %s 的信息，请检查用户ID/用户名是否正确", inv.Arg(1))
 		}
-		options.FakeSender = peer
+		author, err := fakeAuthor(ctx, inv, peer)
+		if err != nil {
+			return kit.Failf("无法获取 %s 的信息，请检查用户ID/用户名是否正确", inv.Arg(1))
+		}
+		options.FakeSender, options.FakeAuthor = peer, author
 	}
 	reply, err := inv.Client.GetReply(ctx, inv.Message)
 	if err != nil {
@@ -435,7 +443,7 @@ func (s *yvluService) handle(ctx context.Context, inv *command.Invocation) error
 		return err
 	}
 	built := time.Now()
-	image, extension, err := s.render(ctx, payload)
+	picture, extension, err := s.render(ctx, payload)
 	if err != nil {
 		return err
 	}
@@ -444,19 +452,7 @@ func (s *yvluService) handle(ctx context.Context, inv *command.Invocation) error
 	if err != nil {
 		return err
 	}
-	document := bot.DocumentOptions{Name: "quote." + extension, MimeType: mimeOf(extension), ReplyTo: reply.ID}
-	if extension != "png" {
-		attributes := []tg.DocumentAttributeClass{&tg.DocumentAttributeSticker{Alt: "📝", Stickerset: &tg.InputStickerSetEmpty{}}}
-		if extension == "webp" {
-			width, height, err := imaging.WebPSize(image)
-			if err != nil {
-				width, height = 512, 768
-			}
-			attributes = append(attributes, &tg.DocumentAttributeImageSize{W: width, H: height})
-		}
-		document.Attributes = attributes
-	}
-	if err := inv.Client.SendDocumentWith(ctx, peer, image, document); err != nil {
+	if err := send(ctx, inv, peer, picture, extension, reply.ID); err != nil {
 		return err
 	}
 	// 记录一条慢语录的时间花在了哪里。用 debug 级别，因为这是诊断信息：
@@ -466,8 +462,70 @@ func (s *yvluService) handle(ctx context.Context, inv *command.Invocation) error
 		"collect", built.Sub(started).String(),
 		"render", rendered.Sub(built).String(),
 		"upload", time.Since(rendered).String(),
-		"bytes", len(image))
+		"bytes", len(picture))
 	return inv.Client.DeleteMessage(ctx, inv.Message)
+}
+
+// send 按格式发出渲染结果：WebP 和 WebM 当贴纸发，PNG（image、stories）当照片发。
+func send(ctx context.Context, inv *command.Invocation, peer tg.InputPeerClass, data []byte, extension string, replyTo int) error {
+	if extension != "png" {
+		return inv.Client.SendDocumentWith(ctx, peer, data, stickerDocument(data, extension, replyTo))
+	}
+	// 原插件把 quote.png 交给 teleproto，它按扩展名认作图片，以照片发出。照片有尺寸和
+	// 大小限制；超出限制的，或者被 Telegram 拒收的，退回按文件发，结果至少还能送到。
+	if photoFits(data) {
+		err := inv.Client.SendPhoto(ctx, peer, "quote.png", data, "", replyTo)
+		if err == nil || !photoRejected(err) {
+			return err
+		}
+		inv.Log.Info("yvlu.photo_rejected", "error", err.Error())
+	}
+	return inv.Client.SendDocumentWith(ctx, peer, data, bot.DocumentOptions{Name: "quote.png", MimeType: "image/png", ReplyTo: replyTo})
+}
+
+// stickerDocument 是把 WebP 或 WebM 当贴纸发出去的参数，不属于任何贴纸包。
+func stickerDocument(data []byte, extension string, replyTo int) bot.DocumentOptions {
+	attributes := []tg.DocumentAttributeClass{&tg.DocumentAttributeSticker{Alt: "📝", Stickerset: &tg.InputStickerSetEmpty{}}}
+	switch extension {
+	case "webp":
+		width, height, err := imaging.WebPSize(data)
+		if err != nil {
+			width, height = 512, 768
+		}
+		attributes = append(attributes, &tg.DocumentAttributeImageSize{W: width, H: height})
+	case "webm":
+		// 原插件把 .webm 文件交给 teleproto，它会自动加上视频属性；Telegram 自己的客户端
+		// 发视频贴纸也带这一项。宽高和时长从文件头读，读不到时按贴纸的常见尺寸填。
+		width, height, duration, err := media.WebMInfo(data)
+		if err != nil {
+			width, height, duration = 512, 512, 0
+		}
+		attributes = append(attributes, &tg.DocumentAttributeVideo{W: width, H: height, Duration: duration})
+	}
+	return bot.DocumentOptions{Name: "quote." + extension, MimeType: mimeOf(extension), ReplyTo: replyTo, Attributes: attributes}
+}
+
+// photoFits 判断图片能不能当照片发。Telegram 的要求：不超过 10 MB，宽高之和不超过
+// 10000，长边不超过短边的 20 倍。
+func photoFits(data []byte) bool {
+	if len(data) > 10<<20 {
+		return false
+	}
+	config, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil || config.Width < 1 || config.Height < 1 || config.Width+config.Height > 10000 {
+		return false
+	}
+	return max(config.Width, config.Height) <= 20*min(config.Width, config.Height)
+}
+
+// photoRejected 判断照片是不是因为内容或权限被拒：这类错误换成文件发还有机会成功；
+// 限流和网络错误换了也没用，原样报告。
+func photoRejected(err error) bool {
+	rpc, ok := tgerr.As(err)
+	if !ok {
+		return false
+	}
+	return rpc.Code == 400 || rpc.IsType("CHAT_SEND_PHOTOS_FORBIDDEN")
 }
 
 func mimeOf(extension string) string {
@@ -641,7 +699,7 @@ func (s *yvluService) build(ctx context.Context, inv *command.Invocation, reply 
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		author, err := s.author(ctx, inv, message, options)
+		author, face, err := s.author(inv, message, options)
 		if err != nil {
 			return nil, err
 		}
@@ -650,7 +708,7 @@ func (s *yvluService) build(ctx context.Context, inv *command.Invocation, reply 
 		if show {
 			photo, cached := avatars[author.ID]
 			if !cached {
-				photo = s.avatar(ctx, inv, message, options)
+				photo = s.avatar(ctx, inv, face)
 				avatars[author.ID] = photo
 			}
 			author.Photo = photo
@@ -662,13 +720,15 @@ func (s *yvluService) build(ctx context.Context, inv *command.Invocation, reply 
 		}
 
 		item := quoteMessage{From: *author, Avatar: show}
+		fake := index == 0 && options.FakeText != ""
 		switch {
-		case index == 0 && options.FakeText != "":
+		case fake:
 			item.Text = options.FakeText
 			item.Entities = convertEntities(options.FakeEnts, kit.UTF16Len(inv.Text)-kit.UTF16Len(options.FakeText))
 		case index == 0 && inv.Message.QuoteText != "":
 			// 操作者回复的是消息的一部分而不是全部。引用整条消息，
-			// 就无视了对方有意缩小的范围，所以以选中的部分为准。
+			// 就无视了对方有意缩小的范围，所以文字以选中的部分为准；
+			// 媒体、转发来源和头衔仍属于这条消息，照样带上。
 			item.Text = inv.Message.QuoteText
 			item.Entities = convertEntities(inv.Message.QuoteEntities, 0)
 		default:
@@ -678,13 +738,17 @@ func (s *yvluService) build(ctx context.Context, inv *command.Invocation, reply 
 					item.Entities = convertEntities(entities, 0)
 				}
 			}
+		}
+		// 伪造的文字不是这条消息说的，它的媒体和转发来源也就不该出现；
+		// 头衔属于作者，和原插件一样照样显示。
+		if !fake {
 			s.describeMedia(ctx, inv, message, &item)
 			if label := forwardLabel(inv, message); label != nil {
 				item.Forward = label
 			}
-			if tag := s.senderTag(ctx, inv, message, author.ID); tag != "" {
-				item.SenderTag = tag
-			}
+		}
+		if tag := s.senderTag(ctx, inv, message, author.ID); tag != "" {
+			item.SenderTag = tag
 		}
 		if item.Entities == nil {
 			item.Entities = []quoteEntity{}
@@ -708,13 +772,18 @@ func (s *yvluService) build(ctx context.Context, inv *command.Invocation, reply 
 // 占用 ID——所以逐个递增 ID 会漏掉消息，还会去请求根本不存在的消息。
 // 这里沿用原插件的做法，按位置而不是按 ID 遍历历史：getHistory 定位到
 // offset_id，负的 add_offset 再往较新的一端挪动相应的条数。
+//
+// offset_id 取被回复消息自己的 ID：offset_id=X、add_offset=-n、limit=n 返回的是
+// ID 不小于 X 的最早 n 条。原插件写的是 offsetId: id-1 加 reverse，但 teleproto
+// 在 reverse 时会先给 offsetId 加一，实际发出的正是 offset_id=id。照字面传 id-1，
+// 编号 id-1 的消息存在时会占掉一个名额，结果少一条。
 func (s *yvluService) following(ctx context.Context, inv *command.Invocation, reply *bot.Message, count int) ([]*bot.Message, error) {
 	peer, err := inv.Client.InputPeer(reply.Peer)
 	if err != nil {
 		return nil, err
 	}
 	result, err := inv.Client.API().MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{
-		Peer: peer, OffsetID: reply.ID - 1, AddOffset: -count, Limit: count,
+		Peer: peer, OffsetID: reply.ID, AddOffset: -count, Limit: count,
 	})
 	if err != nil {
 		return nil, err
@@ -742,37 +811,122 @@ func (s *yvluService) following(ctx context.Context, inv *command.Invocation, re
 	return ordered, nil
 }
 
-// author 确定一条被引用的消息该算在谁名下。
+// author 确定一条被引用的消息该算在谁名下，同时给出该用谁的头像（没有可用头像时为 nil）。
 //
 // 转发的消息算在原作者名下，而不是转发者：引用一条转发消息，
-// 却在上面看到转发者的名字，就等于把话安到了别人头上。
-func (s *yvluService) author(ctx context.Context, inv *command.Invocation, message *bot.Message, options *yvluOptions) (*quoteFrom, error) {
-	if options.FakeSender != nil {
-		if user, ok := options.FakeSender.(*tg.InputPeerUser); ok {
-			info, _ := inv.Client.Peers().User(user.UserID)
-			return &quoteFrom{ID: info.ID, FirstName: info.FirstName, LastName: info.LastName, Username: info.Username,
-				Name: strings.TrimSpace(info.FirstName + " " + info.LastName)}, nil
-		}
+// 却在上面看到转发者的名字，就等于把话安到了别人头上。头像跟着署名走：
+// 名字是原作者、头像却是转发者，一样是张冠李戴。
+func (s *yvluService) author(inv *command.Invocation, message *bot.Message, options *yvluOptions) (*quoteFrom, tg.InputPeerClass, error) {
+	if options.FakeAuthor != nil {
+		// 每条消息各拿一份副本：build 会就地清空名字、填上头像。
+		from := *options.FakeAuthor
+		return &from, options.FakeSender, nil
 	}
-	if from := forwardAuthor(inv, message); from != nil {
-		return from, nil
+	if from, origin := forwardAuthor(inv, message); from != nil {
+		return from, inputPeer(inv, origin), nil
 	}
-	switch sender := message.Sender.(type) {
+	from := peerAuthor(inv, message.Sender)
+	if from == nil {
+		return nil, nil, kit.Fail("无法获取消息发送者信息")
+	}
+	return from, inputPeer(inv, message.Sender), nil
+}
+
+// inputPeer 把 peer 转成可以拿来下载头像的形式；peer 为空或不知道 access hash 时返回 nil。
+func inputPeer(inv *command.Invocation, peer tg.PeerClass) tg.InputPeerClass {
+	if peer == nil {
+		return nil
+	}
+	resolved, ok := inv.Client.Peers().InputPeer(peer)
+	if !ok {
+		return nil
+	}
+	return resolved
+}
+
+// peerAuthor 用缓存里的信息给一个用户、频道或群署名；peer 不是这三种时返回 nil。
+func peerAuthor(inv *command.Invocation, peer tg.PeerClass) *quoteFrom {
+	switch value := peer.(type) {
 	case *tg.PeerUser:
-		info, _ := inv.Client.Peers().User(sender.UserID)
-		name := strings.TrimSpace(info.FirstName + " " + info.LastName)
-		if name == "" {
-			name = info.Username
-		}
-		return &quoteFrom{ID: sender.UserID, FirstName: info.FirstName, LastName: info.LastName, Username: info.Username, Name: name}, nil
+		info, _ := inv.Client.Peers().User(value.UserID)
+		return userAuthor(value.UserID, info)
 	case *tg.PeerChannel:
-		info, _ := inv.Client.Peers().Channel(sender.ChannelID)
-		return &quoteFrom{ID: sender.ChannelID, FirstName: info.Title, Name: info.Title, Username: info.Username}, nil
+		info, _ := inv.Client.Peers().Channel(value.ChannelID)
+		return &quoteFrom{ID: value.ChannelID, FirstName: info.Title, Name: info.Title, Username: info.Username}
 	case *tg.PeerChat:
-		info, _ := inv.Client.Peers().Chat(sender.ChatID)
-		return &quoteFrom{ID: sender.ChatID, FirstName: info.Title, Name: info.Title}, nil
+		info, _ := inv.Client.Peers().Chat(value.ChatID)
+		return &quoteFrom{ID: value.ChatID, FirstName: info.Title, Name: info.Title}
 	}
-	return nil, kit.Fail("无法获取消息发送者信息")
+	return nil
+}
+
+// userAuthor 给用户署名：名字是姓名，没有姓名时用用户名。
+func userAuthor(id int64, info bot.UserInfo) *quoteFrom {
+	name := strings.TrimSpace(info.FirstName + " " + info.LastName)
+	if name == "" {
+		name = info.Username
+	}
+	return &quoteFrom{ID: id, FirstName: info.FirstName, LastName: info.LastName, Username: info.Username, Name: name}
+}
+
+// fakeAuthor 查出 u/ur 指定的伪造发送者的名字。
+//
+// ResolveTarget 只保证能寻址：access hash 可能来自持久化存储，这时缓存里没有名字和头像，
+// 语录上就会是一个空白的作者。原插件用 getEntity 取完整的用户或频道，这里也在缺信息时
+// 向 Telegram 查一次；「me」查本账号的最新资料，查不到时退回登录时的那份。
+func fakeAuthor(ctx context.Context, inv *command.Invocation, peer tg.InputPeerClass) (*quoteFrom, error) {
+	api, peers := inv.Client.API(), inv.Client.Peers()
+	switch value := peer.(type) {
+	case *tg.InputPeerSelf:
+		self := inv.Client.Self()
+		if users, err := api.UsersGetUsers(ctx, []tg.InputUserClass{&tg.InputUserSelf{}}); err == nil {
+			peers.RememberUsers(users)
+			if len(users) > 0 {
+				if fresh, ok := users[0].(*tg.User); ok {
+					self = fresh
+				}
+			}
+		}
+		return userAuthor(self.ID, bot.UserInfo{FirstName: self.FirstName, LastName: self.LastName, Username: self.Username}), nil
+	case *tg.InputPeerUser:
+		if _, known := peers.User(value.UserID); !known {
+			users, err := api.UsersGetUsers(ctx, []tg.InputUserClass{&tg.InputUser{UserID: value.UserID, AccessHash: value.AccessHash}})
+			if err != nil {
+				return nil, err
+			}
+			peers.RememberUsers(users)
+		}
+		info, known := peers.User(value.UserID)
+		if !known {
+			return nil, kit.Fail("查不到这个用户")
+		}
+		return userAuthor(value.UserID, info), nil
+	case *tg.InputPeerChannel:
+		if _, known := peers.Channel(value.ChannelID); !known {
+			chats, err := api.ChannelsGetChannels(ctx, []tg.InputChannelClass{&tg.InputChannel{ChannelID: value.ChannelID, AccessHash: value.AccessHash}})
+			if err != nil {
+				return nil, err
+			}
+			peers.RememberChats(chats.GetChats())
+		}
+		if _, known := peers.Channel(value.ChannelID); !known {
+			return nil, kit.Fail("查不到这个频道")
+		}
+		return peerAuthor(inv, &tg.PeerChannel{ChannelID: value.ChannelID}), nil
+	case *tg.InputPeerChat:
+		if _, known := peers.Chat(value.ChatID); !known {
+			chats, err := api.MessagesGetChats(ctx, []int64{value.ChatID})
+			if err != nil {
+				return nil, err
+			}
+			peers.RememberChats(chats.GetChats())
+		}
+		if _, known := peers.Chat(value.ChatID); !known {
+			return nil, kit.Fail("查不到这个群")
+		}
+		return peerAuthor(inv, &tg.PeerChat{ChatID: value.ChatID}), nil
+	}
+	return nil, kit.Fail("不支持的伪造对象")
 }
 
 // 语录中可选部分的时间预算。这些都不是命令的重点：没有头像、没有管理员
@@ -784,19 +938,14 @@ const (
 	tagBudget    = 10 * time.Second
 )
 
-// avatar 把作者的头像下载成 data URL，没有头像时返回 nil——
-// 没有头像的语录照样能渲染。
-func (s *yvluService) avatar(ctx context.Context, inv *command.Invocation, message *bot.Message, options *yvluOptions) *quotePhot {
+// avatar 把 peer 的头像下载成 data URL；peer 为 nil（比如隐藏了账号的转发来源）
+// 或没有头像时返回 nil——没有头像的语录照样能渲染。
+func (s *yvluService) avatar(ctx context.Context, inv *command.Invocation, peer tg.InputPeerClass) *quotePhot {
+	if peer == nil {
+		return nil
+	}
 	ctx, cancel := context.WithTimeout(ctx, avatarBudget)
 	defer cancel()
-	peer := options.FakeSender
-	if peer == nil {
-		resolved, ok := inv.Client.Peers().InputPeer(message.Sender)
-		if !ok {
-			return nil
-		}
-		peer = resolved
-	}
 	// 命中缓存就完全省掉一次跨数据中心的下载，
 	// 而一条语录的大部分时间正是花在这上面。
 	key := avatarKey(inv, peer)
@@ -867,6 +1016,14 @@ func (s *yvluService) describeMedia(ctx context.Context, inv *command.Invocation
 		if err == nil {
 			item.Media = &quotePhot{URL: "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(file.Data)}
 		}
+	case *tg.MessageMediaWebPage:
+		// 链接预览的图片：原插件经 teleproto 的 downloadMedia 取到它并嵌进语录。
+		// 预览带的文件（视频、动图）不嵌，只用图片。
+		if photo, ok := webPagePhoto(message.Raw, value); ok {
+			if file, err := inv.Client.DownloadMedia(ctx, photo, 8<<20); err == nil {
+				item.Media = &quotePhot{URL: "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(file.Data)}
+			}
+		}
 	case *tg.MessageMediaDocument:
 		document, ok := value.Document.(*tg.Document)
 		if !ok {
@@ -874,6 +1031,28 @@ func (s *yvluService) describeMedia(ctx context.Context, inv *command.Invocation
 		}
 		s.describeDocument(ctx, inv, message, document, item)
 	}
+}
+
+// webPagePhoto 把链接预览里的图片包装成一条照片消息，好交给 DownloadMedia；
+// 预览没有图片时返回 false。
+func webPagePhoto(message *tg.Message, preview *tg.MessageMediaWebPage) (*tg.Message, bool) {
+	page, ok := preview.Webpage.(*tg.WebPage)
+	if !ok {
+		return nil, false
+	}
+	photo, ok := page.GetPhoto()
+	if !ok {
+		return nil, false
+	}
+	value, ok := photo.(*tg.Photo)
+	if !ok {
+		return nil, false
+	}
+	media := &tg.MessageMediaPhoto{}
+	media.SetPhoto(value)
+	wrapped := &tg.Message{ID: message.ID, PeerID: message.PeerID}
+	wrapped.SetMedia(media)
+	return wrapped, true
 }
 
 func (s *yvluService) describeDocument(ctx context.Context, inv *command.Invocation, message *bot.Message, document *tg.Document, item *quoteMessage) {
@@ -1041,34 +1220,35 @@ func isStickerDocument(message *tg.Message) bool {
 	return false
 }
 
-// forwardAuthor 从转发消息的头部读出原作者；消息不是转发来的就返回 nil。
+// forwardAuthor 从转发消息的头部读出原作者，以及该用谁的头像；消息不是转发来的
+// 就返回 nil。
 //
 // 头部可能给出一个 peer，也可能只有一个名字：从隐藏了账号的人那里转发，
-// 只留下一个字符串，没有可解析的对象。两种情况都值得署名，所以连名字都
-// 没有时也要兜底，让语录保持真实，而不是悄悄算到转发者头上。
-func forwardAuthor(inv *command.Invocation, message *bot.Message) *quoteFrom {
+// 只留下一个字符串，没有可解析的对象，也就没有头像可用（origin 为 nil）。
+// 两种情况都值得署名，所以连名字都没有时也要兜底，让语录保持真实，而不是
+// 悄悄算到转发者头上。peer 在缓存里查不到时同样退回头部的名字，但保留它的 ID，
+// 和原插件解析失败时的做法一样。
+func forwardAuthor(inv *command.Invocation, message *bot.Message) (from *quoteFrom, origin tg.PeerClass) {
 	if message.Raw == nil {
-		return nil
+		return nil, nil
 	}
 	header, ok := message.Raw.GetFwdFrom()
 	if !ok {
-		return nil
+		return nil, nil
 	}
+	var id int64
 	if peer, ok := header.GetFromID(); ok {
 		switch value := peer.(type) {
 		case *tg.PeerUser:
-			info, _ := inv.Client.Peers().User(value.UserID)
-			name := strings.TrimSpace(info.FirstName + " " + info.LastName)
-			if name == "" {
-				name = info.Username
+			if info, known := inv.Client.Peers().User(value.UserID); known {
+				return userAuthor(value.UserID, info), peer
 			}
-			if name != "" || info.ID != 0 {
-				return &quoteFrom{ID: value.UserID, FirstName: info.FirstName, LastName: info.LastName,
-					Username: info.Username, Name: name}
-			}
+			id = value.UserID
 		case *tg.PeerChannel:
-			info, _ := inv.Client.Peers().Channel(value.ChannelID)
-			return &quoteFrom{ID: value.ChannelID, FirstName: info.Title, Name: info.Title, Username: info.Username}
+			if _, known := inv.Client.Peers().Channel(value.ChannelID); known {
+				return peerAuthor(inv, peer), peer
+			}
+			id = value.ChannelID
 		}
 	}
 	name := header.FromName
@@ -1081,7 +1261,10 @@ func forwardAuthor(inv *command.Invocation, message *bot.Message) *quoteFrom {
 	if name == "" {
 		name = "未知来源"
 	}
-	return &quoteFrom{ID: int64(nameHash(name)), FirstName: name, Name: name}
+	if id == 0 {
+		id = int64(nameHash(name))
+	}
+	return &quoteFrom{ID: id, FirstName: name, Name: name}, nil
 }
 
 // nameHash 给没有 ID 的作者一个稳定的 ID，这样在同一次生成里，
@@ -1099,7 +1282,7 @@ func nameHash(text string) int32 {
 
 // forwardLabel 给出转发消息的来源，用在正文上方那行小字 "forwarded from" 里。
 func forwardLabel(inv *command.Invocation, message *bot.Message) *quoteFwd {
-	from := forwardAuthor(inv, message)
+	from, _ := forwardAuthor(inv, message)
 	if from == nil {
 		return nil
 	}

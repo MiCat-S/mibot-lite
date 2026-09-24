@@ -219,27 +219,75 @@ func stamp(config *eatStamp, face, mark image.Image) image.Image {
 }
 
 // repliedImage 取被回复消息里的图片（.eat2）：照片、静态贴纸、图片文件直接用；
-// 视频贴纸、动态贴纸、视频用它们的缩略图。
+// 视频贴纸、动态贴纸、视频用它们的缩略图；链接预览用预览里的文件或图片。
 func repliedImage(ctx context.Context, client *bot.Client, reply *bot.Message) (image.Image, error) {
 	if reply.Raw == nil {
 		return nil, kit.Fail("请回复一条图片或贴纸")
 	}
-	if content, ok := reply.Raw.GetMedia(); ok {
+	source := reply.Raw
+	if wrapped, ok := webPageMedia(reply.Raw); ok {
+		source = wrapped
+	}
+	var document *tg.Document
+	if content, ok := source.GetMedia(); ok {
 		if value, ok := content.(*tg.MessageMediaDocument); ok {
-			if document, ok := value.Document.(*tg.Document); ok && !strings.HasPrefix(document.MimeType, "image/") {
-				return documentThumb(ctx, client, document)
-			}
+			document, _ = value.Document.(*tg.Document)
 		}
 	}
-	file, err := client.DownloadMedia(ctx, reply.Raw, 10<<20)
-	if err != nil {
+	if document != nil && !strings.HasPrefix(document.MimeType, "image/") {
+		return documentThumb(ctx, client, document)
+	}
+	file, downloadErr := client.DownloadMedia(ctx, source, 10<<20)
+	if downloadErr == nil {
+		if decoded, err := imaging.Decode(file.Data); err == nil {
+			return decoded, nil
+		}
+	}
+	// GIF、BMP、HEIC 这类解不了的图片文件，或者大到超过上限的，退回用文件的缩略图：
+	// 原插件对文件一律取缩略图，这些格式在那边本来就能用。
+	if document != nil {
+		return documentThumb(ctx, client, document)
+	}
+	if downloadErr != nil {
 		return nil, kit.Fail("请回复一条图片或贴纸")
 	}
-	decoded, err := imaging.Decode(file.Data)
-	if err != nil {
-		return nil, kit.Fail("这张图片解析不了")
+	return nil, kit.Fail("这张图片解析不了")
+}
+
+// webPageMedia 把链接预览里的文件或图片包装成一条普通的媒体消息，好交给 DownloadMedia。
+// 和 teleproto 的 downloadMedia 一样，预览带文件时用文件，否则用图片；消息不是链接预览，
+// 或者预览里两样都没有时返回 false。
+func webPageMedia(message *tg.Message) (*tg.Message, bool) {
+	content, ok := message.GetMedia()
+	if !ok {
+		return nil, false
 	}
-	return decoded, nil
+	preview, ok := content.(*tg.MessageMediaWebPage)
+	if !ok {
+		return nil, false
+	}
+	page, ok := preview.Webpage.(*tg.WebPage)
+	if !ok {
+		return nil, false
+	}
+	wrapped := &tg.Message{ID: message.ID, PeerID: message.PeerID}
+	if document, ok := page.GetDocument(); ok {
+		if value, ok := document.(*tg.Document); ok {
+			media := &tg.MessageMediaDocument{}
+			media.SetDocument(value)
+			wrapped.SetMedia(media)
+			return wrapped, true
+		}
+	}
+	if photo, ok := page.GetPhoto(); ok {
+		if value, ok := photo.(*tg.Photo); ok {
+			media := &tg.MessageMediaPhoto{}
+			media.SetPhoto(value)
+			wrapped.SetMedia(media)
+			return wrapped, true
+		}
+	}
+	return nil, false
 }
 
 // documentThumb 下载文档最大的一张缩略图。
