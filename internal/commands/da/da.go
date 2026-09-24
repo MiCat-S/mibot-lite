@@ -328,6 +328,7 @@ func (s *daService) run(ctx context.Context, client *bot.Client, slot *daSlot, i
 }
 
 // isAdmin 判断自己在这个群里能不能删别人的消息。普通群（非超级群）一律按不能处理。
+// 查自己的成员身份失败时，改查管理员列表（原版和 v2 都这样），两样都查不到才按普通成员处理。
 func (r *daRun) isAdmin() bool {
 	channel, ok := bot.InputChannel(r.peer)
 	if !ok {
@@ -336,12 +337,42 @@ func (r *daRun) isAdmin() bool {
 	result, err := r.api.ChannelsGetParticipant(r.ctx, &tg.ChannelsGetParticipantRequest{Channel: channel, Participant: &tg.InputPeerSelf{}})
 	if err != nil {
 		r.logger.Warn("da.permission", slog.String("error", err.Error()))
-		return false
+		return r.inAdminList(channel)
 	}
 	r.client.Peers().RememberUsers(result.Users)
 	switch result.Participant.(type) {
 	case *tg.ChannelParticipantAdmin, *tg.ChannelParticipantCreator:
 		return true
+	}
+	return false
+}
+
+// inAdminList 读管理员列表的第一页（100 人，同原版），看自己在不在里面。
+// 原版看应答里的 users；这里看成员条目，users 里还会带上提拔别人的人，不一定是管理员。
+func (r *daRun) inAdminList(channel *tg.InputChannel) bool {
+	result, err := r.api.ChannelsGetParticipants(r.ctx, &tg.ChannelsGetParticipantsRequest{
+		Channel: channel, Filter: &tg.ChannelParticipantsAdmins{}, Offset: 0, Limit: 100})
+	if err != nil {
+		r.logger.Warn("da.permission_fallback", slog.String("error", err.Error()))
+		return false
+	}
+	list, ok := result.(*tg.ChannelsChannelParticipants)
+	if !ok {
+		return false
+	}
+	r.client.Peers().RememberUsers(list.Users)
+	self := r.client.SelfID()
+	for _, participant := range list.Participants {
+		switch value := participant.(type) {
+		case *tg.ChannelParticipantAdmin:
+			if value.UserID == self {
+				return true
+			}
+		case *tg.ChannelParticipantCreator:
+			if value.UserID == self {
+				return true
+			}
+		}
 	}
 	return false
 }
