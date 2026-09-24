@@ -28,6 +28,7 @@ import (
 // 列出的命令能借出去，其余只限本人；以后新加的命令默认也不能借，要借得在表里写明。
 
 // delegable 是能借出去的命令，值是其中只限本人的子命令（第一个参数）。
+// 子命令多的命令（sum、speedtest）改在 delegableUse 里只列能借的用法。
 //
 // 不在表里的，按类别：
 //   - 管授权的：sudo、sure。
@@ -39,17 +40,41 @@ import (
 //   - 会暴露主机信息的：sysinfo（显示主机名）。
 var delegable = map[string][]string{
 	"ping": nil, "help": nil, "h": nil, "version": nil, "ver": nil, "status": nil, "memory": nil,
-	"calc": nil, "rate": nil, "whois": nil, "tr": nil, "gt": nil, "ip": nil, "bin": nil, "ids": nil, "dc": nil,
+	"calc": nil, "rate": nil, "tr": nil, "gt": nil, "ip": nil, "bin": nil, "ids": nil, "dc": nil,
 	"re":        nil,
-	"speedtest": {"set", "clear", "auto", "自动"},
-	"st":        {"set", "clear", "auto", "自动"},
-	"yvlu":      {"config"},
+	"speedtest": nil,
+	"st":        nil,
+	"yvlu":      {"config", "s"},
+	"whois":     {"clear", "history"},
 	"eatgif":    {"clear"},
 	"eat":       {"set"},
 	"eat2":      {"set"},
 	"ai":        {"config", "model", "reasoning", "service", "prompt", "collapse", "timeout", "telegraph"},
-	"sum":       {"config", "list", "run", "del", "disable", "enable", "add"},
+	"sum":       nil,
 	"ban":       nil, "unban": nil, "kick": nil, "mute": nil, "unmute": nil,
+}
+
+// delegableUse 是子命令多、以后还会加的命令：不列「不能借的」，只列能借的用法，
+// 其余一律只限本人，新加的子命令默认也借不出去。
+var delegableUse = map[string]func(first string) bool{
+	// .sum 或 .sum 数量：总结当前群。任务、配置、调试都只限本人。
+	"sum": func(first string) bool { return first == "" || isNumber(first) },
+	// .speedtest、.speedtest 服务器编号、.speedtest list：测一次速、看服务器列表。
+	"speedtest": speedtestUse,
+	"st":        speedtestUse,
+}
+
+func speedtestUse(first string) bool {
+	switch first {
+	case "", "list", "servers", "列表", "help", "h":
+		return true
+	}
+	return isNumber(first)
+}
+
+func isNumber(value string) bool {
+	_, err := strconv.Atoi(value)
+	return err == nil
 }
 
 // delegationAllowed 判断一条命令能不能借出去。按别名展开后的真实命令判断。
@@ -58,7 +83,14 @@ func delegationAllowed(route command.Route) bool {
 	if !ok {
 		return false
 	}
-	return len(route.Args) == 0 || !slices.Contains(ownerOnly, strings.ToLower(route.Args[0]))
+	first := ""
+	if len(route.Args) > 0 {
+		first = strings.ToLower(route.Args[0])
+	}
+	if use, ok := delegableUse[route.Command]; ok {
+		return use(first)
+	}
+	return first == "" || !slices.Contains(ownerOnly, first)
 }
 
 // Delegable 按字母顺序列出能借出去的命令，包括简写。

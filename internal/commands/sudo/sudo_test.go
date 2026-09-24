@@ -36,7 +36,7 @@ func TestSureRuleMatching(t *testing.T) {
 // 能不能借按别名展开之后的真实命令判断；改设置的子命令只限本人，大小写不影响。
 func TestDelegationAllowed(t *testing.T) {
 	registry := command.New([]string{"."}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	for _, name := range []string{"ping", "da", "ai", "sudo", "sb"} {
+	for _, name := range []string{"ping", "da", "ai", "sudo", "sb", "sum", "speedtest", "yvlu", "whois"} {
 		registry.Register(&command.Command{Name: name})
 	}
 	registry.SetAliases(map[string]string{"wipe": "da true", "p": "ping", "key": "ai config key"})
@@ -44,6 +44,11 @@ func TestDelegationAllowed(t *testing.T) {
 		".ping": true, ".p": true, ".ai 你好": true,
 		".da true": false, ".wipe": false, ".sudo add 1": false, ".sb 1": false,
 		".ai config key x": false, ".ai CONFIG": false, ".key x": false,
+		// sum、speedtest 只借得出平常的用法，管理类子命令（包括以后新加的）都不行。
+		".sum": true, ".sum 200": true, ".sum now": false, ".sum edit 1 prompt x": false, ".sum ls": false, ".sum nosuch": false,
+		".speedtest": true, ".speedtest 12345": true, ".speedtest list": true,
+		".speedtest fix": false, ".speedtest set 1": false, ".speedtest diagnose": false,
+		".yvlu": true, ".yvlu 3": true, ".yvlu s": false, ".whois a.com": true, ".whois history": false,
 	} {
 		route, ok := registry.Parse(text)
 		if !ok {
