@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/MiCat-S/mibot-lite/internal/app"
@@ -78,28 +77,35 @@ func RegisterAll(a *app.App) {
 	sudo.Register(a)
 }
 
-// miboxFiles 把 MiBox 插件的数据文件映射到 data/ 下的文件名。JSON 结构
-// 和 MiBox 插件写的一样，所以原样复制即可。
-var miboxFiles = map[string]string{
-	"assets/ai/config.json":                     "ai.json",
-	"assets/sum/database.json":                  "sum.json",
-	"assets/da/database.json":                   "da.json",
-	"assets/dme/config.json":                    "dme.json",
-	"assets/whois/data.json":                    "whois.json",
-	"assets/aban/aban_cache.json":               "aban.json",
-	"assets/autochangename/autochangename.json": "acn.json",
-	"assets/yvlu/config.json":                   "yvlu.json",
-	"assets/t/tts_data.json":                    "t.json",
-	"assets/sticker/config.json":                "sticker.json",
+// miboxImport 是一项迁移：MiBox 部署里的源文件、data/ 下的目标文件名，以及格式不同时的
+// 转换函数（为 nil 表示格式相同，原样复制）。
+type miboxImport struct {
+	source, target string
+	convert        func([]byte) ([]byte, error)
 }
 
-// converters 是要先转换格式再写入的 MiBox 数据：源文件 → (data/ 下的文件名, 转换函数)。
-var converters = map[string]struct {
-	target  string
-	convert func([]byte) ([]byte, error)
-}{
+// miboxImports 按顺序处理；同一个目标有 v2 和 v1 两个来源时，v2 排在前面，
+// 目标写过一次后面的就跳过——v2 的数据更新，而且 v2 启动时已经并入过 v1 的。
+var miboxImports = []miboxImport{
+	{source: "assets/ai/config.json", target: "ai.json"},
+	{source: "assets/sum/database.json", target: "sum.json"},
+	{source: "assets/da/database.json", target: "da.json"},
+	{source: "assets/dme/config.json", target: "dme.json"},
+	// whois 只带得过来历史和 24 小时缓存；v2 的实际数据在 records.sqlite，不迁。
+	{source: "assets/whois/whois_data.json", target: "whois.json"},
+	{source: "assets/whois/data.json", target: "whois.json"},
+	{source: "assets/aban/aban_cache.json", target: "aban.json"},
+	{source: "assets/autochangename/autochangename.json", target: "acn.json"},
+	{source: "assets/yvlu/config.json", target: "yvlu.json"},
+	{source: "assets/t/tts_data.json", target: "t.json"},
+	{source: "assets/sticker/config.json", target: "sticker.json"},
+	// save：v2 存在自己的 config.json，v1 存在 prometheus 目录下，格式都要转换。
+	{source: "assets/save/config.json", target: "save.json", convert: save.ConvertMiBox},
+	{source: "assets/prometheus/config.json", target: "save.json", convert: save.ConvertMiBox},
+	{source: "assets/speedtest/v2-config.json", target: "speedtest.json", convert: speedtest.ConvertMiBox},
+	{source: "assets/speedtest/speedtest.json", target: "speedtest.json", convert: speedtest.ConvertMiBox},
 	// 别名在 MiBox 里存在 SQLite 表 aliases(original, final)。
-	"assets/alias/alias.db": {"alias.json", func(raw []byte) ([]byte, error) {
+	{source: "assets/alias/alias.db", target: "alias.json", convert: func(raw []byte) ([]byte, error) {
 		aliases, err := mibox.Aliases(raw)
 		if err != nil {
 			return nil, err
@@ -115,20 +121,12 @@ func ImportMiBox(miboxRoot, dataDir string, out io.Writer) error {
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return err
 	}
-	type job struct {
-		source, target string
-		convert        func([]byte) ([]byte, error)
-	}
-	var jobs []job
-	for source, target := range miboxFiles {
-		jobs = append(jobs, job{source: source, target: target})
-	}
-	for source, converter := range converters {
-		jobs = append(jobs, job{source: source, target: converter.target, convert: converter.convert})
-	}
-	sort.Slice(jobs, func(i, j int) bool { return jobs[i].source < jobs[j].source })
 	imported := 0
-	for _, item := range jobs {
+	written := map[string]bool{}
+	for _, item := range miboxImports {
+		if written[item.target] {
+			continue
+		}
 		raw, err := os.ReadFile(filepath.Join(miboxRoot, item.source))
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -156,6 +154,7 @@ func ImportMiBox(miboxRoot, dataDir string, out io.Writer) error {
 		if err := os.WriteFile(destination, raw, 0o600); err != nil {
 			return err
 		}
+		written[item.target] = true
 		fmt.Fprintf(out, "imported %s -> %s\n", item.source, destination)
 		imported++
 	}

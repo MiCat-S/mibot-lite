@@ -52,6 +52,9 @@ func TestImportMiBox(t *testing.T) {
 	write(filepath.Join(mibox, "assets/dme/config.json"), []byte(`{"x":1}`))
 	write(filepath.Join(mibox, ".env"), []byte("TB_PREFIX=\"!  ！\"\n"))
 	write(filepath.Join(root, ".env"), []byte("# 已有的\nOTHER=1\n"))
+	// v2 和 v1 的测速设置都在时用 v2 的。
+	write(filepath.Join(mibox, "assets/speedtest/v2-config.json"), []byte(`{"default_server_id": 222}`))
+	write(filepath.Join(mibox, "assets/speedtest/speedtest.json"), []byte(`{"default_server_id": 111}`))
 
 	var log strings.Builder
 	if err := ImportMiBox(mibox, filepath.Join(root, "data"), &log); err != nil {
@@ -66,6 +69,9 @@ func TestImportMiBox(t *testing.T) {
 	}
 	if raw, _ := os.ReadFile(filepath.Join(root, "data", "dme.json")); string(raw) != `{"x":1}` {
 		t.Errorf("原样复制的文件不对：%q", raw)
+	}
+	if raw, _ := os.ReadFile(filepath.Join(root, "data", "speedtest.json")); !strings.Contains(string(raw), "222") {
+		t.Errorf("测速设置应取 v2 的：%s", raw)
 	}
 	env, _ := os.ReadFile(filepath.Join(root, ".env"))
 	if !strings.Contains(string(env), "MIBOT_PREFIX=! ！") || !strings.Contains(string(env), "OTHER=1") {
