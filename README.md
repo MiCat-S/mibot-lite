@@ -1,5 +1,7 @@
 # MiBot Lite
 
+**简体中文** | [English](README.en.md) | [繁體中文](README.zh-TW.md) | [日本語](README.ja.md)
+
 一个省内存的 Telegram UserBot：一个静态 Go 二进制，命令编译在程序里，状态存成 JSON 文件。
 
 它是 [MiBox](https://github.com/MiCat-S/Mi-Box) 的轻量替身：账号、会话、`config.json` 和命令名都一样，
