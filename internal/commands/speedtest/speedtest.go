@@ -16,7 +16,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -261,12 +263,62 @@ func extractOokla(archive []byte, target string) (string, error) {
 	return "", kit.Fail("Ookla CLI 压缩包里没有可执行文件")
 }
 
+// cliFailure 是测速工具以非零状态退出。
+//
+// Explained 是发进聊天的那句话，其余字段写进日志：以前日志里只剩一句
+// "ookla failed: exit status 2"，是哪台服务器、为什么失败都看不出来。
+type cliFailure struct {
+	Kind string
+	Exit error
+	// Detail 是从两路输出里拣出来的原因原文，可能为空。
+	Detail string
+	// Tested、TestedName 是 CLI 实际连上的服务器，取自 jsonl 的 testStart；没走到那一步时为零值。
+	Tested     int
+	TestedName string
+	// TimedOut 表示是本命令等不及把它杀掉的，不是它自己退出的。
+	TimedOut bool
+	// Explained 为空时，聊天里只说「测速失败」。
+	Explained string
+}
+
+func (e *cliFailure) Error() string {
+	text := e.Kind + " failed"
+	if e.Tested > 0 {
+		text += " on server " + strconv.Itoa(e.Tested)
+	}
+	text += ": " + e.Exit.Error()
+	if e.Detail != "" {
+		text += ": " + e.Detail
+	}
+	return text
+}
+
+// Unwrap 让 kit.IsUserError 取得 Explained，errors.Is 也还能认出原来的退出错误。
+func (e *cliFailure) Unwrap() []error {
+	if e.Explained == "" {
+		return []error{e.Exit}
+	}
+	return []error{e.Exit, kit.Fail(e.Explained)}
+}
+
+// retryable 判断换一次服务器再测有没有意义：被限流、等超时之后再测，只会更糟、更慢。
+func (e *cliFailure) retryable() bool {
+	if e.TimedOut {
+		return false
+	}
+	reason, ok := reasonFor(e.Detail)
+	return !ok || reason.retry
+}
+
 // runExternal 调用已安装的 speedtest 工具。
 //
 // home 是允许该工具存放自身状态的目录。这一点很关键：Ookla CLI 要读
 // $HOME 来找它记录许可协议的位置，而在本服务的沙箱里 $HOME 没有设置，
 // 它扛不住——还没开始测就因为一个空字符串直接中止。给它一个自己可写的
 // 目录，也能避免 ProtectSystem=strict 把它搞坏。
+//
+// Ookla 用 jsonl 格式跑：结果还是最后一行，前面多了进度记录，其中 testStart 记着
+// 它自动挑中的服务器。测到一半失败时，要靠这个知道该避开哪一台。
 func runExternal(ctx context.Context, path, kind, home string, server int) (*reading, error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
@@ -276,7 +328,7 @@ func runExternal(ctx context.Context, path, kind, home string, server int) (*rea
 	var arguments []string
 	switch kind {
 	case "ookla":
-		arguments = []string{"-f", "json", "--accept-license", "--accept-gdpr"}
+		arguments = []string{"-f", "jsonl", "--accept-license", "--accept-gdpr"}
 		if server > 0 {
 			arguments = append(arguments, "-s", strconv.Itoa(server))
 		}
@@ -288,26 +340,55 @@ func runExternal(ctx context.Context, path, kind, home string, server int) (*rea
 	}
 	tool := exec.CommandContext(ctx, path, arguments...)
 	tool.Env = append(os.Environ(), "HOME="+home)
-	// 两路输出都留着：工具会在 stderr 上说明失败原因，
-	// 只有一句 "exit status 2" 的话，看不出真正的原因。
 	var out, complaint bytes.Buffer
 	tool.Stdout = &out
 	tool.Stderr = &complaint
 	if err := tool.Run(); err != nil {
-		if detail := lastLine(complaint.String()); detail != "" {
-			return nil, kit.Failf("%s", explainCLI(detail))
+		failure := &cliFailure{Kind: kind, Exit: err, Detail: failureDetail(out.String(), complaint.String())}
+		failure.Tested, failure.TestedName = testedServer(out.Bytes())
+		switch {
+		case errors.Is(ctx.Err(), context.DeadlineExceeded):
+			failure.TimedOut = true
+			failure.Explained = "测速两分钟还没测完，已经中止，稍后再试或换一台服务器"
+		case failure.Detail != "":
+			failure.Explained = explainCLI(failure.Detail)
 		}
-		return nil, fmt.Errorf("%s failed: %w", kind, err)
+		return nil, failure
 	}
 	return parseResult(kind, out.Bytes())
 }
 
+// testedServer 从 jsonl 输出的 testStart 记录里取出 CLI 连的服务器。
+func testedServer(output []byte) (int, string) {
+	for _, line := range strings.Split(string(output), "\n") {
+		var record struct {
+			Type   string `json:"type"`
+			Server struct {
+				ID       int    `json:"id"`
+				Name     string `json:"name"`
+				Location string `json:"location"`
+			} `json:"server"`
+		}
+		if json.Unmarshal([]byte(strings.TrimSpace(line)), &record) == nil && record.Type == "testStart" {
+			return record.Server.ID, strings.TrimSpace(record.Server.Name + " " + record.Server.Location)
+		}
+	}
+	return 0, ""
+}
+
 // parseResult 把工具的输出换成 reading。kind 是 "ookla" 或 "python"。
 func parseResult(kind string, output []byte) (*reading, error) {
-	// Ookla 每行输出一个 JSON 对象，最后一行是结果。
-	line := output
-	if index := strings.LastIndexByte(strings.TrimSpace(string(output)), '\n'); index >= 0 {
-		line = []byte(strings.TrimSpace(string(output))[index+1:])
+	// Ookla 每行输出一个 JSON 对象，type 为 result 的那行是结果，正常情况下就是最后一行。
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	line := []byte(strings.TrimSpace(lines[len(lines)-1]))
+	for i := len(lines) - 1; i >= 0; i-- {
+		var record struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal([]byte(strings.TrimSpace(lines[i])), &record) == nil && record.Type == "result" {
+			line = []byte(strings.TrimSpace(lines[i]))
+			break
+		}
 	}
 
 	if kind == "ookla" {
@@ -366,7 +447,7 @@ func listServers(ctx context.Context, path, home string) ([]speedServer, error) 
 	tool.Stdout = &out
 	tool.Stderr = &complaint
 	if err := tool.Run(); err != nil {
-		if detail := lastLine(complaint.String()); detail != "" {
+		if detail := failureDetail(out.String(), complaint.String()); detail != "" {
 			return nil, kit.Fail("取服务器列表失败：" + explainCLI(detail))
 		}
 		return nil, fmt.Errorf("speedtest -L failed: %w", err)
@@ -462,47 +543,98 @@ func resultImage(ctx context.Context, link string) []byte {
 	return response.Body
 }
 
-// lastLine 返回最后一个非空行，这些工具放弃时就把原因写在那里。
+// logStamp 是 Ookla 纯文本日志行开头的 "[2026-09-26 09:23:48.288] [error] "。
+var logStamp = regexp.MustCompile(`^(\[[^\]]*\]\s*)+`)
+
+// failureDetail 从 CLI 的两路输出里拣出失败原因，按出现顺序去重后用「; 」连起来。
 //
-// Ookla 把这一行写成一条 JSON 日志记录。其中的 message 字段是一句人看了
-// 就知道该怎么办的话（"Could not retrieve or read configuration"）；
-// 外面那层 JSON 在聊天里只是噪音，所以能解析时就拆出来，解析不了就原样
-// 保留。
-func lastLine(text string) string {
-	lines := strings.Split(strings.TrimSpace(text), "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
+// Ookla 的原因不总在同一个地方：多数错误是 stderr 上的一条 JSON 日志记录；被限流时
+// 是 stderr 上的几行纯文本；测到一半连接被对端重置时，只在 stdout 打一行
+// {"error":"Cannot write: "}，stderr 是空的。以前只看 stderr 的最后一行，最后这种
+// 失败就只剩一句 exit status 2，聊天里也只能回「测速失败」。
+//
+// JSON 记录只取 error 字段或 message 字段，外面那层包装在聊天里只是噪音；进度记录
+// 和 info 级别的日志不算原因。
+func failureDetail(stdout, stderr string) string {
+	var reasons, prose []string
+	add := func(text string) {
+		if text = strings.TrimSpace(text); text != "" && !slices.Contains(reasons, text) {
+			reasons = append(reasons, text)
+		}
+	}
+	for _, line := range strings.Split(stdout+"\n"+stderr, "\n") {
+		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
 		var record struct {
+			Error   string `json:"error"`
 			Message string `json:"message"`
+			Level   string `json:"level"`
 		}
-		if err := json.Unmarshal([]byte(line), &record); err == nil && record.Message != "" {
-			line = record.Message
+		if json.Unmarshal([]byte(line), &record) != nil {
+			prose = append(prose, logStamp.ReplaceAllString(line, ""))
+			continue
 		}
-		if len(line) > 200 {
-			line = line[:200] + "…"
+		switch {
+		case record.Error != "":
+			add(record.Error)
+		case record.Message != "" && record.Level != "info" && record.Level != "debug":
+			add(record.Message)
 		}
-		return line
 	}
-	return ""
+	// 纯文本的一段话被折成了好几行，拼回一句。
+	add(strings.Join(prose, " "))
+	detail := strings.Join(reasons, "; ")
+	if runes := []rune(detail); len(runes) > 300 {
+		detail = string(runes[:300]) + "…"
+	}
+	return detail
 }
 
-// explainCLI 把 CLI 自己的措辞换成能照着做的提示。
+// cliReason 是一类已知的失败：markers 里任何一句出现在原因里就算，retry 表示换台服务器
+// 再测有没有意义。
+type cliReason struct {
+	markers []string
+	text    string
+	retry   bool
+}
+
+// cliReasons 把 CLI 自己的措辞换成能照着做的提示，按顺序匹配，排在前面的优先。
 //
-// 这两种情况都真实遇到过。一个下午里测了很多次之后，这台主机被 Ookla 的
-// 配置接口拒绝，这时的报错是 "ConfigurationError"，看起来像是安装坏了，
-// 而不是「等一会儿再试」。列表里的服务器不应答时报的是 "Cannot read from
-// socket"，看起来像本地网络故障，而不是「换一台」。
+// 这几种都真实遇到过：
+//   - 短时间内测得太多，Ookla 退出码 173，stderr 上写 "Limit reached"；更早的版本
+//     是配置接口拒绝，报 "ConfigurationError"，看起来像是安装坏了，其实是「等一会儿再试」。
+//     这两种都是整台机器被限流，换服务器也一样，所以不重试。
+//   - 指定的 ID 不存在时报 "Configuration - No servers defined (NoServersException)"，
+//     也带着 Configuration，所以要排在限流那条前面，否则会被说成限流。
+//   - 列表里的服务器不应答时报 "Cannot read from socket"，看起来像本地网络故障，
+//     其实是「换一台」。
+//   - 测到一半对端重置连接（errno 104）时只有 "Cannot read: " 或 "Cannot write: "，
+//     某些服务器约三四次就有一次，重测多半又自动挑中它，所以要换一台。
+var cliReasons = []cliReason{
+	{markers: []string{"Limit reached", "Too many requests"}, text: "测得太频繁，被 Speedtest 限流了，过一阵再试"},
+	{markers: []string{"NoServersException", "No servers defined"}, text: "找不到指定的测速服务器，ID 可能不对或已经下线", retry: true},
+	{markers: []string{"Configuration"}, text: "Speedtest 暂时拒绝了这台机器的请求，通常是短时间内测得太频繁，过一阵再试"},
+	{markers: []string{"Cannot read from socket", "Latency test failed"}, text: "这个服务器现在连不上，换一个 ID 或用自动挑选", retry: true},
+	{markers: []string{"Cannot read:", "Cannot write:", "Connection reset", "Broken pipe"}, text: "测速服务器测到一半断开了连接，稍后再试，或换一台服务器固定下来", retry: true},
+}
+
+func reasonFor(detail string) (cliReason, bool) {
+	for _, reason := range cliReasons {
+		for _, marker := range reason.markers {
+			if strings.Contains(detail, marker) {
+				return reason, true
+			}
+		}
+	}
+	return cliReason{}, false
+}
+
+// explainCLI 返回原因对应的提示，认不出来就原样给出原因。
 func explainCLI(detail string) string {
-	switch {
-	case strings.Contains(detail, "Configuration"):
-		return "Speedtest 暂时拒绝了这台机器的请求，通常是短时间内测得太频繁，过一阵再试"
-	case strings.Contains(detail, "Cannot read from socket"), strings.Contains(detail, "Latency test failed"):
-		return "这个服务器现在连不上，换一个 ID 或用自动挑选"
-	case strings.Contains(detail, "NoServersException"):
-		return "找不到可用的测速服务器"
+	if reason, ok := reasonFor(detail); ok {
+		return reason.text
 	}
 	return detail
 }
@@ -636,7 +768,8 @@ func speedtestHelp(dataDir, prefix string, pinned int) string {
 		"\n\n<b>当前服务器</b>\n" + command.Escape(server) +
 		"\n\n用 Ookla 官方 CLI 测：它自己挑就近的测速服务器，报得出 ISP，还会给一张结果图。没装的话首次" +
 		"运行会把官方静态构件下载到部署目录（校验 SHA-256，不写系统目录），之后直接复用。\n\n" +
-		"指定的服务器测不通时会自动退回自动挑选，并在结果里说明。输出里的出口地址会打码。"
+		"指定的服务器测不通时会自动退回自动挑选；自动挑到的服务器测到一半断开时，会换最近的另一台重测，" +
+		"两种情况都会在结果里说明。被 Speedtest 限流时不重试。输出里的出口地址会打码。"
 }
 
 // render 排版一次完成的测量结果。
@@ -791,23 +924,50 @@ func (s *speedtester) list(ctx context.Context, inv *command.Invocation) error {
 	return inv.Edit(ctx, renderServers(servers, s.pinned(), inv.Prefix))
 }
 
-// measure 跑一次测速，失败了重试一次。
+// measure 跑一次测速，失败了换台服务器重试一次。
 //
 // CLI 偶尔会中途丢掉服务器（报 "Latency test failed"，这台机器上见过两次），
 // 固定的服务器也可能已经下线，所以重试时顺便放弃固定、改用自动挑选，
-// 而不是因为几天前选的服务器不在了就整个失败。返回的 note 说明发生过这种退回。
+// 而不是因为几天前选的服务器不在了就整个失败。
+//
+// 本来就是自动挑选时，再自动挑一次多半还是同一台：它按延迟挑，刚才那台照样最快。
+// 有的服务器三四次里就有一次测到一半断开，两次都挑中它，就两次都失败。所以
+// 知道刚才连的是哪台时，改测列表里离得最近的另一台。
+//
+// 被限流或等超时的失败不重试。返回的 note 说明发生过的退回或换台。
 func (s *speedtester) measure(ctx context.Context, inv *command.Invocation, tool, kind string, server int) (*reading, string, error) {
 	result, err := runExternal(ctx, tool, kind, s.home(), server)
 	if err == nil {
 		return result, "", nil
 	}
-	inv.Log.Warn("speedtest.retrying", "tool", kind, "server", server, "error", err.Error())
-	note := ""
-	if server > 0 {
+	var failure *cliFailure
+	if errors.As(err, &failure) && !failure.retryable() {
+		return nil, "", err
+	}
+	next, note := 0, ""
+	switch {
+	case server > 0:
 		note = "服务器 " + strconv.Itoa(server) + " 没测通，已改用自动挑选。换一台用 " +
 			inv.Prefix + "speedtest list，取消固定用 " + inv.Prefix + "speedtest clear"
+	case failure != nil && failure.Tested > 0 && kind == "ookla":
+		if servers, err := listServers(ctx, tool, s.home()); err == nil {
+			for _, candidate := range servers {
+				if candidate.ID != failure.Tested {
+					next = candidate.ID
+					break
+				}
+			}
+		}
+		if next > 0 {
+			dropped := failure.TestedName
+			if dropped == "" {
+				dropped = "服务器"
+			}
+			note = "自动挑到的 " + dropped + "（" + strconv.Itoa(failure.Tested) + "）没测完，已换一台重测"
+		}
 	}
-	result, err = runExternal(ctx, tool, kind, s.home(), 0)
+	inv.Log.Warn("speedtest.retrying", "tool", kind, "server", server, "next", next, "error", err.Error())
+	result, err = runExternal(ctx, tool, kind, s.home(), next)
 	return result, note, err
 }
 
