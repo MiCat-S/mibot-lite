@@ -140,13 +140,13 @@ systemctl status mibot-lite     # 看状态
 | `MIBOT_SERVICE` | `.restart` 要重启的 unit 名 | `mibot-lite.service` |
 | `MIBOT_UPDATE_REPO` | `.update` 读的 GitHub 仓库 | `MiCat-S/mibot-lite` |
 
-`.eatgif` 和 `.yvlu` 生成视频贴纸需要主机装有 ffmpeg（带 libvpx-vp9）：
+`.eatgif`、`.eat`、`.eat2`、`.t` 需要主机装有 ffmpeg（要带 libvpx-vp9、libwebp、libopus、libmp3lame，Debian/Ubuntu 的 ffmpeg 包都带），`.yvlu` 引用视频时也要用：
 
 ```sh
 apt install -y ffmpeg
 ```
 
-没装的话这两条命令会明确报「ffmpeg 不可用」，其余命令不受影响。
+没装的话这几条命令会明确报「ffmpeg 不可用」（`.yvlu` 改为用文字描述视频），其余命令不受影响。
 
 AI、汇率等命令的配置在 Telegram 里用命令完成，见 `.help ai`、`.help sum`。
 **涉及 API Key 的命令请在「收藏夹」里执行**，别在群里。
@@ -168,8 +168,12 @@ AI、汇率等命令的配置在 Telegram 里用命令完成，见 `.help ai`、
 
 ## 9. 内存
 
-服务单元里设了 `MemoryHigh=128M`、`MemoryMax=192M`。正常运行远低于这个数，
-限额的作用是把泄漏变成一次重启，而不是让机器开始换页。
+服务单元里只设了 `MemoryMax=512M`，没有 `MemoryHigh`。程序常驻 30–50 MB，限额留的余量是给
+生成贴纸时临时起的 ffmpeg 子进程的，它跑几秒钟就要一百多 MB；真撞到 512M 说明确实出了问题，
+这时进程会被杀掉重启，而不是让机器开始换页。
+
+不设 `MemoryHigh` 是踩过坑的：它超了不会失败，只会反复强制回收，把进程拖到跑不完。以前设过
+`MemoryHigh=128M`，一次 `.eatgif` 编码里触发了一万四千多次，编码没跑完就超时了，也没留下错误信息。
 
 实际占用用 `.memory` 或 `.status` 看，机器侧用：
 
