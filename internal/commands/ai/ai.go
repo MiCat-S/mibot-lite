@@ -360,7 +360,7 @@ func (s *Service) level(ctx context.Context, inv *command.Invocation, sub string
 			if sub == "service" {
 				chat, search = cfg.CurrentChatServiceTier, cfg.CurrentSearchServiceTier
 			}
-			return "💭 <b>当前" + label + ":</b>\n\nchat: " + command.Code(chat) + "\nsearch: " + command.Code(search)
+			return "💭 <b>当前" + label + "</b>\n\nchat: " + command.Code(chat) + "\nsearch: " + command.Code(search)
 		})
 	}
 	mode, value := strings.ToLower(inv.Arg(1)), strings.ToLower(inv.Arg(2))

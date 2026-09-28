@@ -310,7 +310,7 @@ func (s *eatgifService) clear(ctx context.Context, inv *command.Invocation) erro
 	s.mu.Lock()
 	s.catalog, s.catalogAt = nil, time.Time{}
 	s.mu.Unlock()
-	return inv.EditText(ctx, "缓存已清理并将在下次请求时刷新")
+	return inv.EditText(ctx, "✅ 已清理素材缓存，下次使用时重新下载")
 }
 
 // list 按名称列出全部动画。
@@ -320,9 +320,9 @@ func (s *eatgifService) list(ctx context.Context, inv *command.Invocation, catal
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	lines := []string{"🎬 <b>头像动画贴纸</b>", command.Code(inv.Prefix+"eatgif 名称") + "（需回复目标）", ""}
+	lines := []string{"🎬 <b>头像动画贴纸</b>", "回复一条消息发 " + command.Code(inv.Prefix+"eatgif 名称") + " 生成", ""}
 	for _, name := range names {
-		lines = append(lines, "• "+command.Code(name)+" - "+command.Escape(catalog[name].Desc))
+		lines = append(lines, "• "+command.Code(name)+" "+command.Escape(catalog[name].Desc))
 	}
 	return inv.EditPages(ctx, command.HTMLPages(strings.Join(lines, "\n"), command.PageLimit))
 }
