@@ -1,14 +1,9 @@
-// Package kit 是各命令共用的小工具：显示给用户的错误、按命令存放的 JSON 文档、
-// 分页发送、FLOOD_WAIT 重试、按 UTF-16 计算长度等。
+// Package kit 是各命令共用的小工具：显示给用户的错误和用法、进行中的提示、按命令存放的
+// JSON 文档、分页发送、长时间限流的重试、按 UTF-16 计算长度等。
 package kit
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"io"
-	"net/http"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -20,7 +15,6 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/app"
 	"github.com/MiCat-S/mibot-lite/internal/bot"
 	"github.com/MiCat-S/mibot-lite/internal/command"
-	"github.com/MiCat-S/mibot-lite/internal/httpx"
 	"github.com/MiCat-S/mibot-lite/internal/store"
 	"github.com/MiCat-S/mibot-lite/internal/sysinfo"
 )
@@ -126,6 +120,9 @@ func Sleep(ctx context.Context, d time.Duration) error {
 
 // RetryFlood 执行 fn：遇到 FLOOD_WAIT 就等够规定的时间，遇到其他错误则
 // 退避，最多重试 attempts 次。
+//
+// 连接层的 bot.Retrier 已经会等 60 秒以内的限流、重试服务端错误；这里是给 .dme 批量删除用的：
+// 删几千条消息时限流常常超过 60 秒，别的暂时性错误也值得再试，重试次数照 MiBox 由配置决定。
 func RetryFlood(ctx context.Context, attempts int, fn func() error) error {
 	for attempt := 0; ; attempt++ {
 		err := fn()
@@ -141,9 +138,6 @@ func RetryFlood(ctx context.Context, attempts int, fn func() error) error {
 		}
 	}
 }
-
-// RPCCode 从错误里取出 Telegram 错误码，取不到就给一段简短描述。
-func RPCCode(err error) string { return command.Brief(err) }
 
 // UTF16Slice 按 UTF-16 偏移截取字符串，Telegram 的 entity 用的就是这个单位。
 func UTF16Slice(text string, offset, length int) string {
@@ -183,6 +177,7 @@ func TruncateRunes(text string, n int) string {
 	return string(runes[:n])
 }
 
+// MessageID 是任意一种消息（普通、服务、空）的编号。
 func MessageID(item tg.MessageClass) int {
 	switch value := item.(type) {
 	case *tg.Message:
@@ -195,6 +190,7 @@ func MessageID(item tg.MessageClass) int {
 	return 0
 }
 
+// Clamp 把 value 限制在 [low, high] 里。
 func Clamp(value, low, high int) int {
 	if value < low {
 		return low
@@ -205,6 +201,7 @@ func Clamp(value, low, high int) int {
 	return value
 }
 
+// OrDefault 在 value 只有空白时返回 fallback。
 func OrDefault(value, fallback string) string {
 	if strings.TrimSpace(value) == "" {
 		return fallback
@@ -228,40 +225,7 @@ func FormatBytes(size int64) string {
 	return sysinfo.FormatBytes(uint64(size))
 }
 
-func Download(ctx context.Context, url, target string, limit int64) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return "", err
-	}
-	request.Header.Set("User-Agent", httpx.UserAgent)
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		return "", err
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return "", &httpx.StatusError{Status: response.StatusCode}
-	}
-	file, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o700)
-	if err != nil {
-		return "", err
-	}
-	hash := sha256.New()
-	written, err := io.Copy(io.MultiWriter(file, hash), io.LimitReader(response.Body, limit+1))
-	if closeErr := file.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return "", err
-	}
-	if written > limit {
-		return "", httpx.ErrTooLarge
-	}
-	return hex.EncodeToString(hash.Sum(nil)), nil
-}
-
+// Version 是运行中的版本号，开发构建没有版本号时写「未知」。
 func Version(a *app.App) string {
 	if a.Version == "" {
 		return "未知"
@@ -269,6 +233,7 @@ func Version(a *app.App) string {
 	return a.Version
 }
 
+// OrDash 在 value 只有空白时返回「—」，给查询结果里没有的字段用。
 func OrDash(value string) string {
 	if strings.TrimSpace(value) == "" {
 		return "—"

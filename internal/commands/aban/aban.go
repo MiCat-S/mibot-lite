@@ -687,7 +687,7 @@ func (s *abanService) batch(ctx context.Context, inv *command.Invocation, ban bo
 			return
 		}
 		failed++
-		reasons[kit.RPCCode(err)]++
+		reasons[command.Brief(err)]++
 	})
 	if err := ctx.Err(); err != nil {
 		return err

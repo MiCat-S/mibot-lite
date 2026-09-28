@@ -5,12 +5,15 @@ package httpx
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -162,4 +165,41 @@ func Reason(err error) string {
 		return "请求超时，稍后再试"
 	}
 	return "网络请求失败，稍后再试"
+}
+
+// DownloadFile 把 url 下载到 target（边下边写，不整个读进内存），返回内容的 SHA-256。
+// 超过 limit 字节或状态码不是 200 都算失败。和 Do 共用一个 transport，超时 5 分钟。
+// 用于下载新版本的程序文件这类几十 MB 的东西。
+func DownloadFile(ctx context.Context, url, target string, limit int64) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	request.Header.Set("User-Agent", UserAgent)
+	response, err := shared.Do(request)
+	if err != nil {
+		return "", err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return "", &StatusError{Status: response.StatusCode}
+	}
+	file, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o700)
+	if err != nil {
+		return "", err
+	}
+	hash := sha256.New()
+	written, err := io.Copy(io.MultiWriter(file, hash), io.LimitReader(response.Body, limit+1))
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return "", err
+	}
+	if written > limit {
+		return "", ErrTooLarge
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }

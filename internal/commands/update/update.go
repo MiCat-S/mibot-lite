@@ -198,7 +198,7 @@ func runUpdate(ctx context.Context, a *app.App, inv *command.Invocation, repo, b
 		return kit.Failf("更新失败：校验文件里没有 %s 的哈希。当前运行的版本没有改动", assetName)
 	}
 	candidate := binary + ".download"
-	digest, err := kit.Download(ctx, assetURL, candidate, 200<<20)
+	digest, err := httpx.DownloadFile(ctx, assetURL, candidate, 200<<20)
 	if err != nil {
 		os.Remove(candidate)
 		return kit.FailWith("更新失败：下载失败，当前运行的版本没有改动", err)
