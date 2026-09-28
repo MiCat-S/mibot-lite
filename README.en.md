@@ -135,9 +135,11 @@ is narrower: their message has to match a rule you set, and it can be rewritten,
 
 Unlike MiBox, **what can be lent is an allowlist**, the "Lend" column in the tables above. MiBox lets people on the
 list run any command, `.sudo add` included, so anyone you authorize can authorize others. Here the check is made on
-the real command after aliases are expanded, so an alias cannot get around it, and commands or subcommands added
-later cannot be lent by default. When someone on the list sends a command that cannot be lent, the account only
-replies that they lack permission.
+the real command after aliases are expanded, so an alias cannot get around it, and commands added later cannot be
+lent by default. Among the "partly" commands, `.sum` and `.speedtest` allow only the listed uses, so subcommands
+added to them later stay with the owner too; the others keep only their settings subcommands for the owner, and any
+other subcommand (including new ones) can be lent. When someone on the list sends a command that cannot be lent,
+the account only replies that they lack permission.
 
 The lists are kept in `data/sudo.json` and `data/sure.json`, and `.bf` backs them up too.
 

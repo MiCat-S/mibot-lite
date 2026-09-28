@@ -409,7 +409,7 @@ func sudoHelp(prefix string) string {
 		"• <code>" + p + "sudo chat del</code> / <code>chat ls</code>\n\n" +
 		"⚠️ 没设对话名单时，名单里的人在所有有你的对话里都能用。\n\n" +
 		"<b>能借出去的命令</b>\n" + command.Escape(delegableList(prefix)) + "\n" +
-		"其中改设置的子命令（如 ai config、sum config、speedtest set）不行。\n\n" +
+		"其中改设置的子命令（如 ai config、tr set、speedtest set）只限本人；sum 只能借「总结当前群」，定时任务和配置都不行。\n\n" +
 		"<b>只限你本人</b>\n授权管理、删消息、改昵称或前缀别名、备份与日志、转存消息、重启更新、跨所有群的封禁、看主机信息。" +
 		"名单里的人发这些命令，账号只会回一句没有权限。"
 }
