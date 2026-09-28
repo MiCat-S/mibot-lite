@@ -291,137 +291,163 @@ func (s *Service) handle(ctx context.Context, inv *command.Invocation) error {
 	case "config":
 		return s.configure(ctx, inv)
 	case "model":
-		if inv.Arg(1) == "" {
-			return s.showStatus(ctx, inv, modelStatus)
-		}
-		mode, tag, model := strings.ToLower(inv.Arg(1)), inv.Arg(2), inv.Arg(3)
-		if mode == "image" || mode == "video" {
-			return kit.Fail("Lite 版不支持 image / video 生成")
-		}
-		if (mode != "chat" && mode != "search") || tag == "" || model == "" {
-			return kit.Usage(inv.Prefix, "ai model chat|search 标签 模型")
-		}
-		if err := AssertAllowedModel(model); err != nil {
-			return err
-		}
-		if err := s.update(func(cfg *aiConfig) error {
-			provider, ok := cfg.Configs[tag]
-			if !ok {
-				return kit.Fail("API 配置不存在")
-			}
-			if mode == "chat" {
-				cfg.CurrentChatTag, cfg.CurrentChatModel = tag, model
-			} else {
-				cfg.CurrentSearchTag, cfg.CurrentSearchModel = tag, model
-			}
-			models := map[string]string{}
-			for key, value := range provider.Models {
-				models[key] = value
-			}
-			models[mode] = model
-			provider.Models = models
-			cfg.Configs[tag] = provider
-			return nil
-		}); err != nil {
-			return err
-		}
-		return inv.Edit(ctx, kit.Feedback("success", mode+" 模型已设置", ""))
+		return s.model(ctx, inv)
 	case "reasoning", "service":
-		if inv.Arg(1) == "" {
-			label := "思考强度"
-			if sub == "service" {
-				label = "服务等级"
-			}
-			return s.showStatus(ctx, inv, func(cfg aiConfig) string {
-				chat, search := cfg.CurrentChatReasoningEffort, cfg.CurrentSearchReasoningEffort
-				if sub == "service" {
-					chat, search = cfg.CurrentChatServiceTier, cfg.CurrentSearchServiceTier
-				}
-				return "💭 <b>当前" + label + ":</b>\n\nchat: " + command.Code(chat) + "\nsearch: " + command.Code(search)
-			})
-		}
-		mode, value := strings.ToLower(inv.Arg(1)), strings.ToLower(inv.Arg(2))
-		if mode != "chat" && mode != "search" {
-			return kit.Usage(inv.Prefix, "ai "+sub+" chat|search 值")
-		}
-		values := reasoningValues
-		if sub == "service" {
-			values = tierValues
-		}
-		if !slices.Contains(values, value) {
-			return kit.Fail("无效选项")
-		}
-		if err := s.update(func(cfg *aiConfig) error {
-			switch {
-			case sub == "reasoning" && mode == "chat":
-				cfg.CurrentChatReasoningEffort = value
-			case sub == "reasoning":
-				cfg.CurrentSearchReasoningEffort = value
-			case mode == "chat":
-				cfg.CurrentChatServiceTier = value
-			default:
-				cfg.CurrentSearchServiceTier = value
-			}
-			return nil
-		}); err != nil {
-			return err
-		}
-		return inv.Edit(ctx, kit.Feedback("success", sub+" 已设置为 "+value, ""))
+		return s.level(ctx, inv, sub)
 	case "image", "video":
 		return kit.Fail("Lite 版不支持 image / video 生成")
 	case "prompt":
-		action := strings.ToLower(inv.Arg(1))
-		if action == "" {
-			return s.showStatus(ctx, inv, func(cfg aiConfig) string {
-				return "💭 <b>当前提示词</b>\n\n📝 内容：" + command.Code(orUnset(cfg.Prompt))
-			})
-		}
-		if action != "set" && action != "del" {
-			return kit.Usage(inv.Prefix, "ai prompt set 内容|del")
-		}
-		prompt := ""
-		if action == "set" {
-			prompt = inv.Rest(2)
-			if prompt == "" {
-				return kit.Fail("提示词不能为空")
-			}
-		}
-		if err := s.update(func(cfg *aiConfig) error { cfg.Prompt = prompt; return nil }); err != nil {
-			return err
-		}
-		return inv.Edit(ctx, kit.Feedback("success", "AI 输出设置已更新", ""))
+		return s.prompt(ctx, inv)
 	case "collapse":
-		if inv.Arg(1) == "" {
-			return s.showStatus(ctx, inv, func(cfg aiConfig) string {
-				return "📖 <b>消息折叠状态</b>\n\n📄 当前状态：" + kit.OnOffText(cfg.Collapse)
-			})
-		}
-		value, err := kit.OnOff(inv.Arg(1))
-		if err != nil {
-			return err
-		}
-		if err := s.update(func(cfg *aiConfig) error { cfg.Collapse = value; return nil }); err != nil {
-			return err
-		}
-		return inv.Edit(ctx, kit.Feedback("success", "AI 输出设置已更新", ""))
+		return s.collapse(ctx, inv)
 	case "timeout":
-		if inv.Arg(1) == "" {
-			return s.showStatus(ctx, inv, func(cfg aiConfig) string {
-				return "⏱️ <b>当前超时设置</b>\n\n⏰ 超时时间：" + command.Code(strconv.Itoa(cfg.Timeout)+" 秒")
-			})
-		}
-		seconds, err := strconv.Atoi(inv.Arg(1))
-		if err != nil || seconds < 1 || seconds > 600 {
-			return kit.Fail("超时范围为 1-600 秒")
-		}
-		if err := s.update(func(cfg *aiConfig) error { cfg.Timeout = seconds; return nil }); err != nil {
-			return err
-		}
-		return inv.Edit(ctx, kit.Feedback("success", "AI 输出设置已更新", ""))
+		return s.timeout(ctx, inv)
 	case "telegraph":
 		return s.telegraph(ctx, inv)
 	}
 	return s.ask(ctx, inv, sub == "search")
+}
+
+// model 处理 .ai model：不带参数显示当前模型，chat|search 标签 模型 换模型，
+// 同时记进这个服务商的模型表。
+func (s *Service) model(ctx context.Context, inv *command.Invocation) error {
+	if inv.Arg(1) == "" {
+		return s.showStatus(ctx, inv, modelStatus)
+	}
+	mode, tag, model := strings.ToLower(inv.Arg(1)), inv.Arg(2), inv.Arg(3)
+	if mode == "image" || mode == "video" {
+		return kit.Fail("Lite 版不支持 image / video 生成")
+	}
+	if (mode != "chat" && mode != "search") || tag == "" || model == "" {
+		return kit.Usage(inv.Prefix, "ai model chat|search 标签 模型")
+	}
+	if err := AssertAllowedModel(model); err != nil {
+		return err
+	}
+	if err := s.update(func(cfg *aiConfig) error {
+		provider, ok := cfg.Configs[tag]
+		if !ok {
+			return kit.Fail("API 配置不存在")
+		}
+		if mode == "chat" {
+			cfg.CurrentChatTag, cfg.CurrentChatModel = tag, model
+		} else {
+			cfg.CurrentSearchTag, cfg.CurrentSearchModel = tag, model
+		}
+		models := map[string]string{}
+		for key, value := range provider.Models {
+			models[key] = value
+		}
+		models[mode] = model
+		provider.Models = models
+		cfg.Configs[tag] = provider
+		return nil
+	}); err != nil {
+		return err
+	}
+	return inv.Edit(ctx, kit.Feedback("success", mode+" 模型已设置", ""))
+}
+
+// level 处理 .ai reasoning 和 .ai service：sub 是其中之一，分别设思考强度和服务等级。
+func (s *Service) level(ctx context.Context, inv *command.Invocation, sub string) error {
+	if inv.Arg(1) == "" {
+		label := "思考强度"
+		if sub == "service" {
+			label = "服务等级"
+		}
+		return s.showStatus(ctx, inv, func(cfg aiConfig) string {
+			chat, search := cfg.CurrentChatReasoningEffort, cfg.CurrentSearchReasoningEffort
+			if sub == "service" {
+				chat, search = cfg.CurrentChatServiceTier, cfg.CurrentSearchServiceTier
+			}
+			return "💭 <b>当前" + label + ":</b>\n\nchat: " + command.Code(chat) + "\nsearch: " + command.Code(search)
+		})
+	}
+	mode, value := strings.ToLower(inv.Arg(1)), strings.ToLower(inv.Arg(2))
+	if mode != "chat" && mode != "search" {
+		return kit.Usage(inv.Prefix, "ai "+sub+" chat|search 值")
+	}
+	values := reasoningValues
+	if sub == "service" {
+		values = tierValues
+	}
+	if !slices.Contains(values, value) {
+		return kit.Fail("无效选项")
+	}
+	if err := s.update(func(cfg *aiConfig) error {
+		switch {
+		case sub == "reasoning" && mode == "chat":
+			cfg.CurrentChatReasoningEffort = value
+		case sub == "reasoning":
+			cfg.CurrentSearchReasoningEffort = value
+		case mode == "chat":
+			cfg.CurrentChatServiceTier = value
+		default:
+			cfg.CurrentSearchServiceTier = value
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	return inv.Edit(ctx, kit.Feedback("success", sub+" 已设置为 "+value, ""))
+}
+
+// prompt 处理 .ai prompt：看、设、删提示词。
+func (s *Service) prompt(ctx context.Context, inv *command.Invocation) error {
+	action := strings.ToLower(inv.Arg(1))
+	if action == "" {
+		return s.showStatus(ctx, inv, func(cfg aiConfig) string {
+			return "💭 <b>当前提示词</b>\n\n📝 内容：" + command.Code(orUnset(cfg.Prompt))
+		})
+	}
+	if action != "set" && action != "del" {
+		return kit.Usage(inv.Prefix, "ai prompt set 内容|del")
+	}
+	prompt := ""
+	if action == "set" {
+		prompt = inv.Rest(2)
+		if prompt == "" {
+			return kit.Fail("提示词不能为空")
+		}
+	}
+	if err := s.update(func(cfg *aiConfig) error { cfg.Prompt = prompt; return nil }); err != nil {
+		return err
+	}
+	return inv.Edit(ctx, kit.Feedback("success", "AI 输出设置已更新", ""))
+}
+
+// collapse 处理 .ai collapse：长回答要不要折叠。
+func (s *Service) collapse(ctx context.Context, inv *command.Invocation) error {
+	if inv.Arg(1) == "" {
+		return s.showStatus(ctx, inv, func(cfg aiConfig) string {
+			return "📖 <b>消息折叠状态</b>\n\n📄 当前状态：" + kit.OnOffText(cfg.Collapse)
+		})
+	}
+	value, err := kit.OnOff(inv.Arg(1))
+	if err != nil {
+		return err
+	}
+	if err := s.update(func(cfg *aiConfig) error { cfg.Collapse = value; return nil }); err != nil {
+		return err
+	}
+	return inv.Edit(ctx, kit.Feedback("success", "AI 输出设置已更新", ""))
+}
+
+// timeout 处理 .ai timeout：请求模型的超时秒数。
+func (s *Service) timeout(ctx context.Context, inv *command.Invocation) error {
+	if inv.Arg(1) == "" {
+		return s.showStatus(ctx, inv, func(cfg aiConfig) string {
+			return "⏱️ <b>当前超时设置</b>\n\n⏰ 超时时间：" + command.Code(strconv.Itoa(cfg.Timeout)+" 秒")
+		})
+	}
+	seconds, err := strconv.Atoi(inv.Arg(1))
+	if err != nil || seconds < 1 || seconds > 600 {
+		return kit.Fail("超时范围为 1-600 秒")
+	}
+	if err := s.update(func(cfg *aiConfig) error { cfg.Timeout = seconds; return nil }); err != nil {
+		return err
+	}
+	return inv.Edit(ctx, kit.Feedback("success", "AI 输出设置已更新", ""))
 }
 
 // telegraph 处理 .ai telegraph：不带参数显示状态，on|off|limit|del 修改设置或删除记录。
