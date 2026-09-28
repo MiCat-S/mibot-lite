@@ -45,13 +45,14 @@ func Register(a *app.App) {
 				command.Code(prefix+"update run") + " 下载、校验、试跑、替换并重启\n" + command.Code(prefix+"update rollback") + " 换回上一版本并重启\n发布仓库由 " + command.Code("MIBOT_UPDATE_REPO") + " 指定。"
 		},
 		Handle: func(ctx context.Context, inv *command.Invocation) error {
-			binary, err := os.Executable()
-			if err == nil {
-				binary, _ = filepath.EvalSymlinks(binary)
-			}
+			binary, located := executablePath()
 			// 下载、替换程序文件、回滚都只能一个一个来：两个同时跑会互相覆盖下载的文件，
 			// 或者把留作回滚的上一版本弄丢。
 			if sub := strings.ToLower(inv.Arg(0)); sub == "run" || sub == "apply" || sub == "rollback" {
+				if located != nil {
+					inv.Log.Warn("update.locate_failed", "error", located.Error())
+					return kit.Fail("找不到程序文件在哪里，不能替换它")
+				}
 				if !busy.TryLock() {
 					return inv.EditText(ctx, "已有一个更新或回滚正在进行，请稍候")
 				}
@@ -59,7 +60,11 @@ func Register(a *app.App) {
 			}
 			switch strings.ToLower(inv.Arg(0)) {
 			case "", "ver", "status":
-				rows := []string{"<b>更新状态</b>", "当前版本：" + command.Code(kit.Version(a)), "程序文件：" + command.Code(binary), "发布仓库：" + command.Code(repo)}
+				where := command.Code(binary)
+				if located != nil {
+					where = "无法确定"
+				}
+				rows := []string{"<b>更新状态</b>", "当前版本：" + command.Code(kit.Version(a)), "程序文件：" + where, "发布仓库：" + command.Code(repo)}
 				if info, err := os.Stat(binary + ".previous"); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
 					rows = append(rows, "可回滚到上一版本："+command.Code(inv.Prefix+"update rollback"))
 				} else {
@@ -77,10 +82,7 @@ func Register(a *app.App) {
 				if !newer(a.Version, latest.TagName) {
 					return inv.Edit(ctx, "<b>已是最新版本</b>\n当前："+command.Code(kit.Version(a))+"\n最新："+command.Code(latest.TagName))
 				}
-				notes := strings.TrimSpace(latest.Body)
-				if len(notes) > 800 {
-					notes = notes[:800] + "…"
-				}
+				notes := command.Truncate(strings.TrimSpace(latest.Body), 800)
 				text := "<b>发现新版本</b>\n当前：" + command.Code(kit.Version(a)) + "\n最新：" + command.Code(latest.TagName) + "\n执行 " + command.Code(inv.Prefix+"update run") + " 安装。"
 				if notes != "" {
 					text += "\n\n<blockquote expandable>" + command.Escape(notes) + "</blockquote>"
@@ -96,15 +98,16 @@ func Register(a *app.App) {
 				if !restart.Available() {
 					return inv.EditText(ctx, "重启组件不可用")
 				}
-				swap := binary + ".rollback"
-				if err := os.Rename(binary, swap); err != nil {
+				// 当前版本先挪到 .rollback，上一版本换进来之后，再把它改名成新的 .previous：
+				// 回滚之后还能再滚回来。
+				aside := binary + ".rollback"
+				if err := swapBinary(os.Rename, binary, previous, aside); err != nil {
+					inv.Log.Error("update.rollback_swap_failed", "error", err.Error())
 					return err
 				}
-				if err := os.Rename(previous, binary); err != nil {
-					_ = os.Rename(swap, binary)
-					return err
+				if err := os.Rename(aside, previous); err != nil {
+					inv.Log.Warn("update.keep_previous_failed", "error", err.Error(), "left_at", aside)
 				}
-				_ = os.Rename(swap, previous)
 				return restart.Now(ctx, inv, "rollback", "<b>MiBot Lite 回滚</b>\n已换回上一版本，正在重启…", "回滚后重启失败。")
 			}
 			return inv.EditText(ctx, "用法："+inv.Prefix+"update [check|run|rollback]")
@@ -216,21 +219,57 @@ func runUpdate(ctx context.Context, a *app.App, inv *command.Invocation, repo, b
 	cancel()
 	if err != nil {
 		os.Remove(candidate)
-		tail := strings.TrimSpace(string(output))
+		tail := []rune(strings.TrimSpace(string(output)))
 		if len(tail) > 400 {
-			tail = tail[len(tail)-400:]
+			tail = append([]rune("…"), tail[len(tail)-400:]...)
 		}
-		return inv.Edit(ctx, "<b>更新失败</b>\n新版本无法读取当前部署，已丢弃。\n<pre>"+command.Escape(tail)+"</pre>\n当前运行的版本未被改动。")
+		return inv.Edit(ctx, "<b>更新失败</b>\n新版本无法读取当前部署，已丢弃。\n<pre>"+command.Escape(string(tail))+"</pre>\n当前运行的版本未被改动。")
 	}
 	previous := binary + ".previous"
 	os.Remove(previous)
-	if err := os.Rename(binary, previous); err != nil {
+	if err := swapBinary(os.Rename, binary, candidate, previous); err != nil {
+		inv.Log.Error("update.swap_failed", "error", err.Error())
 		os.Remove(candidate)
-		return err
-	}
-	if err := os.Rename(candidate, binary); err != nil {
-		_ = os.Rename(previous, binary)
 		return err
 	}
 	return restart.Now(ctx, inv, "update", "<b>MiBot Lite 更新</b>\n已安装 "+command.Code(latest.TagName)+"，正在重启…", "更新后重启失败，可手动重启服务。")
 }
+
+// executablePath 是正在运行的程序文件的真实路径（解开符号链接）。
+// 以前两个错误都被丢掉：EvalSymlinks 失败时路径变成空字符串，后面就去改名一个空路径。
+func executablePath() (string, error) {
+	binary, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(binary)
+}
+
+// swapBinary 把 incoming 换到 binary 的位置，原来的 binary 挪到 aside。
+//
+// 任何一步失败都把 binary 恢复原样。恢复也失败时，binary 那个位置上已经没有程序文件了，
+// 服务下次启动会起不来：这时返回的错误写明原来的版本现在在哪里，让人能手动改回去。
+// rename 由调用方传入（os.Rename），测试里换成会在指定步骤失败的版本。
+func swapBinary(rename func(from, to string) error, binary, incoming, aside string) error {
+	if err := rename(binary, aside); err != nil {
+		return swapError{text: "无法挪开当前的程序文件，什么都没改", cause: err}
+	}
+	if err := rename(incoming, binary); err != nil {
+		if restoreErr := rename(aside, binary); restoreErr != nil {
+			return swapError{text: "程序文件没能换回来，服务下次启动会失败。原来的版本在 " + aside +
+				"，请手动把它改名为 " + binary, cause: errors.Join(err, restoreErr)}
+		}
+		return swapError{text: "无法放入新的程序文件，已恢复原来的版本", cause: err}
+	}
+	return nil
+}
+
+// swapError 给用户一句能照着做的话（它实现 UserMessage），日志里记原始错误。
+type swapError struct {
+	text  string
+	cause error
+}
+
+func (e swapError) Error() string       { return e.text + ": " + e.cause.Error() }
+func (e swapError) UserMessage() string { return e.text }
+func (e swapError) Unwrap() error       { return e.cause }
