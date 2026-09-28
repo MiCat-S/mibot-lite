@@ -55,7 +55,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 
 | 命令 | 作用 | 可借 |
 |---|---|---|
-| `.ping [域名]` | Telegram 或某个网站的延迟 | ✓ |
+| `.ping [域名\|IP]` | Telegram 或某个网站的延迟 | ✓ |
 | `.status` | 运行状态卡片（CPU、内存、磁盘、Swap） | ✓ |
 | `.memory` | 进程内存 | ✓ |
 | `.sysinfo` | 详细系统信息 | |
@@ -75,7 +75,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 | `.calc 表达式` | 四则运算 | ✓ |
 | `.rate 货币 [目标] [数量]` | 汇率与换算 | ✓ |
 | `.tr [语言] 文本` | 谷歌翻译，不用配置 | 部分 |
-| `.gt [语言] 文本` | AI 翻译 | ✓ |
+| `.gt [en] 文本` | AI 翻译 | ✓ |
 | `.whois 域名` | 域名注册信息，支持批量 | 部分 |
 | `.ip [IP\|域名]` | IP 的位置与运营商 | ✓ |
 | `.bin 卡号前 6–8 位` | 卡头对应的发卡行 | ✓ |
@@ -109,7 +109,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 |---|---|---|
 | `.ban` `.unban` `.kick` `.mute` `.unmute` | 在当前群封禁、踢出、禁言 | ✓ |
 | `.sb` `.unsb` | 在所有管理的群里封禁、解封 | |
-| `.refresh` | 刷新管理群缓存（平时一天自动刷新一次） | |
+| `.refresh` | 刷新管理群缓存（缓存一天，过期后下次用到时重扫） | |
 | `.aban` | 以上几条的帮助 | |
 
 **账号**
@@ -202,8 +202,9 @@ MIBOT_EATGIF_ASSETS=/path/to/eatgif go test ./internal/imaging/ -run RealAnimati
 | `internal/commands/<命令>/` | 命令实现，一个目录一条命令，或共用一套数据的一组命令 |
 | `internal/commands/kit` | 命令共用的小工具 |
 
-成组放在一起的命令：`aban` 是全部群管理命令，`ids` 含 `.dc`，`sudo` 含 `.sure`，`eatgif` 含 `.eat`，
-`.t` 在 `tts`，`.status` 等基础命令在 `core`。
+一个目录里有几条命令的：`aban` 是全部群管理命令，`ids` 含 `.dc`，`sudo` 含 `.sure`，
+`eatgif` 含 `.eat`、`.eat2`，`tts` 是 `.t`、`.ts`、`.tk`，`.status` 等基础命令在 `core`。
+简写（`.st`、`.h` 这些）是注册时的别名，和本名在同一个目录。
 
 命令回到聊天里的文字（标题、失败提示、用法、用词、标点）按 [STYLE.md](STYLE.md) 写，
 `TestCommandTextStyle` 会检查其中能机器检查的部分。

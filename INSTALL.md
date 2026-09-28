@@ -16,7 +16,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 管道进来的脚本没有键盘。拿不到终端时它会装好二进制并告诉你下一步命令。
 
 常用选项：`--root 目录`（默认 `/root/mibot-lite`）、`--no-service`（只装二进制不碰 systemd）、
-`--restore 备份文件`（用 `.bf` 的备份装，不用重新登录，见第 10 节）。
+`--restore 备份文件`（用 `.bf` 的备份装，不用重新登录，见第 10 节）、`--repo 所有者/仓库`
+（从别的 GitHub 仓库下载发布，默认 `MiCat-S/mibot-lite`）。部署目录和仓库也可以用环境变量
+`MIBOT_ROOT`、`MIBOT_REPO` 给。
 
 下面是手动分步的流程，想清楚每一步做了什么再看。
 
@@ -71,7 +73,8 @@ cp /root/mibot/config.json /root/mibot-lite/config.json
 
 ## 4. 服务器：迁移已有配置（可选）
 
-把 MiBox 里 ai、sum、whois、aban、acn、da、dme、yvlu 的数据搬过来：
+把 MiBox 里 ai、sum、whois、aban、acn、da、dme、yvlu、t、sticker、privacy、save、speedtest
+的数据和别名表搬过来，`.env` 里的 `TB_PREFIX` 写成这边的 `MIBOT_PREFIX`：
 
 ```sh
 /tmp/mibot-lite --import-mibox /root/mibot --root /root/mibot-lite
@@ -93,7 +96,7 @@ cp /root/mibot/config.json /root/mibot-lite/config.json
 
 ### 自动验证
 
-想一次跑完全部只读命令，不用手动一条条发：
+想一次跑完一组固定的只读命令，不用手动一条条发：
 
 ```sh
 /tmp/mibot-lite --verify --root /root/mibot-lite
@@ -132,7 +135,8 @@ systemctl status mibot-lite     # 看状态
 ## 7. 配置
 
 可选设置写在 `<部署目录>/.env`，一行一个 `KEY=value`，改完重启服务生效。
-程序自己读这个文件，不经过 systemd 的 `EnvironmentFile=`。
+程序自己读这个文件，不经过 systemd 的 `EnvironmentFile=`。进程环境变量里的 `MIBOT_*`
+会覆盖 `.env` 里的同名项。
 
 | 变量 | 含义 | 默认 |
 |---|---|---|
@@ -146,9 +150,9 @@ systemctl status mibot-lite     # 看状态
 apt install -y ffmpeg
 ```
 
-没装的话这几条命令会明确报「ffmpeg 不可用」（`.yvlu` 改为用文字描述视频），其余命令不受影响。
+没装的话这几条命令会回「主机没有安装 ffmpeg，请先安装」（`.yvlu` 改为用文字描述视频），其余命令不受影响。
 
-AI、汇率等命令的配置在 Telegram 里用命令完成，见 `.help ai`、`.help sum`。
+AI、摘要、翻译这些命令的配置在 Telegram 里用命令完成，见 `.help ai`、`.help sum`、`.help tr`。
 **涉及 API Key 的命令请在「收藏夹」里执行**，别在群里。
 
 ## 8. 更新
@@ -216,4 +220,5 @@ systemctl start mibot-lite
 
 恢复前会把整个文件读完并校验：不是 mibot-lite 的备份、文件被截断、里面有备份不该
 有的路径，都会在写入任何东西之前拒绝。覆盖时如果备份里没有 `gotd-session.json`，
-旧的那个会被删掉——否则启动时它会压过 `config.json`，悄悄继续用旧账号。
+旧的那个会被删掉——否则启动时它会压过 `config.json`，悄悄继续用旧账号。旧的 `updates.json`
+（上一个账号的连接状态）也一并删掉。

@@ -55,7 +55,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 
 | 指令 | 作用 | 可借 |
 |---|---|---|
-| `.ping [網域]` | Telegram 或某個網站的延遲 | ✓ |
+| `.ping [網域\|IP]` | Telegram 或某個網站的延遲 | ✓ |
 | `.status` | 執行狀態卡片（CPU、記憶體、磁碟、Swap） | ✓ |
 | `.memory` | 行程記憶體 | ✓ |
 | `.sysinfo` | 詳細系統資訊 | |
@@ -75,7 +75,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 | `.calc 算式` | 四則運算 | ✓ |
 | `.rate 貨幣 [目標] [數量]` | 匯率與換算 | ✓ |
 | `.tr [語言] 文字` | Google 翻譯，不用設定 | 部分 |
-| `.gt [語言] 文字` | AI 翻譯 | ✓ |
+| `.gt [en] 文字` | AI 翻譯 | ✓ |
 | `.whois 網域` | 網域註冊資訊，支援批次查詢 | 部分 |
 | `.ip [IP\|網域]` | IP 的位置與電信業者 | ✓ |
 | `.bin 卡號前 6–8 碼` | 卡號對應的發卡銀行 | ✓ |
@@ -109,7 +109,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 |---|---|---|
 | `.ban` `.unban` `.kick` `.mute` `.unmute` | 在目前群組封鎖、踢出、禁言 | ✓ |
 | `.sb` `.unsb` | 在所有管理的群組裡封鎖、解除封鎖 | |
-| `.refresh` | 重新整理管理群組快取（平時一天自動更新一次） | |
+| `.refresh` | 重新整理管理群組快取（快取一天，過期後下次用到時重掃） | |
 | `.aban` | 以上幾條的說明 | |
 
 **帳號**
@@ -202,8 +202,9 @@ MIBOT_EATGIF_ASSETS=/path/to/eatgif go test ./internal/imaging/ -run RealAnimati
 | `internal/commands/<指令>/` | 指令實作，一個目錄一條指令，或共用一套資料的一組指令 |
 | `internal/commands/kit` | 指令共用的小工具 |
 
-成組放在一起的指令：`aban` 是全部群組管理指令，`ids` 含 `.dc`，`sudo` 含 `.sure`，`eatgif` 含 `.eat`，
-`.t` 在 `tts`，`.status` 等基本指令在 `core`。
+一個目錄裡有幾條指令的：`aban` 是全部群組管理指令，`ids` 含 `.dc`，`sudo` 含 `.sure`，
+`eatgif` 含 `.eat`、`.eat2`，`tts` 是 `.t`、`.ts`、`.tk`，`.status` 等基本指令在 `core`。
+簡寫（`.st`、`.h` 這些）是註冊時的別名，和本名在同一個目錄。
 
 指令回到聊天裡的文字（標題、失敗提示、用法、用詞、標點）依照 [STYLE.md](STYLE.md)（簡體中文）撰寫，
 `TestCommandTextStyle` 會檢查其中能由程式檢查的部分。

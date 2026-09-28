@@ -21,8 +21,10 @@ ExecStart=@BINARY@ --serve --root @ROOT@
 #                            The deployment directory stays writable because
 #                            .update renames the new binary into it and the
 #                            command data lives there.
-#   PrivateTmp             - the process keeps nothing in /tmp; the instance
-#                            lock is an flock inside the deployment root.
+#   PrivateTmp             - the ffmpeg work directories of .eat, .eatgif,
+#                            .yvlu and .t go in /tmp; this keeps them out of
+#                            sight of other processes. The instance lock is
+#                            an flock inside the deployment root.
 MemoryDenyWriteExecute=yes
 PrivateTmp=yes
 ProtectSystem=strict
@@ -49,7 +51,7 @@ SystemCallArchitectures=native
 # times in one run — the encode was still going when its own timeout
 # killed it, leaving no output and no explanation.
 #
-# The resident process is ~25M, which is the number this project is about.
+# The resident process is 30–50M, which is the number this project is about.
 # What follows is headroom for a child that runs for seconds at a time,
 # and a ceiling high enough that reaching it means something is actually
 # wrong.

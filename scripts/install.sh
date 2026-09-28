@@ -29,6 +29,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --root) ROOT=${2:?--root needs a directory}; shift ;;
     --root=*) ROOT=${1#*=} ;;
+    --repo) REPO=${2:?--repo needs OWNER/NAME}; shift ;;
     --repo=*) REPO=${1#*=} ;;
     --restore) RESTORE=${2:?--restore needs a backup file}; shift ;;
     --restore=*) RESTORE=${1#*=} ;;

@@ -29,7 +29,8 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/store"
 )
 
-// endpoint 是 fish.audio 的合成接口。可以用环境变量 MIBOT_FISH_ENDPOINT 换掉，测试用。
+// endpoint 是 fish.audio 的合成接口。环境变量 MIBOT_FISH_ENDPOINT 可以换掉它，只给测试用：
+// 请求会带着 API Key 发到那个地址，所以不写进文档。
 const endpoint = "https://api.fish.audio/v1/tts"
 
 // maxText 是一次合成的字数上限。fish.audio 按字数计费，回复一条长消息时

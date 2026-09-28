@@ -61,7 +61,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 
 | コマンド | 内容 | 貸出 |
 |---|---|---|
-| `.ping [ドメイン]` | Telegram またはウェブサイトまでの遅延 | ✓ |
+| `.ping [ドメイン\|IP]` | Telegram またはウェブサイトまでの遅延 | ✓ |
 | `.status` | 状態カード（CPU、メモリ、ディスク、Swap） | ✓ |
 | `.memory` | プロセスのメモリ | ✓ |
 | `.sysinfo` | 詳しいシステム情報 | |
@@ -81,7 +81,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 | `.calc 式` | 四則演算 | ✓ |
 | `.rate 通貨 [換算先] [金額]` | 為替レートと換算 | ✓ |
 | `.tr [言語] テキスト` | Google 翻訳、設定不要 | 一部 |
-| `.gt [言語] テキスト` | AI 翻訳 | ✓ |
+| `.gt [en] テキスト` | AI 翻訳 | ✓ |
 | `.whois ドメイン` | ドメインの登録情報、一括検索にも対応 | 一部 |
 | `.ip [IP\|ドメイン]` | IP の所在地と回線事業者 | ✓ |
 | `.bin カード番号の先頭 6–8 桁` | カード番号に対応する発行銀行 | ✓ |
@@ -115,7 +115,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 |---|---|---|
 | `.ban` `.unban` `.kick` `.mute` `.unmute` | 今のグループで BAN、キック、ミュート | ✓ |
 | `.sb` `.unsb` | 管理しているすべてのグループで BAN、BAN 解除 | |
-| `.refresh` | 管理グループの一覧を更新（普段は 1 日 1 回自動で更新） | |
+| `.refresh` | 管理グループの一覧を更新（1 日キャッシュし、期限切れの後は次に使うときに取り直す） | |
 | `.aban` | 上記コマンドのヘルプ | |
 
 **アカウント**
@@ -217,8 +217,9 @@ MIBOT_EATGIF_ASSETS=/path/to/eatgif go test ./internal/imaging/ -run RealAnimati
 | `internal/commands/<コマンド>/` | コマンドの実装。1 ディレクトリに 1 コマンド、またはデータを共有するコマンドのグループ |
 | `internal/commands/kit` | コマンド共通の小さなユーティリティ |
 
-まとめて置いてあるコマンド：`aban` はグループ管理コマンドすべて、`ids` は `.dc` を含み、`sudo` は `.sure` を含み、
-`eatgif` は `.eat` を含みます。`.t` は `tts` にあり、`.status` などの基本コマンドは `core` にあります。
+1 つのディレクトリに複数のコマンドがあるもの：`aban` はグループ管理コマンドすべて、`ids` は `.dc` を含み、
+`sudo` は `.sure` を含み、`eatgif` は `.eat` と `.eat2` を含みます。`tts` は `.t`、`.ts`、`.tk` で、`.status` などの
+基本コマンドは `core` にあります。短縮形（`.st`、`.h` など）は登録時の別名で、本来の名前と同じディレクトリにあります。
 
 コマンドがチャットに返す文言（見出し、失敗メッセージ、使い方、用語、句読点）は [STYLE.md](STYLE.md)（中国語）に従います。
 機械的に確認できる部分は `TestCommandTextStyle` がチェックします。

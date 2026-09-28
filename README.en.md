@@ -62,7 +62,7 @@ owner; blank means owner only.
 
 | Command | What it does | Lend |
 |---|---|---|
-| `.ping [domain]` | Latency to Telegram or a website | ✓ |
+| `.ping [domain\|IP]` | Latency to Telegram or a website | ✓ |
 | `.status` | Status card (CPU, memory, disk, swap) | ✓ |
 | `.memory` | Process memory | ✓ |
 | `.sysinfo` | Detailed system information | |
@@ -82,7 +82,7 @@ owner; blank means owner only.
 | `.calc <expression>` | Arithmetic | ✓ |
 | `.rate <currency> [target] [amount]` | Exchange rates and conversion | ✓ |
 | `.tr [language] <text>` | Google Translate, no setup needed | partly |
-| `.gt [language] <text>` | AI translation | ✓ |
+| `.gt [en] <text>` | AI translation | ✓ |
 | `.whois <domain>` | Domain registration data, in batches too | partly |
 | `.ip [IP\|domain]` | Location and network of an IP | ✓ |
 | `.bin <first 6–8 card digits>` | Issuing bank of a card BIN | ✓ |
@@ -116,7 +116,7 @@ owner; blank means owner only.
 |---|---|---|
 | `.ban` `.unban` `.kick` `.mute` `.unmute` | Ban, kick or mute in the current group | ✓ |
 | `.sb` `.unsb` | Ban or unban in every group you administer | |
-| `.refresh` | Refresh the list of administered groups (it refreshes on its own once a day) | |
+| `.refresh` | Refresh the list of administered groups (cached for a day, rescanned on next use after that) | |
 | `.aban` | Help for the commands above | |
 
 **Account**
@@ -219,8 +219,9 @@ Code layout:
 | `internal/commands/<command>/` | Command implementations: one directory per command, or per group of commands sharing data |
 | `internal/commands/kit` | Small helpers shared by commands |
 
-Commands grouped together: `aban` holds all the group administration commands, `ids` includes `.dc`, `sudo` includes
-`.sure`, `eatgif` includes `.eat`, `.t` lives in `tts`, and basic commands such as `.status` are in `core`.
+Directories holding more than one command: `aban` holds all the group administration commands, `ids` includes `.dc`,
+`sudo` includes `.sure`, `eatgif` includes `.eat` and `.eat2`, `tts` is `.t`, `.ts` and `.tk`, and basic commands such as
+`.status` are in `core`. Short forms (`.st`, `.h` and so on) are aliases registered alongside the full name, in the same directory.
 
 The text commands send back to the chat (titles, failure messages, usage, wording, punctuation) follows
 [STYLE.md](STYLE.md) (Chinese); `TestCommandTextStyle` checks the parts a machine can check.
