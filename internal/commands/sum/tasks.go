@@ -556,7 +556,7 @@ func (s *sumService) list(ctx context.Context, inv *command.Invocation) error {
 		}
 		blocks = append(blocks, strings.Join(lines, "\n"))
 	}
-	return kit.SendPages(ctx, inv, command.HTMLPages(strings.Join(blocks, "\n\n"), 3800))
+	return kit.SendPages(ctx, inv, command.HTMLPages(strings.Join(blocks, "\n\n"), command.PageLimit))
 }
 
 // runNow 立即执行一个任务并推送。

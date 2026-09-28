@@ -645,7 +645,7 @@ func (s *sumService) push(ctx context.Context, client *bot.Client, task sumTask)
 	if err != nil {
 		return kit.Fail("无法定位推送目标：" + pushTarget(db, task))
 	}
-	for _, page := range command.HTMLPages(html, 3800) {
+	for _, page := range command.HTMLPages(html, command.PageLimit) {
 		if _, err := client.SendHTML(ctx, peer, page, bot.SendOptions{LinkPreview: db.AIConfig.LinkPreview}); err != nil {
 			return err
 		}
@@ -747,7 +747,7 @@ func (s *sumService) instant(ctx context.Context, inv *command.Invocation, sub s
 	if err != nil {
 		return err
 	}
-	pages := command.HTMLPages(html, 3800)
+	pages := command.HTMLPages(html, command.PageLimit)
 	if !db.AIConfig.ReplyMode {
 		return kit.SendPages(ctx, inv, pages)
 	}
@@ -788,5 +788,5 @@ func (s *sumService) debug(ctx context.Context, inv *command.Invocation) error {
 	if runes := []rune(preview); len(runes) > 2000 {
 		preview = "...(前面省略)...\n\n" + string(runes[len(runes)-2000:])
 	}
-	return kit.SendPages(ctx, inv, command.HTMLPages("📋 发送给 AI 的文本预览（最后2000字符）：\n\n"+command.Code(preview), 3800))
+	return kit.SendPages(ctx, inv, command.HTMLPages("📋 发送给 AI 的文本预览（最后2000字符）：\n\n"+command.Code(preview), command.PageLimit))
 }

@@ -6,6 +6,25 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/bot"
 )
 
+// PageLimit 是一页消息 HTML 源文的长度上限，按 UTF-16 单位计（Telegram 的算法）。
+// Telegram 一条消息最多 4096 个单位，而且只算解析后的文字、不算标签；这里按源文算，
+// 本来就偏保守，再给调用方在首页加标题、在每页外面套 <pre> 之类的留出 300 左右的余地。
+const PageLimit = 3800
+
+// UTF16Len 是 text 按 Telegram 的算法（UTF-16 单位）有多长：一个汉字算 1，
+// 一个 emoji 之类的补充平面字符算 2。
+func UTF16Len(text string) int {
+	count := 0
+	for _, r := range text {
+		if r >= 0x10000 {
+			count += 2
+		} else {
+			count++
+		}
+	}
+	return count
+}
+
 // Escape 把不可信的文本转义成能安全放进 HTML 的形式。
 func Escape(value string) string { return bot.Escape(value) }
 
@@ -15,18 +34,23 @@ func Code(value string) string { return bot.Code(value) }
 // Bold 用 <b> 包住转义后的文本。
 func Bold(value string) string { return bot.Bold(value) }
 
-// EscapedPages 把纯文本分页，每页转义后的 HTML 不超过 limit 个字符，
-// 不会把一个字符拆开。每一页都已经转义过。
+// EscapedPages 把纯文本分页，每页转义后的 HTML 不超过 limit 个 UTF-16 单位，
+// 不会把一个字符拆开。每一页都已经转义过。以前按字节算，中文一个字 3 字节，
+// 一页只装得下三分之一。
 func EscapedPages(text string, limit int) []string {
 	var pages []string
 	var page strings.Builder
+	units := 0
 	for _, r := range text {
 		escaped := Escape(string(r))
-		if page.Len()+len(escaped) > limit {
+		size := UTF16Len(escaped)
+		if units+size > limit {
 			pages = append(pages, page.String())
 			page.Reset()
+			units = 0
 		}
 		page.WriteString(escaped)
+		units += size
 	}
 	if page.Len() > 0 || len(pages) == 0 {
 		pages = append(pages, page.String())
@@ -37,13 +61,16 @@ func EscapedPages(text string, limit int) []string {
 var htmlTags = map[string]bool{"b": true, "strong": true, "i": true, "em": true, "u": true, "ins": true, "s": true,
 	"strike": true, "del": true, "code": true, "pre": true, "a": true, "blockquote": true, "tg-spoiler": true}
 
-// HTMLPages 把 HTML 分成每页最多 limit 个字符，在每页末尾闭合还开着的
+// HTMLPages 把 HTML 分成每页最多 limit 个 UTF-16 单位，在每页末尾闭合还开着的
 // 标签，到下一页再重新打开。格式不对的标记按可见文本显示。
 func HTMLPages(text string, limit int) []string {
 	type open struct{ name, tag string }
 	var pages []string
 	var stack []open
 	page, visible := "", false
+	// units 是 page 的 UTF-16 长度，随 page 一起更新，不用每次重算。标签只有 ASCII，
+	// 它们的 len 就是单位数。
+	units := 0
 	closing := func() string {
 		var b strings.Builder
 		for index := len(stack) - 1; index >= 0; index-- {
@@ -60,12 +87,15 @@ func HTMLPages(text string, limit int) []string {
 			b.WriteString(tag.tag)
 		}
 		page, visible = b.String(), false
+		units = UTF16Len(page)
 	}
 	appendToken := func(token string, content bool) {
-		if len(page)+len(token)+len(closing()) > limit {
+		size := UTF16Len(token)
+		if units+size+len(closing()) > limit {
 			flush()
 		}
 		page += token
+		units += size
 		visible = visible || content
 	}
 	for _, token := range tokenizeHTML(text) {
@@ -73,6 +103,7 @@ func HTMLPages(text string, limit int) []string {
 			name := strings.ToLower(strings.TrimSpace(token[2 : len(token)-1]))
 			if len(stack) > 0 && stack[len(stack)-1].name == name {
 				page += "</" + name + ">"
+				units += len(name) + 3
 				stack = stack[:len(stack)-1]
 				continue
 			}
@@ -91,10 +122,11 @@ func HTMLPages(text string, limit int) []string {
 					valid = attrs == "" || attrs == "expandable"
 				}
 				if valid {
-					if len(page)+len(token)+len(closing())+len(name)+3 > limit {
+					if units+UTF16Len(token)+len(closing())+len(name)+3 > limit {
 						flush()
 					}
 					page += token
+					units += UTF16Len(token)
 					stack = append(stack, open{name: name, tag: token})
 					continue
 				}

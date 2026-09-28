@@ -384,7 +384,7 @@ func registerEat(a *app.App) {
 		return func(ctx context.Context, inv *command.Invocation) error {
 			sub := inv.Arg(0)
 			if strings.EqualFold(sub, "help") || strings.EqualFold(sub, "h") {
-				return kit.SendPages(ctx, inv, command.HTMLPages(service.help(inv.Prefix), 3800))
+				return kit.SendPages(ctx, inv, command.HTMLPages(service.help(inv.Prefix), command.PageLimit))
 			}
 			if strings.EqualFold(sub, "set") && inv.Message.ReplyToID == 0 {
 				return service.set(ctx, inv, name, inv.Arg(1))
@@ -398,7 +398,7 @@ func registerEat(a *app.App) {
 				return kit.FailWith("读不到素材目录", err)
 			}
 			if reply == nil {
-				return kit.SendPages(ctx, inv, command.HTMLPages(eatList(catalog, inv.Prefix, name), 3800))
+				return kit.SendPages(ctx, inv, command.HTMLPages(eatList(catalog, inv.Prefix, name), command.PageLimit))
 			}
 			key := sub
 			if key == "" {
@@ -506,5 +506,5 @@ func (s *eatService) set(ctx context.Context, inv *command.Invocation, name, lin
 	}
 	// 仓库里的图可能也更新过，清掉素材缓存，下次用到时重新下载。
 	_ = os.RemoveAll(filepath.Join(s.a.DataDir(), "eat"))
-	return kit.SendPages(ctx, inv, command.HTMLPages("✅ 素材目录已更新\n"+eatList(catalog, inv.Prefix, name), 3800))
+	return kit.SendPages(ctx, inv, command.HTMLPages("✅ 素材目录已更新\n"+eatList(catalog, inv.Prefix, name), command.PageLimit))
 }

@@ -71,7 +71,7 @@ func Register(a *app.App) {
 			if target == "en" {
 				language = "英文"
 			}
-			pages := command.EscapedPages(translated, 3000)
+			pages := command.EscapedPages(translated, command.PageLimit)
 			pages[0] = "🌐 <b>AI 翻译结果</b> (→ " + language + ")\n\n<b>原文:</b>\n<code>" + command.Escape(preview) + suffix + "</code>\n\n<b>译文:</b>\n" + pages[0]
 			return kit.SendPages(ctx, inv, pages)
 		}})

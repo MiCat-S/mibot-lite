@@ -263,7 +263,7 @@ func runTranslate(ctx context.Context, inv *command.Invocation, settings *store.
 	if len([]rune(text)) > 60 {
 		suffix = "…"
 	}
-	pages := command.EscapedPages(result.Text, 3400)
+	pages := command.EscapedPages(result.Text, command.PageLimit)
 	pages[0] = "🌐 <b>翻译</b>（" + command.Escape(source) + " → " + command.Escape(languageName(target)) +
 		"）\n\n<b>原文:</b>\n<code>" + command.Escape(preview) + suffix + "</code>\n\n<b>译文:</b>\n" + pages[0]
 	return kit.SendPages(ctx, inv, pages)

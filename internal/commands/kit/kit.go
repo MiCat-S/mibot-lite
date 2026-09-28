@@ -153,18 +153,8 @@ func UTF16Slice(text string, offset, length int) string {
 	return string(utf16.Decode(units[offset:end]))
 }
 
-// UTF16Len 是按 Telegram 的算法得出的消息长度。
-func UTF16Len(text string) int {
-	count := 0
-	for _, r := range text {
-		if r >= 0x10000 {
-			count += 2
-		} else {
-			count++
-		}
-	}
-	return count
-}
+// UTF16Len 是按 Telegram 的算法得出的消息长度，见 command.UTF16Len。
+func UTF16Len(text string) int { return command.UTF16Len(text) }
 
 // PeerKey 把 peer 写成 "kind:id"，dme 移植版就是按这个来比较的。
 func PeerKey(peer tg.PeerClass) string {

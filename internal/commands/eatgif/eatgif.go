@@ -302,7 +302,7 @@ func Register(a *app.App) {
 				for _, name := range names {
 					lines = append(lines, "• "+command.Code(name)+" - "+command.Escape(catalog[name].Desc))
 				}
-				return kit.SendPages(ctx, inv, command.HTMLPages(strings.Join(lines, "\n"), 3800))
+				return kit.SendPages(ctx, inv, command.HTMLPages(strings.Join(lines, "\n"), command.PageLimit))
 			}
 			selected, ok := catalog[sub]
 			if !ok {

@@ -262,7 +262,7 @@ func (s *aiService) showStatus(ctx context.Context, inv *command.Invocation, vie
 	if err != nil {
 		return err
 	}
-	return kit.SendPages(ctx, inv, command.HTMLPages(view(cfg), 3800))
+	return kit.SendPages(ctx, inv, command.HTMLPages(view(cfg), command.PageLimit))
 }
 
 func (s *aiService) handle(ctx context.Context, inv *command.Invocation) error {

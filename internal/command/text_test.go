@@ -68,3 +68,20 @@ func TestHTMLPagesKeepsAllowedAttributes(t *testing.T) {
 		t.Fatalf("a non-http link must not survive as markup: %q", page)
 	}
 }
+
+// 长度按 Telegram 的 UTF-16 单位算：5000 个汉字是两页，不是按字节算出来的四页；
+// 带 emoji 的也不会超过上限。
+func TestPagesCountUTF16Units(t *testing.T) {
+	chinese := strings.Repeat("中", 5000)
+	if pages := EscapedPages(chinese, PageLimit); len(pages) != 2 {
+		t.Errorf("5000 个汉字分成了 %d 页，应为 2", len(pages))
+	}
+	if pages := HTMLPages("<b>"+chinese+"</b>", PageLimit); len(pages) != 2 {
+		t.Errorf("HTML 里 5000 个汉字分成了 %d 页，应为 2", len(pages))
+	}
+	for _, page := range HTMLPages(strings.Repeat("😀a", 3000), PageLimit) {
+		if n := UTF16Len(page); n > PageLimit {
+			t.Errorf("一页有 %d 个单位，超过了 %d", n, PageLimit)
+		}
+	}
+}

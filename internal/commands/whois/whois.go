@@ -117,10 +117,10 @@ func whoisReport(domain, raw string) []string {
 		lines = append(lines, "DNS 服务器:\n"+strings.Join(ordered, "\n"))
 	}
 	var pages []string
-	for _, page := range command.EscapedPages(strings.Join(lines, "\n"), 3400) {
+	for _, page := range command.EscapedPages(strings.Join(lines, "\n"), command.PageLimit) {
 		pages = append(pages, "<pre>"+page+"</pre>")
 	}
-	for _, page := range command.EscapedPages(raw, 3400) {
+	for _, page := range command.EscapedPages(raw, command.PageLimit) {
 		pages = append(pages, "<blockquote expandable>"+page+"</blockquote>")
 	}
 	return pages
