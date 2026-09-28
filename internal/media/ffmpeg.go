@@ -101,58 +101,66 @@ func StickerWebM(ctx context.Context, directory string, frames []Frame, width, h
 	return readBounded(output, 20<<20)
 }
 
-// ToStickerWebM 把已有的视频或动图转成 VP9 WebM。
-func ToStickerWebM(ctx context.Context, directory string, input []byte, extension string) ([]byte, error) {
+// ToStickerWebM 把已有的视频或动图转成 VP9 WebM。extension 是输入的扩展名（带点），
+// ffmpeg 靠它认格式。
+func ToStickerWebM(ctx context.Context, input []byte, extension string) ([]byte, error) {
 	binary, err := FFmpeg()
 	if err != nil {
 		return nil, err
 	}
-	source := filepath.Join(directory, "input"+extension)
-	if err := os.WriteFile(source, input, 0o600); err != nil {
-		return nil, err
-	}
-	args := []string{"-nostdin", "-v", "error", "-i", filepath.Base(source),
-		"-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-b:v", "400k",
-		"-deadline", "good", "-cpu-used", "5", "-row-mt", "1", "-threads", "2",
-		"-auto-alt-ref", "0", "-an", "-y", "converted.webm"}
-	if err := run(ctx, binary, directory, args); err != nil {
-		return nil, err
-	}
-	return readBounded(filepath.Join(directory, "converted.webm"), 20<<20)
+	var output []byte
+	err = WithWorkdir(func(directory string) error {
+		source := "input" + extension
+		if err := os.WriteFile(filepath.Join(directory, source), input, 0o600); err != nil {
+			return err
+		}
+		args := []string{"-nostdin", "-v", "error", "-i", source,
+			"-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-b:v", "400k",
+			"-deadline", "good", "-cpu-used", "5", "-row-mt", "1", "-threads", "2",
+			"-auto-alt-ref", "0", "-an", "-y", "converted.webm"}
+		if err := run(ctx, binary, directory, args); err != nil {
+			return err
+		}
+		output, err = readBounded(filepath.Join(directory, "converted.webm"), 20<<20)
+		return err
+	})
+	return output, err
 }
 
 // StickerWebP 把一张 PNG 编码成静态贴纸用的 WebP。
-func StickerWebP(ctx context.Context, directory string, png []byte) ([]byte, error) {
+func StickerWebP(ctx context.Context, png []byte) ([]byte, error) {
 	binary, err := FFmpeg()
 	if err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(filepath.Join(directory, "sticker.png"), png, 0o600); err != nil {
-		return nil, err
-	}
-	args := []string{"-nostdin", "-v", "error", "-i", "sticker.png", "-frames:v", "1",
-		"-c:v", "libwebp", "-lossless", "0", "-quality", "95", "-y", "sticker.webp"}
-	if err := run(ctx, binary, directory, args); err != nil {
-		return nil, err
-	}
-	return readBounded(filepath.Join(directory, "sticker.webp"), 5<<20)
+	var output []byte
+	err = WithWorkdir(func(directory string) error {
+		if err := os.WriteFile(filepath.Join(directory, "sticker.png"), png, 0o600); err != nil {
+			return err
+		}
+		args := []string{"-nostdin", "-v", "error", "-i", "sticker.png", "-frames:v", "1",
+			"-c:v", "libwebp", "-lossless", "0", "-quality", "95", "-y", "sticker.webp"}
+		if err := run(ctx, binary, directory, args); err != nil {
+			return err
+		}
+		output, err = readBounded(filepath.Join(directory, "sticker.webp"), 5<<20)
+		return err
+	})
+	return output, err
+}
+
+// Audio 是转好的一段音频和它的时长。
+type Audio struct {
+	Data []byte
+	// Seconds 是时长，向上取整到秒；读不出来是 0。
+	Seconds int
 }
 
 // VoiceOgg 把一段音频转成 Telegram 语音消息要的 Ogg Opus。
-func VoiceOgg(ctx context.Context, directory string, audio []byte) ([]byte, error) {
-	binary, err := FFmpeg()
-	if err != nil {
-		return nil, err
-	}
-	if err := os.WriteFile(filepath.Join(directory, "speech.mp3"), audio, 0o600); err != nil {
-		return nil, err
-	}
+func VoiceOgg(ctx context.Context, audio []byte) (Audio, error) {
 	args := []string{"-nostdin", "-v", "error", "-i", "speech.mp3", "-vn",
 		"-c:a", "libopus", "-b:a", "64k", "-vbr", "on", "-y", "voice.ogg"}
-	if err := run(ctx, binary, directory, args); err != nil {
-		return nil, err
-	}
-	return readBounded(filepath.Join(directory, "voice.ogg"), 20<<20)
+	return encodeAudio(ctx, audio, nil, args, "voice.ogg", 20<<20)
 }
 
 // Tags 是写进 MP3 的 ID3 信息。
@@ -164,19 +172,9 @@ type Tags struct {
 
 // TaggedMP3 给一段 MP3 重新编码并写上标题、歌手、专辑和封面，
 // 播放器里显示成一首歌。
-func TaggedMP3(ctx context.Context, directory string, audio []byte, tags Tags) ([]byte, error) {
-	binary, err := FFmpeg()
-	if err != nil {
-		return nil, err
-	}
-	if err := os.WriteFile(filepath.Join(directory, "speech.mp3"), audio, 0o600); err != nil {
-		return nil, err
-	}
+func TaggedMP3(ctx context.Context, audio []byte, tags Tags) (Audio, error) {
 	args := []string{"-nostdin", "-v", "error", "-i", "speech.mp3"}
 	if len(tags.Cover) > 0 {
-		if err := os.WriteFile(filepath.Join(directory, "cover.img"), tags.Cover, 0o600); err != nil {
-			return nil, err
-		}
 		args = append(args, "-i", "cover.img", "-map", "0:a", "-map", "1:v",
 			"-c:v", "mjpeg", "-disposition:v", "attached_pic",
 			"-metadata:s:v", "title=Album cover", "-metadata:s:v", "comment=Cover (front)")
@@ -186,22 +184,45 @@ func TaggedMP3(ctx context.Context, directory string, audio []byte, tags Tags) (
 	args = append(args, "-c:a", "libmp3lame", "-q:a", "2", "-id3v2_version", "3",
 		"-metadata", "title="+tags.Title, "-metadata", "artist="+tags.Artist, "-metadata", "album="+tags.Album,
 		"-y", "song.mp3")
-	if err := run(ctx, binary, directory, args); err != nil {
-		return nil, err
+	return encodeAudio(ctx, audio, tags.Cover, args, "song.mp3", 30<<20)
+}
+
+// encodeAudio 在临时目录里把 audio 写成 speech.mp3（有封面就写成 cover.img），
+// 用 args 跑一遍 ffmpeg，读回 output 和它的时长。
+func encodeAudio(ctx context.Context, audio, cover []byte, args []string, output string, limit int64) (Audio, error) {
+	binary, err := FFmpeg()
+	if err != nil {
+		return Audio{}, err
 	}
-	return readBounded(filepath.Join(directory, "song.mp3"), 30<<20)
+	var result Audio
+	err = WithWorkdir(func(directory string) error {
+		if err := os.WriteFile(filepath.Join(directory, "speech.mp3"), audio, 0o600); err != nil {
+			return err
+		}
+		if len(cover) > 0 {
+			if err := os.WriteFile(filepath.Join(directory, "cover.img"), cover, 0o600); err != nil {
+				return err
+			}
+		}
+		if err := run(ctx, binary, directory, args); err != nil {
+			return err
+		}
+		data, err := readBounded(filepath.Join(directory, output), limit)
+		if err != nil {
+			return err
+		}
+		result = Audio{Data: data, Seconds: duration(ctx, binary, directory, output)}
+		return nil
+	})
+	return result, err
 }
 
 // durationLine 是 ffmpeg 读输入时打印的时长，如 "Duration: 00:00:03.52"。
 var durationLine = regexp.MustCompile(`Duration: (\d+):(\d{2}):(\d{2})\.(\d+)`)
 
-// Duration 读出目录里一个音频文件的时长（向上取整到秒），读不出来返回 0。
+// duration 读出目录里一个音频文件的时长（向上取整到秒），读不出来返回 0。
 // 只给 ffmpeg 输入不给输出时，它打印完文件信息就以错误退出，时长就在那段信息里。
-func Duration(ctx context.Context, directory, name string) int {
-	binary, err := FFmpeg()
-	if err != nil {
-		return 0
-	}
+func duration(ctx context.Context, binary, directory, name string) int {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	command := exec.CommandContext(ctx, binary, "-nostdin", "-hide_banner", "-i", name)
@@ -219,6 +240,18 @@ func Duration(ctx context.Context, directory, name string) int {
 		total++
 	}
 	return total
+}
+
+// WithWorkdir 建一个临时目录给 fn 用，fn 返回后连同里面的文件一起删掉。ffmpeg 读写的
+// 都是文件，每次调用各用一个目录，同时跑的几条命令互不干扰。目录在系统临时目录下，
+// systemd 服务开了 PrivateTmp，别的进程看不见。
+func WithWorkdir(fn func(directory string) error) error {
+	directory, err := os.MkdirTemp("", "mibot-media-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(directory)
+	return fn(directory)
 }
 
 // encodeTimeout 是单次运行 ffmpeg 的时限。

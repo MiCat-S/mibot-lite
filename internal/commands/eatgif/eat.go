@@ -454,12 +454,7 @@ func (s *eatService) render(ctx context.Context, inv *command.Invocation, reply 
 	if err != nil {
 		return nil, err
 	}
-	directory, err := os.MkdirTemp("", "mibot-eat-")
-	if err != nil {
-		return nil, err
-	}
-	defer os.RemoveAll(directory)
-	return media.StickerWebP(ctx, directory, png)
+	return media.StickerWebP(ctx, png)
 }
 
 // stickerSize 把成品等比缩放到长边正好 512：素材有大有小，贴纸包要求一边是 512，

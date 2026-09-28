@@ -333,58 +333,9 @@ func Register(a *app.App) {
 				return err
 			}
 
-			directory, err := os.MkdirTemp("", "mibot-eatgif-")
+			webm, err := service.render(ctx, spec, faces)
 			if err != nil {
 				return err
-			}
-			defer os.RemoveAll(directory)
-
-			frames := make([]media.Frame, 0, len(spec.Frames))
-			for index, entry := range spec.Frames {
-				if err := ctx.Err(); err != nil {
-					return err
-				}
-				canvasData, err := service.asset(ctx, entry.URL, 5<<20)
-				if err != nil {
-					return kit.FailWith("素材下载失败", err)
-				}
-				canvas, err := frameCanvas(canvasData)
-				if err != nil {
-					return kit.Fail("素材图片无效")
-				}
-				// 先贴被回复者的头像，再贴本账号的，与素材定义编写时的顺序一致。
-				if entry.You != nil {
-					if err := service.paste(ctx, canvas, entry.You, faces.you); err != nil {
-						return kit.FailWith("合成失败", err)
-					}
-				}
-				if entry.Me != nil {
-					if err := service.paste(ctx, canvas, entry.Me, faces.me); err != nil {
-						return kit.FailWith("合成失败", err)
-					}
-				}
-				path := filepath.Join(directory, fmt.Sprintf("frame%04d.png", index))
-				file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-				if err != nil {
-					return err
-				}
-				err = imaging.WritePNG(file, canvas)
-				if closeErr := file.Close(); err == nil {
-					err = closeErr
-				}
-				if err != nil {
-					return err
-				}
-				delay := 100
-				if entry.Delay != nil {
-					delay = kit.Clamp(*entry.Delay, 20, 5000)
-				}
-				frames = append(frames, media.Frame{Path: path, Delay: time.Duration(delay) * time.Millisecond})
-			}
-
-			webm, err := media.StickerWebM(ctx, directory, frames, spec.Width, spec.Height)
-			if err != nil {
-				return kit.FailWith("视频编码失败", err)
 			}
 			peer, err := inv.Client.InputPeer(inv.Message.Peer)
 			if err != nil {
@@ -395,6 +346,62 @@ func Register(a *app.App) {
 			}
 			return inv.Client.DeleteMessage(ctx, inv.Message)
 		}})
+}
+
+// render 在临时目录里逐帧贴上头像、写成 PNG，再交给 ffmpeg 编码成视频贴纸。
+func (s *eatgifService) render(ctx context.Context, spec eatgifSpec, faces *avatarPair) ([]byte, error) {
+	var webm []byte
+	err := media.WithWorkdir(func(directory string) error {
+		frames := make([]media.Frame, 0, len(spec.Frames))
+		for index, entry := range spec.Frames {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			canvasData, err := s.asset(ctx, entry.URL, 5<<20)
+			if err != nil {
+				return kit.FailWith("素材下载失败", err)
+			}
+			canvas, err := frameCanvas(canvasData)
+			if err != nil {
+				return kit.Fail("素材图片无效")
+			}
+			// 先贴被回复者的头像，再贴本账号的，与素材定义编写时的顺序一致。
+			if entry.You != nil {
+				if err := s.paste(ctx, canvas, entry.You, faces.you); err != nil {
+					return kit.FailWith("合成失败", err)
+				}
+			}
+			if entry.Me != nil {
+				if err := s.paste(ctx, canvas, entry.Me, faces.me); err != nil {
+					return kit.FailWith("合成失败", err)
+				}
+			}
+			path := filepath.Join(directory, fmt.Sprintf("frame%04d.png", index))
+			file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+			if err != nil {
+				return err
+			}
+			err = imaging.WritePNG(file, canvas)
+			if closeErr := file.Close(); err == nil {
+				err = closeErr
+			}
+			if err != nil {
+				return err
+			}
+			delay := 100
+			if entry.Delay != nil {
+				delay = kit.Clamp(*entry.Delay, 20, 5000)
+			}
+			frames = append(frames, media.Frame{Path: path, Delay: time.Duration(delay) * time.Millisecond})
+		}
+		encoded, err := media.StickerWebM(ctx, directory, frames, spec.Width, spec.Height)
+		if err != nil {
+			return kit.FailWith("视频编码失败", err)
+		}
+		webm = encoded
+		return nil
+	})
+	return webm, err
 }
 
 // avatarPair 是一个动画要合成的两张头像。

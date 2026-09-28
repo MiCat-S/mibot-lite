@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"image"
 	"image/color"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -1051,12 +1050,7 @@ func (s *yvluService) embedVideo(ctx context.Context, inv *command.Invocation, m
 		item.Media = &quotePhot{URL: "data:video/webm;base64," + base64.StdEncoding.EncodeToString(file.Data)}
 		return
 	}
-	directory, err := os.MkdirTemp("", "mibot-yvlu-")
-	if err != nil {
-		return
-	}
-	defer os.RemoveAll(directory)
-	converted, err := media.ToStickerWebM(ctx, directory, file.Data, extensionFor(document.MimeType))
+	converted, err := media.ToStickerWebM(ctx, file.Data, extensionFor(document.MimeType))
 	if err != nil {
 		inv.Log.Info("yvlu.video_skipped", "error", err.Error())
 		return
