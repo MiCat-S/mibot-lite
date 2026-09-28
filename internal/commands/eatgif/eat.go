@@ -389,7 +389,7 @@ func registerEat(a *app.App) {
 			if strings.EqualFold(sub, "set") && inv.Message.ReplyToID == 0 {
 				return service.set(ctx, inv, name, inv.Arg(1))
 			}
-			reply, err := inv.Client.GetReply(ctx, inv.Message)
+			reply, err := kit.Reply(ctx, inv)
 			if err != nil {
 				return err
 			}

@@ -308,7 +308,7 @@ func Register(a *app.App) {
 			if !ok {
 				return kit.Failf("找不到 %s，发 %seatgif list 看全部动画", sub, inv.Prefix)
 			}
-			reply, err := inv.Client.GetReply(ctx, inv.Message)
+			reply, err := kit.Reply(ctx, inv)
 			if err != nil {
 				return err
 			}

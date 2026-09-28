@@ -78,9 +78,9 @@ func resolveEntity(ctx context.Context, inv *command.Invocation, fallback tg.Inp
 		return resolveArgument(ctx, inv, argument)
 	}
 	if inv.Message.ReplyToID != 0 {
-		reply, err := inv.Client.GetReply(ctx, inv.Message)
-		if err != nil || reply == nil {
-			return target{}, kit.Fail("读不到被回复的消息")
+		reply, err := kit.Reply(ctx, inv)
+		if err != nil {
+			return target{}, err
 		}
 		if reply.Sender != nil {
 			return addressed(inv.Client, reply.Sender, reply)

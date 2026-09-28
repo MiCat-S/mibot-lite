@@ -46,7 +46,7 @@ func handle(ctx context.Context, root string, inv *command.Invocation) error {
 
 // repeat 读出要复读的消息，转发 times 次；对话禁止转发时改为复制。
 func repeat(ctx context.Context, root string, inv *command.Invocation) error {
-	reply, err := inv.Client.GetReply(ctx, inv.Message)
+	reply, err := kit.Reply(ctx, inv)
 	if err != nil {
 		return err
 	}

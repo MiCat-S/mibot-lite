@@ -261,9 +261,9 @@ func resolveUser(ctx context.Context, inv *command.Invocation, argument string) 
 	if inv.Message.ReplyToID == 0 {
 		return delegateEntry{}, kit.Fail("回复对方的消息，或者带上数字 ID、@用户名")
 	}
-	reply, err := inv.Client.GetReply(ctx, inv.Message)
-	if err != nil || reply == nil {
-		return delegateEntry{}, kit.Fail("读不到被回复的消息")
+	reply, err := kit.Reply(ctx, inv)
+	if err != nil {
+		return delegateEntry{}, err
 	}
 	id := senderUserID(reply)
 	if id == "" {

@@ -297,7 +297,11 @@ func (s *service) speak(ctx context.Context, inv *command.Invocation) error {
 		text = strings.TrimSpace(inv.Rest(0))
 	}
 	if text == "" && inv.Message.ReplyToID != 0 {
-		if reply, err := inv.Client.GetReply(ctx, inv.Message); err == nil && reply != nil {
+		reply, err := kit.Reply(ctx, inv)
+		if err != nil {
+			return err
+		}
+		if reply != nil {
 			text = reply.Text
 		}
 	}

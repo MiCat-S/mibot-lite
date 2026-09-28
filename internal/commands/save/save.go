@@ -800,8 +800,11 @@ func collectSaveJobs(ctx context.Context, inv *command.Invocation, work *saver, 
 	case len(request.Links) > 0:
 		return collectSaveLinks(ctx, work, request.Links)
 	}
-	reply, err := inv.Client.GetReply(ctx, inv.Message)
-	if err != nil || reply == nil || reply.Raw == nil {
+	reply, err := kit.Reply(ctx, inv)
+	if err != nil {
+		return nil, err
+	}
+	if reply == nil || reply.Raw == nil {
 		return nil, kit.Fail("读不到被回复的消息")
 	}
 	peer, err := inv.Client.InputPeer(reply.Peer)

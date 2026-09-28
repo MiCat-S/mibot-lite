@@ -501,7 +501,7 @@ func (s *aiService) ask(ctx context.Context, inv *command.Invocation, search boo
 		skip = 1
 	}
 	own := strings.TrimSpace(inv.RawAfter(skip))
-	reply, err := inv.Client.GetReply(ctx, inv.Message)
+	reply, err := kit.Reply(ctx, inv)
 	if err != nil {
 		// 自己输入了问题时，读不到回复的消息只是少了上下文，不算失败。
 		if own == "" {

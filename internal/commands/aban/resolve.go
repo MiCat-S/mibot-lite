@@ -67,7 +67,7 @@ func (s *abanService) resolveTarget(ctx context.Context, inv *command.Invocation
 	if args := targetArgs(inv.Args); len(args) > 0 {
 		return s.resolveArg(ctx, inv.Client, here, args[0])
 	}
-	reply, err := inv.Client.GetReply(ctx, inv.Message)
+	reply, err := kit.Reply(ctx, inv)
 	if err != nil {
 		return target{}, err
 	}

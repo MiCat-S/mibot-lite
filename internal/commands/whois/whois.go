@@ -169,7 +169,11 @@ func Register(a *app.App) {
 				return whoisBatch(ctx, inv, data, inv.Args[1:], help)
 			}
 			if raw == "" {
-				if reply, err := inv.Client.GetReply(ctx, inv.Message); err == nil && reply != nil {
+				reply, err := kit.Reply(ctx, inv)
+				if err != nil {
+					return err
+				}
+				if reply != nil {
 					raw = loosePattern.FindString(reply.Text)
 				}
 				if raw == "" {

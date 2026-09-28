@@ -417,7 +417,7 @@ func (s *yvluService) handle(ctx context.Context, inv *command.Invocation) error
 		}
 		options.FakeSender, options.FakeAuthor = peer, author
 	}
-	reply, err := inv.Client.GetReply(ctx, inv.Message)
+	reply, err := kit.Reply(ctx, inv)
 	if err != nil {
 		return err
 	}
@@ -571,7 +571,7 @@ func (s *yvluService) saveSticker(ctx context.Context, inv *command.Invocation) 
 	if strings.TrimSpace(config.StickerSet) == "" {
 		return kit.Failf("未配置贴纸包，请使用 %syvlu config sticker 贴纸包名称", inv.Prefix)
 	}
-	reply, err := inv.Client.GetReply(ctx, inv.Message)
+	reply, err := kit.Reply(ctx, inv)
 	if err != nil {
 		return err
 	}

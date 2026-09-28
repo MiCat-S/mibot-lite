@@ -228,7 +228,7 @@ func Register(a *app.App) {
 			if sub == "help" || sub == "h" {
 				return inv.Edit(ctx, help(inv.Prefix))
 			}
-			reply, err := inv.Client.GetReply(ctx, inv.Message)
+			reply, err := kit.Reply(ctx, inv)
 			if err != nil {
 				return err
 			}

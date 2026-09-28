@@ -33,7 +33,7 @@ func Register(a *app.App) {
 				text = strings.TrimLeftFunc(inv.RawAfter(1), unicode.IsSpace)
 			}
 			if strings.TrimSpace(text) == "" {
-				reply, err := inv.Client.GetReply(ctx, inv.Message)
+				reply, err := kit.Reply(ctx, inv)
 				if err != nil {
 					return err
 				}

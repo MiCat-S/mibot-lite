@@ -224,7 +224,7 @@ func runTranslate(ctx context.Context, inv *command.Invocation, settings *store.
 	}
 	text := inv.Rest(rest)
 	if strings.TrimSpace(text) == "" {
-		reply, err := inv.Client.GetReply(ctx, inv.Message)
+		reply, err := kit.Reply(ctx, inv)
 		if err != nil {
 			return err
 		}

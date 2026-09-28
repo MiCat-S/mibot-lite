@@ -121,7 +121,11 @@ func Register(a *app.App) {
 			return inv.Edit(ctx, ipHelp(inv.Prefix))
 		}
 		if query == "" && inv.Message.ReplyToID != 0 {
-			if reply, err := inv.Client.GetReply(ctx, inv.Message); err == nil && reply != nil {
+			reply, err := kit.Reply(ctx, inv)
+			if err != nil {
+				return err
+			}
+			if reply != nil {
 				query = replyQuery(reply.Text)
 			}
 		}

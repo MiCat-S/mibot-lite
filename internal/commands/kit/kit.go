@@ -89,6 +89,22 @@ func Warn(a *app.App, event string, err error) {
 // 不用自己加省略号。
 func Working(text string) string { return "⏳ " + strings.TrimSuffix(text, "…") + "…" }
 
+// Reply 读回命令所回复的那条消息。没有回复时返回 (nil, nil)，由调用方决定要不要提示；
+// 读取失败、被回复的消息已经不在时，返回给用户看的错误，各命令的说法因此一致。
+func Reply(ctx context.Context, inv *command.Invocation) (*bot.Message, error) {
+	if inv.Message.ReplyToID == 0 {
+		return nil, nil
+	}
+	reply, err := inv.Client.GetReply(ctx, inv.Message)
+	if err != nil {
+		return nil, FailWith("读不到被回复的消息", err)
+	}
+	if reply == nil {
+		return nil, Fail("被回复的消息已经不在了")
+	}
+	return reply, nil
+}
+
 // Usage 返回「用法：<前缀><用法>」这样给用户看的错误，前缀取用户实际用的那个，照抄就能用。
 func Usage(prefix, usage string) error { return command.Fail("用法：" + prefix + usage) }
 
