@@ -328,7 +328,7 @@ func (s *service) speak(ctx context.Context, inv *command.Invocation) error {
 	if err != nil {
 		return err
 	}
-	var options bot.DocumentOptions
+	var options bot.MediaOptions
 	var data []byte
 	if song {
 		data, err = media.TaggedMP3(ctx, directory, audio, media.Tags{Title: title, Artist: artist, Album: role,
@@ -336,7 +336,7 @@ func (s *service) speak(ctx context.Context, inv *command.Invocation) error {
 		if err != nil {
 			return kit.FailWith("音频处理失败", err)
 		}
-		options = bot.DocumentOptions{Name: title + ".mp3", MimeType: "audio/mpeg", Caption: command.Escape(title + " - " + artist),
+		options = bot.MediaOptions{Name: title + ".mp3", MimeType: "audio/mpeg", Caption: command.Escape(title + " - " + artist),
 			Attributes: []tg.DocumentAttributeClass{&tg.DocumentAttributeAudio{Title: title, Performer: artist,
 				Duration: media.Duration(ctx, directory, "song.mp3")}}}
 	} else {
@@ -344,12 +344,12 @@ func (s *service) speak(ctx context.Context, inv *command.Invocation) error {
 		if err != nil {
 			return kit.FailWith("音频处理失败", err)
 		}
-		options = bot.DocumentOptions{Name: "voice.ogg", MimeType: "audio/ogg",
+		options = bot.MediaOptions{Name: "voice.ogg", MimeType: "audio/ogg",
 			Attributes: []tg.DocumentAttributeClass{&tg.DocumentAttributeAudio{Voice: true,
 				Duration: media.Duration(ctx, directory, "voice.ogg")}}}
 	}
 	options.ReplyTo = inv.Message.ReplyToID
-	if err := inv.Client.SendDocumentWith(ctx, peer, data, options); err != nil {
+	if err := inv.Client.SendDocument(ctx, peer, data, options); err != nil {
 		return err
 	}
 	return inv.Client.DeleteMessage(ctx, inv.Message)

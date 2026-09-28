@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/MiCat-S/mibot-lite/internal/app"
+	"github.com/MiCat-S/mibot-lite/internal/bot"
 	"github.com/MiCat-S/mibot-lite/internal/command"
 	"github.com/MiCat-S/mibot-lite/internal/commands/kit"
 	"github.com/MiCat-S/mibot-lite/internal/statuscard"
@@ -93,7 +94,7 @@ func status(ctx context.Context, a *app.App, registry *command.Registry, inv *co
 	if err == nil {
 		peer, sendErr := inv.Client.InputPeer(inv.Message.Peer)
 		if sendErr == nil {
-			sendErr = inv.Client.SendPhoto(ctx, peer, "status.png", card, caption, inv.Message.ReplyToID)
+			sendErr = inv.Client.SendPhoto(ctx, peer, card, bot.MediaOptions{Name: "status.png", Caption: caption, ReplyTo: inv.Message.ReplyToID})
 		}
 		if sendErr == nil {
 			return inv.Client.DeleteMessage(ctx, inv.Message)

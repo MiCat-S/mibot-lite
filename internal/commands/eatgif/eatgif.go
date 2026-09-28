@@ -402,7 +402,7 @@ func Register(a *app.App) {
 			if err != nil {
 				return err
 			}
-			options := bot.DocumentOptions{Name: "sticker.webm", MimeType: "video/webm", ReplyTo: inv.Message.ReplyToID,
+			options := bot.MediaOptions{Name: "sticker.webm", MimeType: "video/webm", ReplyTo: inv.Message.ReplyToID,
 				Attributes: []tg.DocumentAttributeClass{
 					&tg.DocumentAttributeSticker{Alt: "✨", Stickerset: &tg.InputStickerSetEmpty{}},
 					&tg.DocumentAttributeImageSize{W: spec.Width, H: spec.Height},
@@ -410,7 +410,7 @@ func Register(a *app.App) {
 					// Telegram 自己的客户端发视频贴纸也带这一项，宽高和时长都是实际值。
 					&tg.DocumentAttributeVideo{W: spec.Width, H: spec.Height, Duration: total.Seconds()},
 				}}
-			if err := inv.Client.SendDocumentWith(ctx, peer, webm, options); err != nil {
+			if err := inv.Client.SendDocument(ctx, peer, webm, options); err != nil {
 				return err
 			}
 			return inv.Client.DeleteMessage(ctx, inv.Message)

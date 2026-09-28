@@ -367,9 +367,9 @@ func (s *eatService) help(prefix string) string {
 }
 
 // stickerOptions 是把一张 WebP 当贴纸发出去的参数：不属于任何贴纸包，alt 用款式名。
-func stickerOptions(alt string, webp []byte, replyTo int) bot.DocumentOptions {
+func stickerOptions(alt string, webp []byte, replyTo int) bot.MediaOptions {
 	width, height, _ := imaging.WebPSize(webp)
-	return bot.DocumentOptions{Name: "sticker.webp", MimeType: "image/webp", ReplyTo: replyTo,
+	return bot.MediaOptions{Name: "sticker.webp", MimeType: "image/webp", ReplyTo: replyTo,
 		Attributes: []tg.DocumentAttributeClass{
 			&tg.DocumentAttributeSticker{Alt: alt, Stickerset: &tg.InputStickerSetEmpty{}},
 			&tg.DocumentAttributeImageSize{W: width, H: height},
@@ -424,7 +424,7 @@ func registerEat(a *app.App) {
 			if err != nil {
 				return err
 			}
-			if err := inv.Client.SendDocumentWith(ctx, peer, result, stickerOptions(entry.Name, result, inv.Message.ReplyToID)); err != nil {
+			if err := inv.Client.SendDocument(ctx, peer, result, stickerOptions(entry.Name, result, inv.Message.ReplyToID)); err != nil {
 				return err
 			}
 			return inv.Client.DeleteMessage(ctx, inv.Message)

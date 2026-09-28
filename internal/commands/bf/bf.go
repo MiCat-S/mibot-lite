@@ -12,6 +12,7 @@ import (
 
 	"github.com/MiCat-S/mibot-lite/internal/app"
 	"github.com/MiCat-S/mibot-lite/internal/backup"
+	"github.com/MiCat-S/mibot-lite/internal/bot"
 	"github.com/MiCat-S/mibot-lite/internal/command"
 	"github.com/MiCat-S/mibot-lite/internal/commands/kit"
 )
@@ -75,8 +76,8 @@ func Register(a *app.App) {
 		// 账号本身；只因为有人碰巧在群里敲了 .bf 就把它发进群，等于把
 		// 账号交给了群里所有人。
 		name := "mibot-lite-backup-" + time.Now().Format("20060102-1504") + ".tar.gz"
-		if err := inv.Client.SendDocument(ctx, &tg.InputPeerSelf{}, name, "application/gzip", archive,
-			backupCaption(a.Version, names, len(archive)), 0); err != nil {
+		if err := inv.Client.SendDocument(ctx, &tg.InputPeerSelf{}, archive, bot.MediaOptions{Name: name, MimeType: "application/gzip",
+			Caption: backupCaption(a.Version, names, len(archive))}); err != nil {
 			return err
 		}
 		inv.Log.Info("backup.sent", "files", len(names), "bytes", len(archive))

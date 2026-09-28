@@ -460,22 +460,22 @@ func (s *yvluService) handle(ctx context.Context, inv *command.Invocation) error
 // send 按格式发出渲染结果：WebP 和 WebM 当贴纸发，PNG（image、stories）当照片发。
 func send(ctx context.Context, inv *command.Invocation, peer tg.InputPeerClass, data []byte, extension string, replyTo int) error {
 	if extension != "png" {
-		return inv.Client.SendDocumentWith(ctx, peer, data, stickerDocument(data, extension, replyTo))
+		return inv.Client.SendDocument(ctx, peer, data, stickerDocument(data, extension, replyTo))
 	}
 	// 原插件把 quote.png 交给 teleproto，它按扩展名认作图片，以照片发出。照片有尺寸和
 	// 大小限制；超出限制的，或者被 Telegram 拒收的，退回按文件发，结果至少还能送到。
 	if photoFits(data) {
-		err := inv.Client.SendPhoto(ctx, peer, "quote.png", data, "", replyTo)
+		err := inv.Client.SendPhoto(ctx, peer, data, bot.MediaOptions{Name: "quote.png", ReplyTo: replyTo})
 		if err == nil || !photoRejected(err) {
 			return err
 		}
 		inv.Log.Info("yvlu.photo_rejected", "error", err.Error())
 	}
-	return inv.Client.SendDocumentWith(ctx, peer, data, bot.DocumentOptions{Name: "quote.png", MimeType: "image/png", ReplyTo: replyTo})
+	return inv.Client.SendDocument(ctx, peer, data, bot.MediaOptions{Name: "quote.png", MimeType: "image/png", ReplyTo: replyTo})
 }
 
 // stickerDocument 是把 WebP 或 WebM 当贴纸发出去的参数，不属于任何贴纸包。
-func stickerDocument(data []byte, extension string, replyTo int) bot.DocumentOptions {
+func stickerDocument(data []byte, extension string, replyTo int) bot.MediaOptions {
 	attributes := []tg.DocumentAttributeClass{&tg.DocumentAttributeSticker{Alt: "📝", Stickerset: &tg.InputStickerSetEmpty{}}}
 	switch extension {
 	case "webp":
@@ -493,7 +493,7 @@ func stickerDocument(data []byte, extension string, replyTo int) bot.DocumentOpt
 		}
 		attributes = append(attributes, &tg.DocumentAttributeVideo{W: width, H: height, Duration: duration})
 	}
-	return bot.DocumentOptions{Name: "quote." + extension, MimeType: mimeOf(extension), ReplyTo: replyTo, Attributes: attributes}
+	return bot.MediaOptions{Name: "quote." + extension, MimeType: mimeOf(extension), ReplyTo: replyTo, Attributes: attributes}
 }
 
 // photoFits 判断图片能不能当照片发。Telegram 的要求：不超过 10 MB，宽高之和不超过

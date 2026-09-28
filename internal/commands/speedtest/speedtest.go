@@ -27,6 +27,7 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/httpx"
 
 	"github.com/MiCat-S/mibot-lite/internal/app"
+	"github.com/MiCat-S/mibot-lite/internal/bot"
 	"github.com/MiCat-S/mibot-lite/internal/command"
 	"github.com/MiCat-S/mibot-lite/internal/commands/kit"
 	"github.com/MiCat-S/mibot-lite/internal/store"
@@ -974,7 +975,7 @@ func deliver(ctx context.Context, inv *command.Invocation, text, link string) er
 		inv.Log.Info("speedtest.peer_unresolved", "error", err.Error())
 		return inv.Edit(ctx, text)
 	}
-	if err := inv.Client.SendPhoto(ctx, peer, "speedtest.png", image, text, inv.Message.ReplyToID); err != nil {
+	if err := inv.Client.SendPhoto(ctx, peer, image, bot.MediaOptions{Name: "speedtest.png", Caption: text, ReplyTo: inv.Message.ReplyToID}); err != nil {
 		inv.Log.Info("speedtest.photo_failed", "error", err.Error())
 		return inv.Edit(ctx, text)
 	}

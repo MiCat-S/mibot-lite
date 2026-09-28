@@ -185,41 +185,40 @@ func parseHTML(text string, peers *PeerCache) (string, []tg.MessageEntityClass, 
 
 // SendOptions 是一次发送的选项。
 type SendOptions struct {
-	ReplyTo     int
+	// ReplyTo 不为 0 时回复这条消息。
+	ReplyTo int
+	// Topic 不为 0 时发到论坛的这个话题里。
+	Topic       int
 	LinkPreview bool
 	Silent      bool
 }
 
-// SendHTML 发送一条消息，返回它的 id。
-func (c *Client) SendHTML(ctx context.Context, peer tg.InputPeerClass, text string, options SendOptions) (int, error) {
-	id, _, err := c.SendHTMLRaw(ctx, peer, text, options)
-	return id, err
+// replyTo 是 options 对应的回复目标，不回复也不在话题里时为 nil。
+// 只有话题没有回复时，回复话题的首条消息，消息就落在这个话题里。
+func (options SendOptions) replyTo() tg.InputReplyToClass {
+	if options.ReplyTo == 0 && options.Topic == 0 {
+		return nil
+	}
+	reply := &tg.InputReplyToMessage{ReplyToMsgID: options.ReplyTo}
+	if options.ReplyTo == 0 {
+		reply.ReplyToMsgID = options.Topic
+	}
+	if options.Topic > 0 {
+		reply.SetTopMsgID(options.Topic)
+	}
+	return reply
 }
 
-// SendHTMLRaw 发送一条消息，返回它的 id 和 Telegram 应答的原始更新。
+// SendHTML 发送一条 HTML 消息，返回它的 id。
 //
-// 服务器不会把这些更新推送给本进程：在这条连接上做的操作，只在它自己的
-// RPC 结果里报告，不会再推送回来。普通发送直接丢掉它们，这样做是对的：
-// 要是把自己发出的消息重新分发一遍，某个命令发出以前缀开头的文本时，
-// 就会触发它自己。只有 --verify 需要这些更新，因为它得从内部驱动分发器。
-func (c *Client) SendHTMLRaw(ctx context.Context, peer tg.InputPeerClass, text string, options SendOptions) (int, tg.UpdatesClass, error) {
+// 服务器不会把这条消息作为更新推回本进程（在这条连接上做的操作只在 RPC 结果里报告），
+// 所以命令发出以前缀开头的文字，也不会触发它自己。
+func (c *Client) SendHTML(ctx context.Context, peer tg.InputPeerClass, text string, options SendOptions) (int, error) {
 	plain, entities, err := c.parseHTML(text)
 	if err != nil {
-		return 0, nil, err
+		return 0, err
 	}
-	request := &tg.MessagesSendMessageRequest{Peer: peer, Message: plain, RandomID: rand.Int64(), NoWebpage: !options.LinkPreview, Silent: options.Silent}
-	if len(entities) > 0 {
-		request.SetEntities(entities)
-	}
-	if options.ReplyTo > 0 {
-		request.SetReplyTo(&tg.InputReplyToMessage{ReplyToMsgID: options.ReplyTo})
-	}
-	updates, err := c.api.MessagesSendMessage(ctx, request)
-	if err != nil {
-		return 0, nil, err
-	}
-	id, err := unpack.MessageID(updates, nil)
-	return id, updates, err
+	return c.send(ctx, peer, plain, entities, options)
 }
 
 // SendText 按原样发送文本。
@@ -227,21 +226,17 @@ func (c *Client) SendText(ctx context.Context, peer tg.InputPeerClass, text stri
 	return c.SendHTML(ctx, peer, Escape(text), options)
 }
 
-// SendRaw 按原文发一条消息（不解析 HTML），可以带格式实体，返回新消息的编号。
-// replyTo 为 0 表示不回复；topic 不为 0 时发到论坛的那个话题里。
-func (c *Client) SendRaw(ctx context.Context, peer tg.InputPeerClass, text string, entities []tg.MessageEntityClass, replyTo, topic int) (int, error) {
-	request := &tg.MessagesSendMessageRequest{Peer: peer, Message: text, RandomID: rand.Int64(), NoWebpage: true}
+// SendPlain 按原文发一条消息（不解析 HTML），可以带现成的格式实体，比如原样转发别人消息的文字和格式。
+func (c *Client) SendPlain(ctx context.Context, peer tg.InputPeerClass, text string, entities []tg.MessageEntityClass, options SendOptions) (int, error) {
+	return c.send(ctx, peer, text, entities, options)
+}
+
+func (c *Client) send(ctx context.Context, peer tg.InputPeerClass, text string, entities []tg.MessageEntityClass, options SendOptions) (int, error) {
+	request := &tg.MessagesSendMessageRequest{Peer: peer, Message: text, RandomID: rand.Int64(), NoWebpage: !options.LinkPreview, Silent: options.Silent}
 	if len(entities) > 0 {
 		request.SetEntities(entities)
 	}
-	if replyTo > 0 || topic > 0 {
-		reply := &tg.InputReplyToMessage{ReplyToMsgID: replyTo}
-		if replyTo == 0 {
-			reply.ReplyToMsgID = topic
-		}
-		if topic > 0 {
-			reply.SetTopMsgID(topic)
-		}
+	if reply := options.replyTo(); reply != nil {
 		request.SetReplyTo(reply)
 	}
 	updates, err := c.api.MessagesSendMessage(ctx, request)
@@ -413,28 +408,6 @@ func (c *Client) GetReply(ctx context.Context, message *Message) (*Message, erro
 	return nil, nil
 }
 
-// SendDocument 上传字节，作为文件发送，并附上 HTML 说明文字。
-func (c *Client) SendDocument(ctx context.Context, peer tg.InputPeerClass, name, mimeType string, data []byte, caption string, replyTo int) error {
-	file, err := c.upload.FromBytes(ctx, name, data)
-	if err != nil {
-		return err
-	}
-	plain, entities, err := c.parseHTML(caption)
-	if err != nil {
-		return err
-	}
-	media := &tg.InputMediaUploadedDocument{File: file, MimeType: mimeType, Attributes: []tg.DocumentAttributeClass{&tg.DocumentAttributeFilename{FileName: name}}}
-	request := &tg.MessagesSendMediaRequest{Peer: peer, Media: media, Message: plain, RandomID: rand.Int64()}
-	if len(entities) > 0 {
-		request.SetEntities(entities)
-	}
-	if replyTo > 0 {
-		request.SetReplyTo(&tg.InputReplyToMessage{ReplyToMsgID: replyTo})
-	}
-	_, err = c.api.MessagesSendMedia(ctx, request)
-	return err
-}
-
 // FloodWait 返回 FLOOD_WAIT 错误要求等待的时长。
 func FloodWait(err error) (time.Duration, bool) { return tgerr.AsFloodWait(err) }
 
@@ -468,11 +441,11 @@ func Bold(value string) string { return "<b>" + Escape(value) + "</b>" }
 // UserID 把用户 id 转成字符串。
 func UserID(id int64) string { return strconv.FormatInt(id, 10) }
 
-// DocumentOptions 描述上传的文档除字节内容之外的信息。
-type DocumentOptions struct {
+// MediaOptions 描述上传的文件除字节内容之外的信息。
+type MediaOptions struct {
 	// Name 是 Telegram 记录的文件名。
 	Name string
-	// MimeType 是声明的内容类型。
+	// MimeType 是声明的内容类型（发照片时不用）。
 	MimeType string
 	// Caption 是 HTML，可以为空。
 	Caption string
@@ -484,47 +457,37 @@ type DocumentOptions struct {
 	ForceDocument bool
 }
 
-// SendDocumentWith 上传字节，并带上给定的属性发送。
-func (c *Client) SendDocumentWith(ctx context.Context, peer tg.InputPeerClass, data []byte, options DocumentOptions) error {
+// SendDocument 上传字节，按 options 作为文件发送。
+func (c *Client) SendDocument(ctx context.Context, peer tg.InputPeerClass, data []byte, options MediaOptions) error {
 	file, err := c.upload.FromBytes(ctx, options.Name, data)
 	if err != nil {
 		return err
 	}
+	attributes := append([]tg.DocumentAttributeClass{&tg.DocumentAttributeFilename{FileName: options.Name}}, options.Attributes...)
+	return c.sendMedia(ctx, peer, &tg.InputMediaUploadedDocument{File: file, MimeType: options.MimeType, Attributes: attributes, ForceFile: options.ForceDocument}, options)
+}
+
+// SendPhoto 上传图片并作为照片发送，这样客户端会直接显示它，
+// 而不是显示成一个要下载的文件。options 里只用 Name、Caption、ReplyTo。
+func (c *Client) SendPhoto(ctx context.Context, peer tg.InputPeerClass, data []byte, options MediaOptions) error {
+	file, err := c.upload.FromBytes(ctx, options.Name, data)
+	if err != nil {
+		return err
+	}
+	return c.sendMedia(ctx, peer, &tg.InputMediaUploadedPhoto{File: file}, options)
+}
+
+func (c *Client) sendMedia(ctx context.Context, peer tg.InputPeerClass, media tg.InputMediaClass, options MediaOptions) error {
 	plain, entities, err := c.parseHTML(options.Caption)
 	if err != nil {
 		return err
 	}
-	attributes := append([]tg.DocumentAttributeClass{&tg.DocumentAttributeFilename{FileName: options.Name}}, options.Attributes...)
-	media := &tg.InputMediaUploadedDocument{File: file, MimeType: options.MimeType, Attributes: attributes, ForceFile: options.ForceDocument}
 	request := &tg.MessagesSendMediaRequest{Peer: peer, Media: media, Message: plain, RandomID: rand.Int64()}
 	if len(entities) > 0 {
 		request.SetEntities(entities)
 	}
 	if options.ReplyTo > 0 {
 		request.SetReplyTo(&tg.InputReplyToMessage{ReplyToMsgID: options.ReplyTo})
-	}
-	_, err = c.api.MessagesSendMedia(ctx, request)
-	return err
-}
-
-// SendPhoto 上传图片并作为照片发送，这样客户端会直接显示它，
-// 而不是显示成一个要下载的文件。
-func (c *Client) SendPhoto(ctx context.Context, peer tg.InputPeerClass, name string, data []byte, caption string, replyTo int) error {
-	file, err := c.upload.FromBytes(ctx, name, data)
-	if err != nil {
-		return err
-	}
-	plain, entities, err := c.parseHTML(caption)
-	if err != nil {
-		return err
-	}
-	request := &tg.MessagesSendMediaRequest{Peer: peer, Media: &tg.InputMediaUploadedPhoto{File: file},
-		Message: plain, RandomID: rand.Int64()}
-	if len(entities) > 0 {
-		request.SetEntities(entities)
-	}
-	if replyTo > 0 {
-		request.SetReplyTo(&tg.InputReplyToMessage{ReplyToMsgID: replyTo})
 	}
 	_, err = c.api.MessagesSendMedia(ctx, request)
 	return err

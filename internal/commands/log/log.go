@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/MiCat-S/mibot-lite/internal/app"
+	"github.com/MiCat-S/mibot-lite/internal/bot"
 	"github.com/MiCat-S/mibot-lite/internal/command"
 	"github.com/MiCat-S/mibot-lite/internal/commands/kit"
 	"github.com/MiCat-S/mibot-lite/internal/logtail"
@@ -154,7 +155,7 @@ func Register(a *app.App) {
 		}
 		name := "mibot-lite-" + time.Now().Format("20060102-1504") + ".log"
 		caption := "📄 运行日志 " + command.Code(a.Version) + " · " + strconv.Itoa(len(lines)) + " 行\n<i>已脱敏，可直接转发</i>"
-		if err := inv.Client.SendDocument(ctx, peer, name, logMimeType, []byte(body), caption, 0); err != nil {
+		if err := inv.Client.SendDocument(ctx, peer, []byte(body), bot.MediaOptions{Name: name, MimeType: logMimeType, Caption: caption}); err != nil {
 			return err
 		}
 		return inv.Client.DeleteMessage(ctx, inv.Message)
