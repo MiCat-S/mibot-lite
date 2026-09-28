@@ -11,6 +11,7 @@ import (
 
 	"github.com/MiCat-S/mibot-lite/internal/app"
 	"github.com/MiCat-S/mibot-lite/internal/command"
+	"github.com/MiCat-S/mibot-lite/internal/commands/kit"
 	"github.com/MiCat-S/mibot-lite/internal/config"
 )
 
@@ -107,18 +108,18 @@ func Register(a *app.App) {
 		}
 		tokens := args[1:]
 		if len(tokens) == 0 {
-			return inv.EditText(ctx, "❌ "+action+" 后面要跟前缀，例如 "+inv.Prefix+"prefix "+action+" ！")
+			return kit.Failf("%s 后面要跟前缀，例如 %sprefix %s ！", action, inv.Prefix, action)
 		}
 		if action != "del" {
 			for _, token := range tokens {
 				if problem := checkPrefix(token); problem != "" {
-					return inv.EditText(ctx, "❌ "+problem)
+					return kit.Fail(problem)
 				}
 			}
 		}
 		next := nextPrefixes(action, current, tokens)
 		if len(next) == 0 {
-			return inv.EditText(ctx, "❌ 至少要保留一个前缀")
+			return kit.Fail("至少要保留一个前缀")
 		}
 		a.Registry.SetPrefixes(next)
 

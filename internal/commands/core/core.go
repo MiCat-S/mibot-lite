@@ -30,7 +30,7 @@ func Register(a *app.App) {
 			}
 			elapsed, err := inv.Client.Ping(ctx)
 			if err != nil {
-				return inv.EditText(ctx, "Telegram 延迟测试失败")
+				return kit.FailWith("Telegram 延迟测试失败", err)
 			}
 			editing := time.Now()
 			if err := inv.EditText(ctx, "Pong!"); err != nil {

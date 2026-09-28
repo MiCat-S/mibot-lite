@@ -54,7 +54,7 @@ func repeat(ctx context.Context, root string, inv *command.Invocation) error {
 	times, _ := strconv.Atoi(inv.Arg(1))
 	count, times = kit.Clamp(count, 1, 20), kit.Clamp(times, 1, 10)
 	if reply == nil {
-		return inv.EditText(ctx, "请回复一条消息使用 "+inv.Prefix+"re [消息数] [复读次数]")
+		return kit.Failf("请回复一条消息再用：%sre [消息数] [复读次数]", inv.Prefix)
 	}
 	source, err := inv.Client.InputPeer(reply.Peer)
 	if err != nil {
@@ -69,7 +69,7 @@ func repeat(ctx context.Context, root string, inv *command.Invocation) error {
 		return err
 	}
 	if len(messages) == 0 {
-		return inv.EditText(ctx, "❌ 被回复的消息已经不在了")
+		return kit.Fail("被回复的消息已经不在了")
 	}
 	ids := make([]int, len(messages))
 	for index, message := range messages {
@@ -86,7 +86,7 @@ func repeat(ctx context.Context, root string, inv *command.Invocation) error {
 			return ctx.Err()
 		}
 		if !tgerr.Is(err, "CHAT_FORWARDS_RESTRICTED") {
-			return inv.EditText(ctx, "❌ 复读失败："+command.Brief(err))
+			return kit.FailWith("复读失败", err)
 		}
 		break
 	}
@@ -100,7 +100,7 @@ func repeat(ctx context.Context, root string, inv *command.Invocation) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			return inv.EditText(ctx, "❌ 复读失败："+command.Brief(err))
+			return kit.FailWith("复读失败", err)
 		}
 	}
 	return inv.Client.DeleteMessage(ctx, inv.Message)

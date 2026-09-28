@@ -395,7 +395,7 @@ func registerEat(a *app.App) {
 			}
 			catalog, root, err := service.load(ctx, false)
 			if err != nil {
-				return inv.Edit(ctx, "❌ 读不到素材目录："+command.Escape(httpx.Reason(err)))
+				return kit.FailWith("读不到素材目录", err)
 			}
 			if reply == nil {
 				return kit.SendPages(ctx, inv, command.HTMLPages(eatList(catalog, inv.Prefix, name), 3800))
@@ -411,17 +411,14 @@ func registerEat(a *app.App) {
 			}
 			entry, ok := catalog[key]
 			if !ok {
-				return inv.Edit(ctx, "找不到 "+command.Code(key)+"，不回复消息发 "+command.Code(inv.Prefix+name)+" 看全部款式")
+				return kit.Failf("找不到 %s，不回复消息发 %s%s 看全部款式", key, inv.Prefix, name)
 			}
 			if err := inv.EditText(ctx, "正在生成「"+entry.Name+"」…"); err != nil {
 				return err
 			}
 			result, err := service.render(ctx, inv, reply, root, entry, fromImage)
 			if err != nil {
-				if text, ok := kit.IsUserError(err); ok {
-					return inv.EditText(ctx, "❌ "+text)
-				}
-				return inv.Edit(ctx, "❌ 生成失败："+command.Escape(httpx.Reason(err)))
+				return kit.FailWith("生成失败", err)
 			}
 			peer, err := inv.Client.InputPeer(inv.Message.Peer)
 			if err != nil {
@@ -494,8 +491,7 @@ func (s *eatService) set(ctx context.Context, inv *command.Invocation, name, lin
 		if strings.EqualFold(link, "default") {
 			source = ""
 		} else if _, err := eatRoot(link); err != nil {
-			text, _ := kit.IsUserError(err)
-			return inv.EditText(ctx, "❌ "+text)
+			return err
 		}
 		if err := s.settings.Update(func(settings *eatSettings) error { settings.Source = source; return nil }); err != nil {
 			return err
@@ -506,7 +502,7 @@ func (s *eatService) set(ctx context.Context, inv *command.Invocation, name, lin
 	}
 	catalog, _, err := s.load(ctx, true)
 	if err != nil {
-		return inv.Edit(ctx, "❌ 读不到素材目录："+command.Escape(httpx.Reason(err)))
+		return kit.FailWith("读不到素材目录", err)
 	}
 	// 仓库里的图可能也更新过，清掉素材缓存，下次用到时重新下载。
 	_ = os.RemoveAll(filepath.Join(s.a.DataDir(), "eat"))

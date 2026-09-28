@@ -228,7 +228,7 @@ func Register(a *app.App) {
 	a.Registry.Register(&command.Command{Name: "da", Description: "批量删除群组消息", Usage: "true|stop|status", Help: daHelp, Timeout: 2 * time.Minute,
 		Handle: func(ctx context.Context, inv *command.Invocation) error {
 			if !strings.HasPrefix(inv.Message.ChatID, "-") {
-				return inv.EditText(ctx, "仅群组可用")
+				return kit.Fail("只能在群组里用")
 			}
 			switch sub := strings.ToLower(inv.Arg(0)); sub {
 			case "", "help", "h":
@@ -241,7 +241,7 @@ func Register(a *app.App) {
 					return nil
 				}
 			default:
-				return inv.EditText(ctx, "未知命令")
+				return kit.Failf("未知子命令：%s，%sda help 看用法", sub, inv.Prefix)
 			}
 			_ = inv.Client.DeleteMessage(ctx, inv.Message)
 			return nil

@@ -151,10 +151,10 @@ func parseSaveArgs(args []string) (saveRequest, error) {
 			from, okFrom := parseLink(left)
 			to, okTo := parseLink(right)
 			if !okFrom || !okTo {
-				return request, errors.New("范围两头都得是消息链接：链接1|链接2")
+				return request, kit.Fail("范围两头都得是消息链接：链接1|链接2")
 			}
 			if !from.sameChat(to) {
-				return request, errors.New("范围的两个链接必须在同一个对话里")
+				return request, kit.Fail("范围的两个链接必须在同一个对话里")
 			}
 			if from.ID > to.ID {
 				from, to = to, from
@@ -173,10 +173,10 @@ func parseSaveArgs(args []string) (saveRequest, error) {
 	case 1:
 		request.Target = others[0]
 	default:
-		return request, fmt.Errorf("看不懂 %s：链接之外只能跟一个目标", strings.Join(others, " "))
+		return request, kit.Failf("看不懂 %s：链接之外只能跟一个目标", strings.Join(others, " "))
 	}
 	if request.Range != nil && len(request.Links) > 0 {
-		return request, errors.New("范围和单独的链接不能混在一起")
+		return request, kit.Fail("范围和单独的链接不能混在一起")
 	}
 	return request, nil
 }
@@ -240,7 +240,7 @@ func (s *saver) peerOf(ctx context.Context, link messageLink) (tg.InputPeerClass
 	peer, err := s.client.InputPeerFromChatID(link.ChatID)
 	if err == nil || !errors.Is(err, bot.ErrUnaddressablePeer) || s.learned {
 		if err != nil {
-			return nil, errors.New("找不到这个对话：账号得是它的成员")
+			return nil, kit.Fail("找不到这个对话：账号得是它的成员")
 		}
 		return peer, nil
 	}
@@ -249,7 +249,7 @@ func (s *saver) peerOf(ctx context.Context, link messageLink) (tg.InputPeerClass
 		return nil, err
 	}
 	if peer, err = s.client.InputPeerFromChatID(link.ChatID); err != nil {
-		return nil, errors.New("找不到这个对话：账号得是它的成员")
+		return nil, kit.Fail("找不到这个对话：账号得是它的成员")
 	}
 	return peer, nil
 }
@@ -262,7 +262,7 @@ func (s *saver) targetOf(ctx context.Context, target string) (tg.InputPeerClass,
 	peer, err := s.client.ResolveTarget(ctx, target)
 	if err == nil || !errors.Is(err, bot.ErrUnaddressablePeer) || s.learned {
 		if err != nil {
-			return nil, fmt.Errorf("找不到目标 %s", target)
+			return nil, kit.Failf("找不到目标 %s", target)
 		}
 		return peer, nil
 	}
@@ -271,7 +271,7 @@ func (s *saver) targetOf(ctx context.Context, target string) (tg.InputPeerClass,
 		return nil, err
 	}
 	if peer, err = s.client.ResolveTarget(ctx, target); err != nil {
-		return nil, fmt.Errorf("找不到目标 %s", target)
+		return nil, kit.Failf("找不到目标 %s", target)
 	}
 	return peer, nil
 }
@@ -335,7 +335,7 @@ func (s *saver) fetch(ctx context.Context, peer tg.InputPeerClass, ids []int) ([
 }
 
 // ErrNothingToCopy 表示消息里既没有文字也没有能重新发送的媒体。
-var ErrNothingToCopy = errors.New("消息里没有能保存的内容")
+var ErrNothingToCopy = kit.Fail("消息里没有能保存的内容")
 
 // CopyMessage 把一条消息的内容重新发到 to，用于禁止转发的对话：文字连同格式，
 // 媒体下载后重新上传。topic 不为 0 时发到目标论坛的那个话题里。root 是部署目录，
@@ -522,7 +522,7 @@ func (s *saver) remake(ctx context.Context, message *tg.Message) (tg.InputMediaC
 	case *tg.MessageMediaPhoto, *tg.MessageMediaDocument:
 		source, ok := bot.SourceOf(message)
 		if !ok {
-			return nil, errors.New("这条消息的媒体已经不可用")
+			return nil, kit.Fail("这条消息的媒体已经不可用")
 		}
 		path, err := s.download(ctx, source)
 		if err != nil {
@@ -539,14 +539,14 @@ func (s *saver) remake(ctx context.Context, message *tg.Message) (tg.InputMediaC
 		}
 		return &tg.InputMediaUploadedDocument{File: file, MimeType: source.MimeType, Attributes: source.Attributes}, nil
 	}
-	return nil, errors.New("这种消息在禁止转发的对话里没法复制")
+	return nil, kit.Fail("这种消息在禁止转发的对话里没法复制")
 }
 
 // download 把媒体文件写到部署目录自己的 partial 目录，而不是 /tmp：
 // 这类主机上 /tmp 是 tmpfs，视频放在那里就等于占着内存。
 func (s *saver) download(ctx context.Context, source *bot.MediaSource) (string, error) {
 	if source.Size > saveMaxBytes {
-		return "", fmt.Errorf("文件 %s，超过 Telegram 的上限", kit.FormatBytes(int(source.Size)))
+		return "", kit.Failf("文件 %s，超过 Telegram 的上限", kit.FormatBytes(int(source.Size)))
 	}
 	if err := os.MkdirAll(s.partial, 0o700); err != nil {
 		return "", err
@@ -757,12 +757,12 @@ func saveSetting(ctx context.Context, inv *command.Invocation, settings *store.S
 func setSaveTarget(ctx context.Context, inv *command.Invocation, settings *store.Store[saveDocument]) error {
 	target := inv.Rest(1)
 	if target == "" {
-		return inv.EditText(ctx, "用法："+inv.Prefix+"save to me / @用户名 / 对话ID / local")
+		return kit.Usage(inv.Prefix, "save to me|@用户名|对话 ID|local")
 	}
 	if !isSelfTarget(target) && !isLocalTarget(target) {
 		check := &saver{client: inv.Client}
 		if _, err := check.targetOf(ctx, target); err != nil {
-			return inv.EditText(ctx, "❌ "+err.Error())
+			return err
 		}
 	}
 	if isSelfTarget(target) {
@@ -819,7 +819,7 @@ func collectSaveLinks(ctx context.Context, work *saver, links []messageLink) ([]
 	for _, link := range links {
 		peer, err := work.peerOf(ctx, link)
 		if err != nil {
-			return nil, kit.Fail(link.Raw + "：" + err.Error())
+			return nil, aboutLink(link.Raw, err)
 		}
 		messages, err := work.fetch(ctx, peer, []int{link.ID})
 		if err != nil {
@@ -847,6 +847,14 @@ func collectSaveLinks(ctx context.Context, work *saver, links []messageLink) ([]
 	return jobs, nil
 }
 
+// aboutLink 给错误标上是哪个链接出的问题：给用户看的错误接在链接后面，其余只附概括，细节进日志。
+func aboutLink(link string, err error) error {
+	if text, ok := kit.IsUserError(err); ok {
+		return kit.Fail(link + "：" + text)
+	}
+	return kit.FailWith(link+" 读取失败", err)
+}
+
 // collectSaveRange 按编号逐个读出范围内的消息，缺号跳过。
 func collectSaveRange(ctx context.Context, inv *command.Invocation, work *saver, from, to messageLink) ([]saveJob, error) {
 	count := to.ID - from.ID + 1
@@ -855,7 +863,7 @@ func collectSaveRange(ctx context.Context, inv *command.Invocation, work *saver,
 	}
 	peer, err := work.peerOf(ctx, from)
 	if err != nil {
-		return nil, kit.Fail(err.Error())
+		return nil, aboutLink(from.Raw, err)
 	}
 	ids := make([]int, 0, count)
 	for id := from.ID; id <= to.ID; id++ {
@@ -1095,7 +1103,7 @@ func saveHandle(ctx context.Context, inv *command.Invocation, settings *store.St
 	}
 	request, err := parseSaveArgs(inv.Args)
 	if err != nil {
-		return inv.EditText(ctx, "❌ "+err.Error())
+		return err
 	}
 	if request.Range == nil && len(request.Links) == 0 && inv.Message.ReplyToID == 0 {
 		return inv.Edit(ctx, saveHelp(inv.Prefix))
@@ -1111,21 +1119,18 @@ func saveHandle(ctx context.Context, inv *command.Invocation, settings *store.St
 
 	work := newSaver(ctx, inv, root)
 	jobs, err := collectSaveJobs(ctx, inv, work, request)
-	if detail, ok := kit.IsUserError(err); ok {
-		return inv.EditText(ctx, "❌ "+detail)
-	}
 	if err != nil {
 		return err
 	}
 	total := countMessages(jobs)
 	if total == 0 {
-		return inv.EditText(ctx, "❌ 范围内没有消息")
+		return kit.Fail("范围内没有消息")
 	}
 	local := isLocalTarget(target)
 	var destination tg.InputPeerClass
 	if !local {
 		if destination, err = work.targetOf(ctx, target); err != nil {
-			return inv.EditText(ctx, "❌ "+err.Error())
+			return err
 		}
 	}
 	tally, err := runSaveJobs(ctx, work, jobs, destination, local)

@@ -10,6 +10,7 @@ import (
 
 	"github.com/MiCat-S/mibot-lite/internal/app"
 	"github.com/MiCat-S/mibot-lite/internal/command"
+	"github.com/MiCat-S/mibot-lite/internal/commands/kit"
 )
 
 const maxExpressionLength = 120
@@ -239,12 +240,12 @@ func Register(a *app.App) {
 				return inv.Edit(ctx, help(inv.Prefix))
 			}
 			if len([]rune(expression)) > maxExpressionLength {
-				return inv.Edit(ctx, "<b>计算失败</b>\n表达式长度不能超过 "+command.Code(strconv.Itoa(maxExpressionLength))+" 个字符")
+				return kit.Failf("计算失败：表达式不能超过 %d 个字符", maxExpressionLength)
 			}
 			parser := &calcParser{text: []rune(expression)}
 			result, err := parser.parse()
 			if err != nil {
-				return inv.Edit(ctx, "<b>计算失败</b>\n"+command.Code(expression)+"\n"+command.Escape(err.Error()))
+				return kit.Failf("计算失败：%s", err.Error())
 			}
 			return inv.Edit(ctx, "<b>计算结果</b>\n"+command.Code(expression)+" = "+command.Code(formatCalc(result)))
 		}})

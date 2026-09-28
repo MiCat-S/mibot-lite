@@ -205,16 +205,7 @@ func Register(a *app.App) {
 	shared = service
 	a.Registry.Register(&command.Command{Name: "ai", Description: "AI 对话、搜索与配置", Usage: "[search] 问题 | config | model | ...", Help: aiHelp, Timeout: 15 * time.Minute,
 		Handle: func(ctx context.Context, inv *command.Invocation) error {
-			err := service.handle(ctx, inv)
-			if err == nil || ctx.Err() != nil {
-				return err
-			}
-			detail := kit.ChatHTMLError(err)
-			if detail == "" {
-				inv.Log.Error("ai.failed", "error", err.Error())
-				detail = "AI 操作失败，请检查配置、API 可用性和网络后重试"
-			}
-			return inv.Edit(ctx, "❌ <b>AI 操作失败</b>\n"+detail)
+			return kit.FailWith("AI 操作失败", service.handle(ctx, inv))
 		}})
 }
 

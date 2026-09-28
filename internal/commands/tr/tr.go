@@ -188,15 +188,7 @@ func Register(a *app.App) {
 		Name: "tr", Description: "谷歌翻译，无需配置", Usage: "[语言] 文本",
 		Help: translateHelp, Timeout: 2 * time.Minute,
 		Handle: func(ctx context.Context, inv *command.Invocation) error {
-			err := runTranslate(ctx, inv, settings)
-			if err == nil || ctx.Err() != nil {
-				return err
-			}
-			if detail, ok := kit.IsUserError(err); ok {
-				return inv.EditText(ctx, "❌ "+detail)
-			}
-			inv.Log.Error("tr.failed", "error", err.Error())
-			return inv.EditText(ctx, "❌ 翻译失败："+httpx.Reason(err))
+			return kit.FailWith("翻译失败", runTranslate(ctx, inv, settings))
 		}})
 }
 

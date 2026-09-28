@@ -238,7 +238,7 @@ func Register(a *app.App) {
 			}
 			if sticker == nil {
 				if reply != nil && sub == "" {
-					return inv.EditText(ctx, "❌ 回复的不是贴纸")
+					return kit.Fail("回复的不是贴纸")
 				}
 				return configure(ctx, inv, saved)
 			}
@@ -250,7 +250,7 @@ func Register(a *app.App) {
 			if sub == "to" {
 				target = inv.Arg(1)
 				if !validShortName(target) {
-					return inv.EditText(ctx, "❌ 包名只能用字母、数字和下划线，字母开头")
+					return kit.Fail("包名只能用字母、数字和下划线，字母开头")
 				}
 			}
 			if err := inv.EditText(ctx, "⏳ 正在收藏…"); err != nil {
@@ -258,9 +258,6 @@ func Register(a *app.App) {
 			}
 			name, created, err := save(ctx, inv.Client, inv.Prefix, target, sticker)
 			if err != nil {
-				if text, ok := kit.IsUserError(err); ok {
-					return inv.EditText(ctx, "❌ "+text)
-				}
 				return err
 			}
 			verb := "已存进"
@@ -303,13 +300,13 @@ func configure(ctx context.Context, inv *command.Invocation, saved *store.Store[
 		}
 		return inv.EditText(ctx, "✅ 已取消默认贴纸包")
 	case strings.EqualFold(argument, "to"):
-		return inv.EditText(ctx, "❌ 要回复一个贴纸再用 to")
+		return kit.Fail("要回复一个贴纸再用 to")
 	case !validShortName(argument):
-		return inv.EditText(ctx, "❌ 包名只能用字母、数字和下划线，字母开头")
+		return kit.Fail("包名只能用字母、数字和下划线，字母开头")
 	}
 	present, err := exists(ctx, inv.Client.API(), argument)
 	if err != nil {
-		return inv.EditText(ctx, "❌ 查不了这个贴纸包："+command.Brief(err))
+		return kit.FailWith("查不了这个贴纸包", err)
 	}
 	if err := saved.Update(func(value *settings) error { value.DefaultPack = argument; return nil }); err != nil {
 		return err

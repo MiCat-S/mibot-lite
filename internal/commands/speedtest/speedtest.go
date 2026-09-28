@@ -631,12 +631,12 @@ func reasonFor(detail string) (cliReason, bool) {
 	return cliReason{}, false
 }
 
-// explainCLI 返回原因对应的提示，认不出来就原样给出原因。
+// explainCLI 返回原因对应的提示。认不出的原因不把 CLI 的英文原文发进聊天，原文随错误记进日志。
 func explainCLI(detail string) string {
 	if reason, ok := reasonFor(detail); ok {
 		return reason.text
 	}
-	return detail
+	return "测速工具报错了，详情见日志"
 }
 
 func durationFromMillis(value float64) time.Duration {
@@ -869,12 +869,13 @@ func (s *speedtester) ensureTool(ctx context.Context, inv *command.Invocation) (
 	return installed, "ookla", nil
 }
 
-func installProblem(ctx context.Context, inv *command.Invocation, err error) error {
+// installProblem 说明装不上 CLI 的原因。原始错误在 ensureTool 里已经记进日志。
+func installProblem(err error) error {
 	detail, ok := kit.IsUserError(err)
 	if !ok {
 		detail = "网络不通或构件无法校验"
 	}
-	return inv.EditText(ctx, "❌ 无法安装 Speedtest CLI："+detail+"\n手动装好 speedtest 后再试")
+	return kit.Failf("无法安装 Speedtest CLI：%s。手动装好 speedtest 后再试", detail)
 }
 
 // setting 处理 help、config、clear、set。第一个返回值表示参数是不是这几个之一。
@@ -891,7 +892,7 @@ func (s *speedtester) setting(ctx context.Context, inv *command.Invocation) (boo
 	case "set":
 		id, err := strconv.Atoi(inv.Arg(1))
 		if err != nil || id <= 0 {
-			return true, inv.EditText(ctx, "用法：set 后面跟服务器 ID，ID 用 list 查")
+			return true, kit.Failf("用法：%sspeedtest set 服务器 ID，ID 用 %sspeedtest list 查", inv.Prefix, inv.Prefix)
 		}
 		if err := s.settings.Update(func(value *speedtestDocument) error { value.Server = id; return nil }); err != nil {
 			return true, err
@@ -909,15 +910,12 @@ func (s *speedtester) list(ctx context.Context, inv *command.Invocation) error {
 	}
 	tool, kind, err := s.ensureTool(ctx, inv)
 	if err != nil {
-		return installProblem(ctx, inv, err)
+		return installProblem(err)
 	}
 	if kind != "ookla" {
 		return inv.EditText(ctx, "只有 Ookla 官方 CLI 能列出服务器，当前用的是 speedtest-cli")
 	}
 	servers, err := listServers(ctx, tool, s.home())
-	if detail, ok := kit.IsUserError(err); ok {
-		return inv.EditText(ctx, "❌ "+detail)
-	}
 	if err != nil {
 		return err
 	}
@@ -1044,11 +1042,11 @@ func (s *speedtester) reinstall(ctx context.Context, inv *command.Invocation, do
 	path, err := installOokla(ctx, s.dataDir)
 	if err != nil {
 		inv.Log.Warn("speedtest.install_failed", "error", err.Error())
-		return installProblem(ctx, inv, err)
+		return installProblem(err)
 	}
 	version, err := probeVersion(path, s.home())
 	if err != nil {
-		return inv.EditText(ctx, "❌ 下载好的 CLI 无法运行："+command.Truncate(err.Error(), 160))
+		return kit.Failf("下载好的 CLI 无法运行：%s", command.Truncate(err.Error(), 160))
 	}
 	return inv.Edit(ctx, "✅ Ookla CLI "+done+"\n路径："+command.Code(path)+"\n"+command.Escape(version))
 }
@@ -1062,7 +1060,7 @@ func (s *speedtester) handle(ctx context.Context, inv *command.Invocation) error
 		return s.diagnose(ctx, inv)
 	}
 	if !s.running.TryLock() {
-		return inv.EditText(ctx, "已有一个测速在进行，请稍候")
+		return kit.Fail("已有一个测速在进行，请稍候")
 	}
 	defer s.running.Unlock()
 
@@ -1087,7 +1085,7 @@ func (s *speedtester) handle(ctx context.Context, inv *command.Invocation) error
 	started := time.Now()
 	tool, kind, err := s.ensureTool(ctx, inv)
 	if err != nil {
-		return installProblem(ctx, inv, err)
+		return installProblem(err)
 	}
 	where := "，约需一分钟…"
 	if server > 0 {
@@ -1099,10 +1097,7 @@ func (s *speedtester) handle(ctx context.Context, inv *command.Invocation) error
 	result, note, err := s.measure(ctx, inv, tool, kind, server)
 	if err != nil {
 		inv.Log.Warn("speedtest.external_failed", "tool", kind, "error", err.Error())
-		if detail, ok := kit.IsUserError(err); ok {
-			return inv.EditText(ctx, "❌ "+detail)
-		}
-		return inv.EditText(ctx, "❌ 测速失败，请稍后再试")
+		return kit.FailWith("测速失败", err)
 	}
 	if once && note == "" {
 		note = "本次指定了服务器，未改动默认设置"

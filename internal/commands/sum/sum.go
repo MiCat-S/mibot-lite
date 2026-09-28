@@ -653,14 +653,6 @@ func (s *sumService) push(ctx context.Context, client *bot.Client, task sumTask)
 	return nil
 }
 
-// sumErrorText 是记进任务 lastError 的错误说明：给用户看的错误原样记，其余只记简短描述。
-func sumErrorText(err error) string {
-	if text, ok := kit.IsUserError(err); ok {
-		return text
-	}
-	return command.Brief(err)
-}
-
 func sumHelp(prefix string) string {
 	p := command.Escape(prefix)
 	code := func(args string) string { return "<code>" + p + "sum" + command.Escape(args) + "</code>" }
@@ -699,16 +691,7 @@ func Register(a *app.App) {
 	})
 	a.Registry.Register(&command.Command{Name: "sum", Description: "群消息即时与定时摘要", Usage: "[数量] | add | list | run | edit | config ...", Help: sumHelp, Timeout: 10 * time.Minute,
 		Handle: func(ctx context.Context, inv *command.Invocation) error {
-			err := service.handle(ctx, inv)
-			if err == nil || ctx.Err() != nil {
-				return err
-			}
-			detail := kit.ChatHTMLError(err)
-			if detail == "" {
-				inv.Log.Error("sum.failed", "error", err.Error())
-				detail = "摘要操作失败，请检查配置、权限和网络后重试"
-			}
-			return inv.Edit(ctx, "❌ "+detail)
+			return kit.FailWith("摘要失败", service.handle(ctx, inv))
 		}})
 }
 

@@ -3,7 +3,6 @@ package sudo
 
 import (
 	"context"
-	"fmt"
 	"slices"
 	"sort"
 	"strconv"
@@ -237,30 +236,30 @@ func resolveUser(ctx context.Context, inv *command.Invocation, argument string) 
 	if argument != "" {
 		if id, err := strconv.ParseInt(argument, 10, 64); err == nil {
 			if id <= 0 {
-				return delegateEntry{}, fmt.Errorf("%s 不是用户 ID", argument)
+				return delegateEntry{}, kit.Failf("%s 不是用户 ID", argument)
 			}
 			return delegateEntry{ID: argument, Name: inv.Client.Peers().Title(&tg.PeerUser{UserID: id})}, nil
 		}
 		peer, err := inv.Client.ResolveUsername(ctx, strings.TrimPrefix(argument, "@"))
 		if err != nil {
-			return delegateEntry{}, fmt.Errorf("找不到 %s", argument)
+			return delegateEntry{}, kit.Failf("找不到 %s", argument)
 		}
 		user, ok := peer.(*tg.InputPeerUser)
 		if !ok {
-			return delegateEntry{}, fmt.Errorf("%s 不是用户", argument)
+			return delegateEntry{}, kit.Failf("%s 不是用户", argument)
 		}
 		return delegateEntry{ID: strconv.FormatInt(user.UserID, 10), Name: "@" + strings.TrimPrefix(argument, "@")}, nil
 	}
 	if inv.Message.ReplyToID == 0 {
-		return delegateEntry{}, fmt.Errorf("回复对方的消息，或者带上数字 ID、@用户名")
+		return delegateEntry{}, kit.Fail("回复对方的消息，或者带上数字 ID、@用户名")
 	}
 	reply, err := inv.Client.GetReply(ctx, inv.Message)
 	if err != nil || reply == nil {
-		return delegateEntry{}, fmt.Errorf("读不到被回复的消息")
+		return delegateEntry{}, kit.Fail("读不到被回复的消息")
 	}
 	id := senderUserID(reply)
 	if id == "" {
-		return delegateEntry{}, fmt.Errorf("被回复的消息不是用户发的（频道身份或匿名管理员不能授权）")
+		return delegateEntry{}, kit.Fail("被回复的消息不是用户发的（频道身份或匿名管理员不能授权）")
 	}
 	return delegateEntry{ID: id, Name: inv.Client.Peers().Title(reply.Sender)}, nil
 }
@@ -275,7 +274,7 @@ func resolveChat(ctx context.Context, inv *command.Invocation, argument string) 
 	}
 	peer, err := inv.Client.ResolveTarget(ctx, argument)
 	if err != nil {
-		return delegateEntry{}, fmt.Errorf("找不到 %s", argument)
+		return delegateEntry{}, kit.Failf("找不到 %s", argument)
 	}
 	var id string
 	switch value := peer.(type) {
@@ -286,7 +285,7 @@ func resolveChat(ctx context.Context, inv *command.Invocation, argument string) 
 	case *tg.InputPeerUser:
 		id = bot.PeerID(&tg.PeerUser{UserID: value.UserID})
 	default:
-		return delegateEntry{}, fmt.Errorf("找不到 %s", argument)
+		return delegateEntry{}, kit.Failf("找不到 %s", argument)
 	}
 	return delegateEntry{ID: id, Name: argument}, nil
 }
@@ -342,7 +341,7 @@ func manageLists(ctx context.Context, inv *command.Invocation, saved *store.Stor
 		case "add", "del":
 			chat, err := resolveChat(ctx, inv, target)
 			if err != nil {
-				return true, inv.EditText(ctx, "❌ "+err.Error())
+				return true, err
 			}
 			changed := false
 			if err := saved.Update(func(document *delegateDocument) error {
@@ -356,7 +355,7 @@ func manageLists(ctx context.Context, inv *command.Invocation, saved *store.Stor
 				return true, err
 			}
 			if sub == "del" && !changed {
-				return true, inv.EditText(ctx, "对话名单里没有 "+chat.ID)
+				return true, kit.Failf("对话名单里没有 %s", chat.ID)
 			}
 			verb := map[string]string{"add": "已加入", "del": "已移出"}[sub]
 			return true, inv.Edit(ctx, "✅ "+verb+" "+command.Escape(name)+" 对话名单："+command.Escape(chat.Name)+" "+command.Code(chat.ID))
@@ -373,10 +372,10 @@ func manageLists(ctx context.Context, inv *command.Invocation, saved *store.Stor
 	case "add", "del":
 		user, err := resolveUser(ctx, inv, target)
 		if err != nil {
-			return true, inv.EditText(ctx, "❌ "+err.Error())
+			return true, err
 		}
 		if user.ID == strconv.FormatInt(inv.Client.SelfID(), 10) {
-			return true, inv.EditText(ctx, "❌ 不能把账号自己加进名单")
+			return true, kit.Fail("不能把账号自己加进名单")
 		}
 		changed := false
 		if err := saved.Update(func(document *delegateDocument) error {
@@ -390,7 +389,7 @@ func manageLists(ctx context.Context, inv *command.Invocation, saved *store.Stor
 			return true, err
 		}
 		if action == "del" && !changed {
-			return true, inv.EditText(ctx, name+" 名单里没有 "+user.ID)
+			return true, kit.Failf("%s 名单里没有 %s", name, user.ID)
 		}
 		verb := map[string]string{"add": "已授权", "del": "已取消授权"}[action]
 		return true, inv.Edit(ctx, "✅ "+verb+"："+command.Escape(user.Name)+" "+command.Code(user.ID))
@@ -468,7 +467,7 @@ func manageRules(ctx context.Context, inv *command.Invocation, saved *store.Stor
 	case "add":
 		text := raw(3)
 		if text == "" {
-			return inv.EditText(ctx, "用法："+inv.Prefix+"sure msg add 消息原文")
+			return kit.Usage(inv.Prefix, "sure msg add 消息原文")
 		}
 		var id int
 		if err := saved.Update(func(document *delegateDocument) error {
@@ -483,7 +482,7 @@ func manageRules(ctx context.Context, inv *command.Invocation, saved *store.Stor
 	case "redirect", "del":
 		id, err := strconv.Atoi(inv.Arg(2))
 		if err != nil {
-			return inv.EditText(ctx, "请给出规则编号，"+inv.Prefix+"sure msg ls 可以看")
+			return kit.Failf("请给出规则编号，%ssure msg ls 可以看", inv.Prefix)
 		}
 		target := raw(4)
 		found := false
@@ -505,7 +504,7 @@ func manageRules(ctx context.Context, inv *command.Invocation, saved *store.Stor
 			return err
 		}
 		if !found {
-			return inv.EditText(ctx, "没有编号为 "+strconv.Itoa(id)+" 的规则")
+			return kit.Failf("没有编号为 %d 的规则", id)
 		}
 		switch {
 		case action == "del":

@@ -11,6 +11,7 @@ import (
 
 	"github.com/MiCat-S/mibot-lite/internal/app"
 	"github.com/MiCat-S/mibot-lite/internal/command"
+	"github.com/MiCat-S/mibot-lite/internal/commands/kit"
 	"github.com/MiCat-S/mibot-lite/internal/logtail"
 )
 
@@ -107,7 +108,7 @@ func logHelp(prefix string) string {
 // 现场也就没了。
 func setLogLevel(ctx context.Context, a *app.App, inv *command.Invocation) error {
 	if a.Level == nil {
-		return inv.EditText(ctx, "这个构建不支持在线改日志级别")
+		return kit.Fail("这个构建不支持在线改日志级别")
 	}
 	switch strings.ToLower(inv.Arg(1)) {
 	case "on", "开":
@@ -118,7 +119,7 @@ func setLogLevel(ctx context.Context, a *app.App, inv *command.Invocation) error
 		return inv.Edit(ctx, "当前日志级别 "+command.Code(a.Level.Level().String())+
 			"\n用 "+command.Code(inv.Prefix+"log debug on")+" 或 "+command.Code(inv.Prefix+"log debug off"))
 	default:
-		return inv.EditText(ctx, "只能是 on 或 off")
+		return kit.Usage(inv.Prefix, "log debug on|off")
 	}
 	// debug 级别会记下服务器推送的每条更新和经过的每条消息，所以只适合
 	// 临时开一会儿。
@@ -139,7 +140,7 @@ func Register(a *app.App) {
 			return setLogLevel(ctx, a, inv)
 		}
 		if a.Logs == nil {
-			return inv.EditText(ctx, "这个构建没有保留日志")
+			return kit.Fail("这个构建没有保留日志")
 		}
 		count, keep, filter := logFilter(inv)
 		lines := a.Logs.Tail(count, keep)

@@ -69,7 +69,7 @@ func Register(a *app.App) {
 		}
 		archive, names, err := backup.Create(a.Root, a.Version, time.Now())
 		if err != nil {
-			return inv.EditText(ctx, "❌ 备份失败："+err.Error())
+			return kit.FailWith("备份失败", err)
 		}
 		// 不管命令是在哪个对话里发的，一律发到收藏夹。这个压缩包就等于
 		// 账号本身；只因为有人碰巧在群里敲了 .bf 就把它发进群，等于把

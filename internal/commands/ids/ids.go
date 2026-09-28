@@ -14,6 +14,7 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/app"
 	"github.com/MiCat-S/mibot-lite/internal/bot"
 	"github.com/MiCat-S/mibot-lite/internal/command"
+	"github.com/MiCat-S/mibot-lite/internal/commands/kit"
 )
 
 // Telegram 不公开账号的注册时间。用户 id 大致是按顺序分配的，所以根据
@@ -79,7 +80,7 @@ func resolveEntity(ctx context.Context, inv *command.Invocation, fallback tg.Inp
 	if inv.Message.ReplyToID != 0 {
 		reply, err := inv.Client.GetReply(ctx, inv.Message)
 		if err != nil || reply == nil {
-			return target{}, errors.New("读不到被回复的消息")
+			return target{}, kit.Fail("读不到被回复的消息")
 		}
 		if reply.Sender != nil {
 			return addressed(inv.Client, reply.Sender, reply)
@@ -99,7 +100,7 @@ func resolveArgument(ctx context.Context, inv *command.Invocation, argument stri
 		return target{peer: peer}, nil
 	}
 	if !errors.Is(err, bot.ErrUnaddressablePeer) {
-		return target{}, fmt.Errorf("找不到 %s", argument)
+		return target{}, kit.Failf("找不到 %s", argument)
 	}
 	if id, parseErr := strconv.ParseInt(argument, 10, 64); parseErr == nil && id > 0 {
 		return target{userID: id}, nil
@@ -137,12 +138,12 @@ func addressed(client *bot.Client, peer tg.PeerClass, reply *bot.Message) (targe
 func lookupDC(ctx context.Context, inv *command.Invocation, fallback tg.InputPeerClass) (*entityInfo, error) {
 	found, err := resolveEntity(ctx, inv, fallback)
 	if err == nil && found.peer == nil {
-		err = errors.New(unknownPeer)
+		err = kit.Fail(unknownPeer)
 	}
 	var info *entityInfo
 	if err == nil {
 		if info, err = fetchEntity(ctx, inv.Client, found.peer); err != nil {
-			err = errors.New("查询失败：" + command.Brief(err))
+			err = kit.FailWith("查询失败", err)
 		}
 	}
 	if err != nil && found.reply != nil {
@@ -260,7 +261,7 @@ func fetchEntity(ctx context.Context, client *bot.Client, peer tg.InputPeerClass
 		}
 		return info, nil
 	}
-	return nil, errors.New("这种对象查不了")
+	return nil, kit.Fail("这种对象查不了")
 }
 
 // primaryUsername 优先取可编辑的普通用户名；没有的话，取第一个启用中的
@@ -394,7 +395,7 @@ func Register(a *app.App) {
 		}
 		found, err := resolveEntity(ctx, inv, &tg.InputPeerSelf{})
 		if err != nil {
-			return inv.EditText(ctx, "❌ "+err.Error())
+			return err
 		}
 		if found.peer == nil {
 			// 账号没见过这个用户：和 MiBox 一样照样给出 ID、按 ID 估算的注册时间和跳转链接。
@@ -403,7 +404,7 @@ func Register(a *app.App) {
 		}
 		info, err := fetchEntity(ctx, inv.Client, found.peer)
 		if err != nil {
-			return inv.EditText(ctx, "❌ 查询失败："+command.Brief(err))
+			return kit.FailWith("查询失败", err)
 		}
 		var joined time.Time
 		if info.kind == "user" {
@@ -421,7 +422,7 @@ func Register(a *app.App) {
 		}
 		info, err := lookupDC(ctx, inv, here)
 		if err != nil {
-			return inv.EditText(ctx, "❌ "+err.Error())
+			return err
 		}
 		return inv.Edit(ctx, "📍 <b>"+command.Escape(info.name)+"</b>\n所在数据中心："+command.Escape(dcLabel(info.dc)))
 	}

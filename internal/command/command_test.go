@@ -10,6 +10,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/gotd/td/tgerr"
+
+	"github.com/MiCat-S/mibot-lite/internal/httpx"
 )
 
 func registry() *Registry {
@@ -101,8 +103,14 @@ func TestBrief(t *testing.T) {
 		t.Errorf("RPC error flattened to text: got %q", got)
 	}
 	leak := &url.Error{Op: "Post", URL: "https://my-private-relay.example.com:8443/v1/chat/completions?KEY_ID=A_B", Err: errTest("connection refused")}
-	if got := Brief(leak); strings.Contains(got, "http") || strings.Contains(got, "example") || strings.Contains(got, "KEY_ID") {
-		t.Errorf("a network error leaked its URL: %q", got)
+	if got := Brief(leak); strings.Contains(got, "http") || strings.Contains(got, "example") || strings.Contains(got, "KEY_ID") || !strings.Contains(got, "网络") {
+		t.Errorf("a network error leaked its URL or was not summarised as one: %q", got)
+	}
+	if got := Brief(fmt.Errorf("fetch: %w", &httpx.StatusError{Status: 403})); got != "服务返回 HTTP 403" {
+		t.Errorf("HTTP status: got %q", got)
+	}
+	if text, _ := IsUserError(FailWith("生成失败", Fail("素材目录格式不对"))); text != "素材目录格式不对" {
+		t.Errorf("FailWith must let a more specific user error through: %q", text)
 	}
 	if got := Brief(fmt.Errorf("wait: %w", context.DeadlineExceeded)); got != "超时" {
 		t.Errorf("deadline: got %q", got)
@@ -123,6 +131,14 @@ func TestUserErrors(t *testing.T) {
 	}
 	if _, ok := IsUserError(errTest("plain")); ok {
 		t.Error("a plain error was taken for a user error")
+	}
+	withCode := FailWith("封禁失败", fmt.Errorf("ban: %w", tgerr.New(400, "CHAT_ADMIN_REQUIRED")))
+	if text, ok := IsUserError(withCode); !ok || text != "封禁失败（CHAT_ADMIN_REQUIRED）" {
+		t.Errorf("FailWith with an RPC cause: %q", text)
+	}
+	hidden := FailWith("下载失败", errTest("Get https://example.com/x: EOF"))
+	if text, _ := IsUserError(hidden); text != "下载失败，详情见日志" || !strings.Contains(hidden.Error(), "example.com") {
+		t.Errorf("FailWith must hide the detail from chat but keep it for the log: %q / %q", text, hidden.Error())
 	}
 	if got := Truncate("错错错", 3); got != "错错错" {
 		t.Errorf("Truncate cut a short string: %q", got)

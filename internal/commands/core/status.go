@@ -76,7 +76,7 @@ func statusCaption(a *app.App, registry *command.Registry, resources sysinfo.Res
 // status 发状态卡片（附文字说明）并删掉命令消息，同 MiBox v2；卡片发不出去时退回纯文字。
 func status(ctx context.Context, a *app.App, registry *command.Registry, inv *command.Invocation) error {
 	if !drawing.TryLock() {
-		return inv.EditText(ctx, "上一张状态卡片还在生成，请稍候")
+		return kit.Fail("上一张状态卡片还在生成，请稍候")
 	}
 	defer drawing.Unlock()
 	resources := sysinfo.SampleResources(ctx, a.Root, 160*time.Millisecond)

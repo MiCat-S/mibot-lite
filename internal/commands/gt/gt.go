@@ -43,13 +43,13 @@ func Register(a *app.App) {
 				}
 			}
 			if strings.TrimSpace(text) == "" {
-				return inv.EditText(ctx, "❌ 请提供要翻译的文本或回复一条文字消息")
+				return kit.Fail("请提供要翻译的文本，或回复一条文字消息")
 			}
 			if kit.UTF16Len(text) > 5000 {
-				return inv.EditText(ctx, "❌ 文本过长，请保持在5000字符以内")
+				return kit.Fail("文本过长，请保持在 5000 字以内")
 			}
 			if !ai.Available() {
-				return inv.EditText(ctx, "❌ AI 组件不可用")
+				return kit.Fail("AI 组件不可用")
 			}
 			if err := inv.Edit(ctx, "🔄 <b>AI 翻译中...</b>"); err != nil {
 				return err
@@ -59,11 +59,7 @@ func Register(a *app.App) {
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
-				detail := kit.ChatHTMLError(err)
-				if detail == "" {
-					detail = "请检查 ai 聊天配置、API 可用性及超时设置后重试"
-				}
-				return inv.Edit(ctx, "❌ AI 翻译失败，"+detail)
+				return kit.FailWith("AI 翻译失败", err)
 			}
 			preview := kit.TruncateRunes(text, 50)
 			suffix := ""

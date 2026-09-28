@@ -290,7 +290,7 @@ func Register(a *app.App) {
 			}
 			catalog, err := service.getCatalog(ctx)
 			if err != nil {
-				return inv.Edit(ctx, "❌ 无法读取素材列表："+command.Escape(httpx.Reason(err)))
+				return kit.FailWith("无法读取素材列表", err)
 			}
 			if sub == "" || sub == "list" || sub == "ls" || sub == "help" || sub == "h" {
 				names := make([]string, 0, len(catalog))
@@ -306,14 +306,14 @@ func Register(a *app.App) {
 			}
 			selected, ok := catalog[sub]
 			if !ok {
-				return inv.Edit(ctx, "未找到："+command.Code(sub))
+				return kit.Failf("找不到 %s，发 %seatgif list 看全部动画", sub, inv.Prefix)
 			}
 			reply, err := inv.Client.GetReply(ctx, inv.Message)
 			if err != nil {
 				return err
 			}
 			if reply == nil {
-				return inv.EditText(ctx, "请回复一条消息后再生成，用户或频道发的都可以")
+				return kit.Fail("请回复一条消息后再生成，用户或频道发的都可以")
 			}
 
 			// 一次只跑一个：每次运行都要解码几十帧、再 fork 一个 ffmpeg，
@@ -321,7 +321,7 @@ func Register(a *app.App) {
 			service.mu.Lock()
 			if service.running {
 				service.mu.Unlock()
-				return inv.EditText(ctx, "已有一个动图正在生成，请稍候")
+				return kit.Fail("已有一个动图正在生成，请稍候")
 			}
 			service.running = true
 			service.mu.Unlock()
@@ -332,17 +332,14 @@ func Register(a *app.App) {
 			}
 			var spec eatgifSpec
 			if err := service.assetJSON(ctx, selected.URL, &spec); err != nil {
-				return inv.Edit(ctx, "❌ 无法读取动画定义："+command.Escape(httpx.Reason(err)))
+				return kit.FailWith("无法读取动画定义", err)
 			}
 			if spec.Width < 1 || spec.Height < 1 || spec.Width > 512 || spec.Height > 512 || len(spec.Frames) < 1 || len(spec.Frames) > eatgifMaxFrames {
-				return inv.EditText(ctx, "❌ 动画定义无效")
+				return kit.Fail("动画定义无效")
 			}
 
 			faces, err := service.faces(ctx, inv, reply)
 			if err != nil {
-				if text, ok := kit.IsUserError(err); ok {
-					return inv.EditText(ctx, "❌ "+text)
-				}
 				return err
 			}
 
@@ -360,21 +357,21 @@ func Register(a *app.App) {
 				}
 				canvasData, err := service.asset(ctx, entry.URL, 5<<20)
 				if err != nil {
-					return inv.Edit(ctx, "❌ 素材下载失败："+command.Escape(httpx.Reason(err)))
+					return kit.FailWith("素材下载失败", err)
 				}
 				canvas, err := frameCanvas(canvasData)
 				if err != nil {
-					return inv.EditText(ctx, "❌ 素材图片无效")
+					return kit.Fail("素材图片无效")
 				}
 				// 先贴被回复者的头像，再贴本账号的，与素材定义编写时的顺序一致。
 				if entry.You != nil {
 					if err := service.paste(ctx, canvas, entry.You, faces.you); err != nil {
-						return inv.Edit(ctx, "❌ 合成失败："+command.Escape(httpx.Reason(err)))
+						return kit.FailWith("合成失败", err)
 					}
 				}
 				if entry.Me != nil {
 					if err := service.paste(ctx, canvas, entry.Me, faces.me); err != nil {
-						return inv.Edit(ctx, "❌ 合成失败："+command.Escape(httpx.Reason(err)))
+						return kit.FailWith("合成失败", err)
 					}
 				}
 				path := filepath.Join(directory, fmt.Sprintf("frame%04d.png", index))
@@ -399,7 +396,7 @@ func Register(a *app.App) {
 
 			webm, err := media.StickerWebM(ctx, directory, frames, spec.Width, spec.Height)
 			if err != nil {
-				return inv.Edit(ctx, "❌ 视频编码失败："+command.Escape(command.Brief(err)))
+				return kit.FailWith("视频编码失败", err)
 			}
 			peer, err := inv.Client.InputPeer(inv.Message.Peer)
 			if err != nil {

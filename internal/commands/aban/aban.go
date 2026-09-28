@@ -436,15 +436,23 @@ func (s *abanService) deleteLater(ctx context.Context, inv *command.Invocation, 
 	time.AfterFunc(lifetime, run)
 }
 
-// fail 显示失败原因，到点删除。ctx 已结束时把 ctx 的错误交给命令框架，由它提示超时。
+// fail 显示失败原因，到点删除。
 func (s *abanService) fail(ctx context.Context, inv *command.Invocation, err error) error {
+	return s.showFailure(ctx, inv, "操作失败", err)
+}
+
+// showFailure 显示「label（错误码）」这样的失败原因，到点删除；给用户看的错误照原话显示，
+// 其余的原始错误记进日志。这些消息不经过命令框架的错误显示（它们要定时删掉），格式和它一致。
+// ctx 已结束时把 ctx 的错误交给命令框架，由它提示超时。
+func (s *abanService) showFailure(ctx context.Context, inv *command.Invocation, label string, err error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	if text, ok := kit.IsUserError(err); ok {
-		return s.show(ctx, inv, "❌ "+command.Escape(text), resultLifetime)
+	if _, user := kit.IsUserError(err); !user {
+		inv.Log.Warn("aban.failed", "action", label, "error", err.Error())
 	}
-	return s.show(ctx, inv, "❌ 操作失败："+command.Code(kit.RPCCode(err)), resultLifetime)
+	text, _ := kit.IsUserError(kit.FailWith(label, err))
+	return s.show(ctx, inv, "❌ "+command.Escape(text), resultLifetime)
 }
 
 // failTarget 显示找不到目标的原因；unresolved 是用户查不到时的提示。
@@ -491,7 +499,7 @@ func Register(a *app.App) {
 					if ctx.Err() != nil {
 						return ctx.Err()
 					}
-					return service.show(ctx, inv, "❌ 刷新失败："+command.Code(kit.RPCCode(err)), resultLifetime)
+					return service.showFailure(ctx, inv, "刷新失败", err)
 				}
 				return service.show(ctx, inv, "✅ 已刷新 "+strconv.Itoa(len(groups))+" 个有管理权的群组", resultLifetime)
 			}},
@@ -571,13 +579,7 @@ func (s *abanService) basic(ctx context.Context, inv *command.Invocation, action
 
 // actionFailed 显示某个操作被 Telegram 拒绝的原因。
 func (s *abanService) actionFailed(ctx context.Context, inv *command.Invocation, label string, err error) error {
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-	if text, ok := kit.IsUserError(err); ok {
-		return s.show(ctx, inv, "❌ "+command.Escape(text), resultLifetime)
-	}
-	return s.show(ctx, inv, "❌ "+command.Escape(label)+"失败："+command.Code(kit.RPCCode(err)), resultLifetime)
+	return s.showFailure(ctx, inv, label+"失败", err)
 }
 
 // topReasons 把失败原因按出现次数从多到少排，取前 n 个，写成「原因×次数」（原版只显示前 3 个）。

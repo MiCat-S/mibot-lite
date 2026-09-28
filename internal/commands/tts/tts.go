@@ -291,7 +291,7 @@ func (s *service) speak(ctx context.Context, inv *command.Invocation) error {
 	if song {
 		title, artist, text = inv.Arg(1), inv.Arg(2), strings.TrimSpace(inv.Rest(3))
 		if title == "" || artist == "" {
-			return inv.EditText(ctx, "用法："+inv.Prefix+"t song 歌名 歌手 文本")
+			return kit.Usage(inv.Prefix, "t song 歌名 歌手 文本")
 		}
 	} else {
 		text = strings.TrimSpace(inv.Rest(0))
@@ -306,7 +306,7 @@ func (s *service) speak(ctx context.Context, inv *command.Invocation) error {
 	}
 	text = cleanText(text)
 	if text == "" {
-		return inv.EditText(ctx, "❌ 去掉表情和符号之后没有能念的字了")
+		return kit.Fail("去掉表情和符号之后没有能念的字了")
 	}
 	if count := utf8.RuneCountInString(text); count > maxText {
 		return inv.EditText(ctx, fmt.Sprintf("❌ 太长了：%d 字，一次最多 %d 字", count, maxText))
@@ -317,10 +317,7 @@ func (s *service) speak(ctx context.Context, inv *command.Invocation) error {
 	}
 	audio, err := synthesize(ctx, config, user.APIKey, voiceID, text)
 	if err != nil {
-		if reason, ok := kit.IsUserError(err); ok {
-			return inv.EditText(ctx, "❌ "+reason)
-		}
-		return inv.EditText(ctx, "❌ 合成失败："+httpx.Reason(err))
+		return kit.FailWith("合成失败", err)
 	}
 	directory, err := os.MkdirTemp("", "mibot-tts-")
 	if err != nil {
@@ -337,7 +334,7 @@ func (s *service) speak(ctx context.Context, inv *command.Invocation) error {
 		data, err = media.TaggedMP3(ctx, directory, audio, media.Tags{Title: title, Artist: artist, Album: role,
 			Cover: downloadCover(ctx, config.cover(role))})
 		if err != nil {
-			return inv.EditText(ctx, "❌ 音频处理失败："+command.Brief(err))
+			return kit.FailWith("音频处理失败", err)
 		}
 		options = bot.DocumentOptions{Name: title + ".mp3", MimeType: "audio/mpeg", Caption: command.Escape(title + " - " + artist),
 			Attributes: []tg.DocumentAttributeClass{&tg.DocumentAttributeAudio{Title: title, Performer: artist,
@@ -345,7 +342,7 @@ func (s *service) speak(ctx context.Context, inv *command.Invocation) error {
 	} else {
 		data, err = media.VoiceOgg(ctx, directory, audio)
 		if err != nil {
-			return inv.EditText(ctx, "❌ 音频处理失败："+command.Brief(err))
+			return kit.FailWith("音频处理失败", err)
 		}
 		options = bot.DocumentOptions{Name: "voice.ogg", MimeType: "audio/ogg",
 			Attributes: []tg.DocumentAttributeClass{&tg.DocumentAttributeAudio{Voice: true,
@@ -385,11 +382,11 @@ func (s *service) roles(ctx context.Context, inv *command.Invocation) error {
 	if id == "" {
 		known, ok := config.roles()[name]
 		if !ok {
-			return inv.Edit(ctx, "❌ 没有这个角色："+command.Escape(name)+"\n用 "+command.Code(inv.Prefix+"ts 角色名 模型ID")+" 新增")
+			return kit.Failf("没有这个角色：%s。新增用 %sts 角色名 模型ID", name, inv.Prefix)
 		}
 		id = known
 	} else if !voiceIDPattern.MatchString(id) {
-		return inv.EditText(ctx, "❌ 模型 ID 是 fish.audio 上 32 位的十六进制串")
+		return kit.Fail("模型 ID 是 fish.audio 上 32 位的十六进制串")
 	}
 	added := inv.Arg(1) != ""
 	if err := s.store.Update(func(value *document) error {
@@ -419,7 +416,7 @@ func (s *service) roles(ctx context.Context, inv *command.Invocation) error {
 func (s *service) key(ctx context.Context, inv *command.Invocation) error {
 	value := strings.TrimSpace(inv.Arg(0))
 	if value == "" {
-		return inv.EditText(ctx, "用法："+inv.Prefix+"tk API密钥（在 https://fish.audio/ 申请）")
+		return kit.Usage(inv.Prefix, "tk API Key（在 https://fish.audio/ 申请）")
 	}
 	if err := inv.EditText(ctx, "⏳ 正在保存…"); err != nil {
 		return err
@@ -444,7 +441,7 @@ func (s *service) key(ctx context.Context, inv *command.Invocation) error {
 
 func (s *service) setCover(ctx context.Context, inv *command.Invocation, link string) error {
 	if !coverLink(link) {
-		return inv.EditText(ctx, "用法："+inv.Prefix+"t fm https://图片链接")
+		return kit.Usage(inv.Prefix, "t fm https://图片链接")
 	}
 	config, err := s.store.Read()
 	if err != nil {
@@ -478,7 +475,7 @@ func (s *service) model(ctx context.Context, inv *command.Invocation, name strin
 	if strings.EqualFold(name, "default") {
 		name = ""
 	} else if !modelPattern.MatchString(name) {
-		return inv.EditText(ctx, "❌ 模型名只能有字母、数字和 . _ -")
+		return kit.Fail("模型名只能有字母、数字和 . _ -")
 	}
 	if err := s.store.Update(func(value *document) error { value.Model = name; return nil }); err != nil {
 		return err

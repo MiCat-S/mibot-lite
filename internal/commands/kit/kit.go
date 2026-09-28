@@ -31,6 +31,9 @@ func Fail(text string) error { return command.Fail(text) }
 // Failf 同 Fail，文字按 fmt.Sprintf 格式化。
 func Failf(format string, args ...any) error { return command.Failf(format, args...) }
 
+// FailWith 返回「text（错误码）」这样给用户看的错误，原始错误进日志，见 command.FailWith。
+func FailWith(text string, cause error) error { return command.FailWith(text, cause) }
+
 // IsUserError 取出错误里要给用户看的那句话，见 command.IsUserError。
 func IsUserError(err error) (string, bool) { return command.IsUserError(err) }
 
@@ -86,6 +89,9 @@ func Warn(a *app.App, event string, err error) {
 		a.Logger.Warn(event, "error", err.Error())
 	}
 }
+
+// Usage 返回「用法：<前缀><用法>」这样给用户看的错误，前缀取用户实际用的那个，照抄就能用。
+func Usage(prefix, usage string) error { return command.Fail("用法：" + prefix + usage) }
 
 // OnOff 解析 on|off。
 func OnOff(value string) (bool, error) {
@@ -180,15 +186,6 @@ func TruncateRunes(text string, n int) string {
 		return text
 	}
 	return string(runes[:n])
-}
-
-// ChatHTMLError 把处理函数返回的错误转成要在聊天里显示的消息；
-// 一般性的失败返回 ""。
-func ChatHTMLError(err error) string {
-	if text, ok := IsUserError(err); ok {
-		return command.Escape(text)
-	}
-	return ""
 }
 
 func MessageID(item tg.MessageClass) int {

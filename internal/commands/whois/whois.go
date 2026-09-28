@@ -214,7 +214,7 @@ func Register(a *app.App) {
 			}
 			name, ok := normalizeDomain(raw)
 			if !ok {
-				return inv.Edit(ctx, "请输入有效域名，例如 "+command.Code("example.com"))
+				return kit.Fail("请输入有效域名，例如 example.com")
 			}
 			if err := inv.Edit(ctx, "🔍 正在查询 "+command.Code(name)+"…"); err != nil {
 				return err

@@ -553,12 +553,12 @@ func (p *ratePricer) price(source, target rateCurrency) (float64, error) {
 func renderPriceFailure(err error, source, target rateCurrency, fallback string) string {
 	kind := func(c rateCurrency) string {
 		if c.Fiat {
-			return "fiat"
+			return "法币"
 		}
-		return "crypto"
+		return "加密货币"
 	}
-	return kit.Feedback("error", "获取价格失败", rateReason(err)) + "\n\n<b>🔍 调试信息:</b>\n• " + command.Code(source.Symbol) + " (" + kind(source) + ")\n• " +
-		command.Code(target.Symbol) + " (" + kind(target) + ")" + fallback
+	return kit.Feedback("error", "获取价格失败", rateReason(err)) + "\n\n<b>识别结果</b>\n• " + command.Code(source.Symbol) + "（" + kind(source) + "）\n• " +
+		command.Code(target.Symbol) + "（" + kind(target) + "）" + fallback
 }
 
 // renderRate 排版查询结果。1 个币换法币时只写一行价格；其余写换算结果，再按类型补一行汇率说明。

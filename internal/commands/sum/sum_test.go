@@ -240,7 +240,7 @@ func TestSumCallAIErrorDetail(t *testing.T) {
 	if !ok || message != "AI 调用失败：AI 接口返回 HTTP 401：Incorrect API key provided: ***" {
 		t.Fatalf("got %q", message)
 	}
-	if sumErrorText(err) != message {
+	if command.Brief(err) != message {
 		t.Fatal("定时任务应记下同样的错误说明")
 	}
 }

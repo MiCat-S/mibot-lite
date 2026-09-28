@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"log/slog"
 	"math"
 	"net/url"
@@ -724,7 +723,7 @@ func currentSelf(ctx context.Context, client *bot.Client) (*tg.User, error) {
 			return user, nil
 		}
 	}
-	return nil, errors.New("users.getUsers 没有返回自己的资料")
+	return nil, kit.Fail("读不到账号自己的资料")
 }
 
 // acnSave 记下现在的名字，作为以后恢复用的「原始昵称」。其他子命令都要先有它。
@@ -735,7 +734,7 @@ func acnSave(ctx context.Context, inv *command.Invocation, service *acnService, 
 		if ctx.Err() != nil {
 			return err
 		}
-		return inv.EditText(ctx, "❌ 读取当前昵称失败："+kit.RPCCode(err))
+		return kit.FailWith("读取当前昵称失败", err)
 	}
 	first := false
 	var saved acnUser
@@ -771,12 +770,12 @@ func (c *acnCall) toggle() error {
 	}
 	if enabled {
 		if _, err := c.service.apply(c.ctx, c.inv.Client, c.userID, true); err != nil {
-			return c.inv.EditText(c.ctx, "❌ 启用后首次更新失败："+kit.RPCCode(err))
+			return kit.FailWith("启用后首次更新失败", err)
 		}
 		return c.inv.EditText(c.ctx, "✅ 动态昵称已启用")
 	}
 	if err := c.service.restore(c.ctx, c.inv.Client, c.user); err != nil {
-		return c.inv.EditText(c.ctx, "❌ 恢复原始昵称失败："+kit.RPCCode(err))
+		return kit.FailWith("恢复原始昵称失败", err)
 	}
 	return c.inv.EditText(c.ctx, "✅ 动态昵称已禁用")
 }
@@ -820,7 +819,7 @@ func (c *acnCall) timezone() error {
 		zone = c.inv.Rest(2)
 	}
 	if !validZone(zone) {
-		return c.inv.EditText(c.ctx, "❌ 无效的时区标识符")
+		return kit.Fail("无效的时区标识符")
 	}
 	if _, err := c.change(func(user *acnUser) { user.Timezone = zone }); err != nil {
 		return err
@@ -839,7 +838,7 @@ func (c *acnCall) timezoneFormat() error {
 	lower := strings.ToLower(format)
 	custom := strings.HasPrefix(lower, "custom:") && len(format) > len("custom:")
 	if !custom && lower != "gmt" && lower != "utc" && lower != "simp" && lower != "offset" {
-		return c.inv.EditText(c.ctx, "❌ 无效的时区格式")
+		return kit.Fail("无效的时区格式")
 	}
 	if _, err := c.change(func(user *acnUser) {
 		if custom {
@@ -940,7 +939,7 @@ func (c *acnCall) order() error {
 		}
 	}
 	if len(invalid) > 0 {
-		return c.inv.Edit(c.ctx, "❌ 无效组件: "+command.Code(strings.Join(invalid, ", "))+"\n可用: "+strings.Join(acnComponents, ", "))
+		return kit.Failf("无效组件：%s。可用的有：%s", strings.Join(invalid, "、"), strings.Join(acnComponents, "、"))
 	}
 	if _, err := c.change(func(user *acnUser) { applyOrder(user, unique) }); err != nil {
 		return err
@@ -970,13 +969,13 @@ func (c *acnCall) show() error {
 		return c.inv.Edit(c.ctx, "✅ <b>已重置为默认值</b>\n\n当前模式默认组件: "+command.Code(strings.Join(updated.DisplayComponents, ", ")))
 	}
 	if action != "time" && action != "text" && action != "weather" {
-		return c.inv.Edit(c.ctx, "❌ <b>acn show 仅支持管理 time/text/weather</b>")
+		return kit.Fail("acn show 只能管理 time、text、weather")
 	}
 	if target != "on" && target != "off" {
-		return c.inv.Edit(c.ctx, "❌ <b>请指定 on 或 off</b>\n使用: <code>"+p+"acn show "+action+" on/off</code>")
+		return kit.Failf("请指定 on 或 off，用法：%sacn show %s on|off", c.inv.Prefix, action)
 	}
 	if action == "weather" && target == "on" && strings.TrimSpace(c.user.WeatherLocation) == "" {
-		return c.inv.Edit(c.ctx, "❌ <b>请先设置天气地点</b>\n使用 <code>"+p+"acn weather set 北京</code>")
+		return kit.Failf("请先设置天气地点，用法：%sacn weather set 北京", c.inv.Prefix)
 	}
 	updated, err := c.change(func(user *acnUser) { toggleShown(user, action, target == "on") })
 	if err != nil {
@@ -1019,10 +1018,10 @@ func (c *acnCall) config() error {
 func (c *acnCall) update() error {
 	ok, err := c.service.apply(c.ctx, c.inv.Client, c.userID, true)
 	if err != nil {
-		return c.inv.EditText(c.ctx, "❌ 更新失败："+kit.RPCCode(err))
+		return kit.FailWith("更新失败", err)
 	}
 	if !ok {
-		return c.inv.EditText(c.ctx, "❌ 更新失败")
+		return kit.Fail("更新失败")
 	}
 	return c.inv.EditText(c.ctx, "✅ 昵称已手动更新")
 }
@@ -1033,7 +1032,7 @@ func (c *acnCall) reset() error {
 		return err
 	}
 	if err := c.service.restore(c.ctx, c.inv.Client, c.user); err != nil {
-		return c.inv.EditText(c.ctx, "❌ 恢复原始昵称失败："+kit.RPCCode(err))
+		return kit.FailWith("恢复原始昵称失败", err)
 	}
 	return c.inv.EditText(c.ctx, "✅ 已恢复原始昵称并禁用自动更新")
 }
@@ -1056,7 +1055,7 @@ func acnHandle(ctx context.Context, inv *command.Invocation, service *acnService
 	}
 	user := state.Users[userID]
 	if user == nil || user.OriginalFirstName == "" {
-		return inv.Edit(ctx, "❌ 请先 "+command.Code(inv.Prefix+"acn save"))
+		return kit.Failf("请先 %sacn save", inv.Prefix)
 	}
 	call := &acnCall{ctx: ctx, inv: inv, service: service, state: state, userID: userID, user: user, sub: sub}
 	switch sub {
@@ -1085,7 +1084,7 @@ func acnHandle(ctx context.Context, inv *command.Invocation, service *acnService
 	case "reset":
 		return call.reset()
 	}
-	return inv.Edit(ctx, "❌ 未知命令: "+command.Code(sub))
+	return kit.Failf("未知子命令：%s，%sacn help 看用法", sub, inv.Prefix)
 }
 
 func (c *acnCall) text() error {
@@ -1121,7 +1120,7 @@ func (c *acnCall) text() error {
 			}
 		}
 		if len(additions) == 0 {
-			return inv.EditText(ctx, "❌ 没有可添加的文案（每条最长 50 字符）")
+			return kit.Fail("没有可添加的文案（每条最长 50 字符）")
 		}
 		added := 0
 		if err := service.store.Update(func(state *acnState) error {
@@ -1145,7 +1144,7 @@ func (c *acnCall) text() error {
 	case "del":
 		index, err := strconv.Atoi(inv.Arg(2))
 		if err != nil || index < 1 || index > len(state.RandomTexts) {
-			return inv.EditText(ctx, "❌ 无效的索引号")
+			return kit.Fail("无效的序号")
 		}
 		if err := service.store.Update(func(state *acnState) error {
 			if index <= len(state.RandomTexts) {
@@ -1179,7 +1178,7 @@ func (c *acnCall) text() error {
 		}
 		return inv.EditText(ctx, "✅ 随机文案已"+map[bool]string{true: "开启", false: "关闭"}[enabled])
 	}
-	return inv.EditText(ctx, "用法："+inv.Prefix+"acn text add|list|del|clear|on|off")
+	return kit.Usage(inv.Prefix, "acn text add|list|del|clear|on|off")
 }
 
 // weather 查看或设置天气。不带参数或 help 时显示当前设置和一次现取的预览。
@@ -1198,7 +1197,7 @@ func (c *acnCall) weather() error {
 			"\n预览: "+command.Escape(kit.OrDefault(preview, "暂无缓存")))
 	}
 	if action == "on" && user.WeatherLocation == "" {
-		return inv.EditText(ctx, "❌ 请先设置地点")
+		return kit.Fail("请先设置地点")
 	}
 	if action == "on" || action == "off" {
 		on := action == "on"
@@ -1215,7 +1214,7 @@ func (c *acnCall) weather() error {
 		location = inv.Rest(2)
 	}
 	if strings.TrimSpace(location) == "" {
-		return inv.EditText(ctx, "❌ 请提供地点")
+		return kit.Fail("请提供地点")
 	}
 	if _, err := c.change(func(user *acnUser) {
 		user.WeatherLocation, user.WeatherEnabled, user.WeatherCompact, user.WeatherCacheTS = location, true, "", 0

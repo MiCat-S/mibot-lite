@@ -389,16 +389,7 @@ func Register(a *app.App) {
 	a.Registry.Register(&command.Command{Name: "yvlu", Description: "生成文字语录贴纸、图片与故事，管理贴纸包",
 		Usage: "[消息数|r|f 文本|u 用户|webp|image|stories|s|config]", Help: yvluHelp, Timeout: 5 * time.Minute,
 		Handle: func(ctx context.Context, inv *command.Invocation) error {
-			err := service.handle(ctx, inv)
-			if err == nil || ctx.Err() != nil {
-				return err
-			}
-			detail := kit.ChatHTMLError(err)
-			if detail == "" {
-				inv.Log.Error("yvlu.failed", "error", err.Error())
-				detail = "请检查网络、媒体转换依赖或贴纸包权限后重试"
-			}
-			return inv.Edit(ctx, kit.Feedback("error", "语录操作失败", "")+"\n"+detail)
+			return kit.FailWith("语录生成失败", service.handle(ctx, inv))
 		}})
 }
 
@@ -662,7 +653,7 @@ func (s *yvluService) render(ctx context.Context, payload *quotePayload) ([]byte
 		return nil, "", kit.Fail("quote 服务拒绝了请求（403），可能是它换了准入规则")
 	}
 	if !response.OK() {
-		return nil, "", kit.Failf("quote-api HTTP %d", response.Status)
+		return nil, "", kit.Failf("语录渲染服务出错了（HTTP %d），稍后再试", response.Status)
 	}
 	switch {
 	case len(response.Body) >= 12 && string(response.Body[0:4]) == "RIFF" && string(response.Body[8:12]) == "WEBP":

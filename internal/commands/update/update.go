@@ -54,7 +54,7 @@ func Register(a *app.App) {
 					return kit.Fail("找不到程序文件在哪里，不能替换它")
 				}
 				if !busy.TryLock() {
-					return inv.EditText(ctx, "已有一个更新或回滚正在进行，请稍候")
+					return kit.Fail("已有一个更新或回滚正在进行，请稍候")
 				}
 				defer busy.Unlock()
 			}
@@ -110,7 +110,7 @@ func Register(a *app.App) {
 				}
 				return restart.Now(ctx, inv, "rollback", "<b>MiBot Lite 回滚</b>\n已换回上一版本，正在重启…", "回滚后重启失败。")
 			}
-			return inv.EditText(ctx, "用法："+inv.Prefix+"update [check|run|rollback]")
+			return kit.Usage(inv.Prefix, "update [check|run|rollback]")
 		}})
 }
 

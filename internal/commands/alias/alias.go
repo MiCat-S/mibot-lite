@@ -94,7 +94,7 @@ func Register(a *app.App) {
 		case "del", "rm", "delete":
 			name := inv.Rest(1)
 			if name == "" {
-				return inv.EditText(ctx, "用法："+inv.Prefix+"alias del 别名")
+				return kit.Usage(inv.Prefix, "alias del 别名")
 			}
 			removed := false
 			if err := saved.Update(func(document *aliasDocument) error {
@@ -106,7 +106,7 @@ func Register(a *app.App) {
 			}
 			publish()
 			if !removed {
-				return inv.EditText(ctx, "没有叫 "+name+" 的别名，"+inv.Prefix+"alias 可以看全部")
+				return kit.Failf("没有叫 %s 的别名，%salias 可以看全部", name, inv.Prefix)
 			}
 			return inv.Edit(ctx, "✅ 已删除别名 "+command.Code(inv.Prefix+name))
 		case "set", "add":
@@ -116,7 +116,7 @@ func Register(a *app.App) {
 
 		tokens := inv.Args[1:]
 		if len(tokens) < 2 {
-			return inv.EditText(ctx, "用法："+inv.Prefix+"alias set 别名 原命令 [参数]")
+			return kit.Usage(inv.Prefix, "alias set 别名 原命令 [参数]")
 		}
 		name, target, ok := splitAlias(tokens, isCommand)
 		if !ok {
@@ -124,14 +124,14 @@ func Register(a *app.App) {
 			if strings.HasPrefix(tokens[len(tokens)-1], inv.Prefix) || strings.HasPrefix(tokens[1], inv.Prefix) {
 				hint += "；原命令不用带前缀"
 			}
-			return inv.EditText(ctx, "❌ "+hint+"。例如 "+inv.Prefix+"alias set 测速 speedtest")
+			return kit.Failf("%s。例如 %salias set 测速 speedtest", hint, inv.Prefix)
 		}
 		if isCommand(name) {
-			return inv.EditText(ctx, "❌ "+name+" 本身就是一个命令，同名的别名永远不会生效")
+			return kit.Failf("%s 本身就是一个命令，同名的别名永远不会生效", name)
 		}
 		first := strings.Fields(target)[0]
 		if _, aliased := a.Registry.Aliases()[first]; aliased && !isCommand(first) {
-			return inv.EditText(ctx, "❌ "+first+" 是别名，不能再给别名起别名")
+			return kit.Failf("%s 是别名，不能再给别名起别名", first)
 		}
 
 		replaced := ""

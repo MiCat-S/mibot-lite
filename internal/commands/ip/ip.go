@@ -135,17 +135,33 @@ func Register(a *app.App) {
 			return err
 		}
 		response, err := httpx.Do(ctx, httpx.Request{URL: strings.Replace(ipAPI, "%s", url.PathEscape(query), 1), Timeout: 15 * time.Second, MaxBytes: 64 << 10})
-		if err != nil || !response.OK() {
-			return inv.EditText(ctx, "❌ 查询服务暂时连不上，稍后再试")
+		if err != nil {
+			return kit.FailWith("查询服务暂时连不上，稍后再试", err)
+		}
+		if !response.OK() {
+			return kit.Failf("查询服务出错了（HTTP %d），稍后再试", response.Status)
 		}
 		var result ipResult
 		if json.Unmarshal(response.Body, &result) != nil {
-			return inv.EditText(ctx, "❌ 查询服务返回了看不懂的内容")
+			return kit.Fail("查询服务返回了无法解析的内容")
 		}
 		if result.Status != "success" {
-			return inv.EditText(ctx, "❌ 查不到 "+query+"："+kit.OrDash(result.Message))
+			return kit.Failf("查不到 %s：%s", query, ipFailure(result.Message))
 		}
 		return inv.Edit(ctx, renderIP(result))
 	}
 	a.Registry.Register(&command.Command{Name: "ip", Description: "查 IP 或域名的位置与运营商", Usage: "[IP|域名]", Help: ipHelp, Handle: ipHandle})
+}
+
+// ipFailure 把 ip-api 的英文失败原因换成中文，认不出的只说查不到。
+func ipFailure(message string) string {
+	switch strings.ToLower(strings.TrimSpace(message)) {
+	case "private range":
+		return "这是内网地址"
+	case "reserved range":
+		return "这是保留地址"
+	case "invalid query":
+		return "不是有效的 IP 或域名"
+	}
+	return "没有这个地址的记录"
 }

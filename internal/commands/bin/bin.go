@@ -134,7 +134,7 @@ func Register(a *app.App) {
 		}
 		bin, ok := binDigits(input)
 		if !ok {
-			return inv.EditText(ctx, "❌ 卡头至少要 6 位数字")
+			return kit.Fail("卡头至少要 6 位数字")
 		}
 		if err := inv.EditText(ctx, "🔍 正在查询卡头 "+bin+"…"); err != nil {
 			return err
@@ -143,17 +143,17 @@ func Register(a *app.App) {
 			Headers: map[string]string{"Accept-Version": "3"}, Timeout: 15 * time.Second, MaxBytes: 64 << 10})
 		switch {
 		case err != nil:
-			return inv.EditText(ctx, "❌ 查询服务暂时连不上，稍后再试")
+			return kit.FailWith("查询服务暂时连不上，稍后再试", err)
 		case response.Status == 404:
-			return inv.EditText(ctx, "❌ 没有这个卡头的记录："+bin)
+			return kit.Failf("没有这个卡头的记录：%s", bin)
 		case response.Status == 429:
-			return inv.EditText(ctx, "⏳ binlist.net 限流了，免费额度每小时只有几次，过一阵再试")
+			return kit.Fail("binlist.net 限流了，免费额度每小时只有几次，稍后再试")
 		case !response.OK():
-			return inv.EditText(ctx, "❌ 查询服务出错了，稍后再试")
+			return kit.Failf("查询服务出错了（HTTP %d），稍后再试", response.Status)
 		}
 		var result binResult
 		if json.Unmarshal(response.Body, &result) != nil {
-			return inv.EditText(ctx, "❌ 查询服务返回了看不懂的内容")
+			return kit.Fail("查询服务返回了无法解析的内容")
 		}
 		return inv.Edit(ctx, renderBIN(bin, result))
 	}

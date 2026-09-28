@@ -148,8 +148,8 @@ func TestExplainCLI(t *testing.T) {
 			t.Errorf("explainCLI(%q) = %q, want it to mention %q", detail, got, want)
 		}
 	}
-	if got := explainCLI("signal: aborted"); got != "signal: aborted" {
-		t.Errorf("an unknown reason should pass through, got %q", got)
+	if got := explainCLI("signal: aborted"); strings.Contains(got, "signal") || !strings.Contains(got, "日志") {
+		t.Errorf("an unknown reason should not reach the chat in English, got %q", got)
 	}
 	// 限流是整台机器的事，换服务器也一样；断开、连不上、原因不明才值得再测一次。
 	for detail, want := range map[string]bool{

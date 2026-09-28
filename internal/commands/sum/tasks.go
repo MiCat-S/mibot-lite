@@ -464,7 +464,8 @@ func (s *sumService) fire(id string) {
 			}
 			db.Tasks[index].LastRunAt = time.Now().UTC().Format(time.RFC3339)
 			if err != nil {
-				db.Tasks[index].LastError = sumErrorText(err)
+				// 会显示在 .sum list 里：给用户看的错误照原话，其余只记概括，不带 URL。
+				db.Tasks[index].LastError = command.Brief(err)
 			} else {
 				db.Tasks[index].LastResult, db.Tasks[index].LastError = "总结完成，已推送到 "+target, ""
 			}

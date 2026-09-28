@@ -438,7 +438,14 @@ func (r *Registry) run(ctx context.Context, client *bot.Client, message, trigger
 		case isUserError(err):
 			// 用法不对、没有权限、对方不存在这类：不是故障，照原话告诉用户，日志只记一笔。
 			text, _ := IsUserError(err)
-			inv.Log.Info("command.refused", slog.String("chat", message.ChatID), slog.Int("message", message.ID), slog.String("reason", text))
+			attrs := []any{slog.String("chat", message.ChatID), slog.Int("message", message.ID), slog.String("reason", text)}
+			level := slog.LevelInfo
+			if errors.Unwrap(err) != nil {
+				// FailWith 包着的是真的失败（网络、RPC、内部错误），不只是用法不对：记 WARN 并附原始错误。
+				level = slog.LevelWarn
+				attrs = append(attrs, slog.String("error", err.Error()))
+			}
+			inv.Log.Log(context.Background(), level, "command.refused", attrs...)
 			_ = inv.EditText(context.WithoutCancel(ctx), "❌ "+text)
 		case errors.Is(err, context.DeadlineExceeded):
 			inv.Log.Warn("command.timeout", slog.String("chat", message.ChatID))

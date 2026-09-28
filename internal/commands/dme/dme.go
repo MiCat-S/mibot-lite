@@ -68,12 +68,12 @@ func Register(a *app.App) {
 			}
 			count, err := strconv.Atoi(token)
 			if token == "" || !regexp.MustCompile(`^\d+$`).MatchString(token) || err != nil || count <= 0 {
-				return inv.EditText(ctx, "参数错误：请指定正整数删除数量")
+				return kit.Usage(inv.Prefix, "dme [-f] 条数（正整数）")
 			}
 			mu.Lock()
 			if active[inv.Message.ChatID] {
 				mu.Unlock()
-				return inv.EditText(ctx, "当前会话已有 DME 删除任务正在执行，请等待任务完成")
+				return kit.Fail("这个对话已有一个删除任务在执行，请等它完成")
 			}
 			active[inv.Message.ChatID] = true
 			mu.Unlock()
@@ -96,7 +96,7 @@ func Register(a *app.App) {
 					return ctx.Err()
 				}
 				inv.Log.Error("dme.failed", slog.String("error", err.Error()))
-				_, _ = inv.Client.SendSelf(context.WithoutCancel(ctx), command.Escape("DME "+inv.Message.ChatID+" 操作失败，请检查权限、网络和 Telegram 限制后重试。"))
+				_, _ = inv.Client.SendSelf(context.WithoutCancel(ctx), command.Escape("❌ 在「"+inv.Client.Peers().Title(inv.Message.Peer)+"」删除自己的消息失败，请检查权限、网络和 Telegram 限制后重试"))
 			}
 			return nil
 		}})
@@ -428,7 +428,7 @@ func (r *dmeRun) forgetPassed() {
 func (r *dmeRun) report(requested int) {
 	r.inv.Log.Info("dme.complete", slog.Int("requested", requested), slog.Int("matched", r.matched), slog.Int("deleted", r.deleted), slog.Int("edited", r.edited), slog.Int("failed", r.failed), slog.Int("failed_edits", r.failedEdits))
 	if r.failed > 0 || r.failedEdits > 0 {
-		_, _ = r.client.SendSelf(r.ctx, command.Escape(fmt.Sprintf("DME %s：已删除 %d 条；删除失败 %d 条；防撤回编辑失败 %d 条。", r.message.ChatID, r.deleted, r.failed, r.failedEdits)))
+		_, _ = r.client.SendSelf(r.ctx, command.Escape(fmt.Sprintf("⚠️ 在「%s」删除自己的消息：已删除 %d 条，删除失败 %d 条，防撤回编辑失败 %d 条", r.client.Peers().Title(r.message.Peer), r.deleted, r.failed, r.failedEdits)))
 	}
 }
 
