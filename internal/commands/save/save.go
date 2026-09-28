@@ -278,46 +278,7 @@ func (s *saver) targetOf(ctx context.Context, target string) (tg.InputPeerClass,
 
 // learnDialogs 把对话列表读进 peer 缓存。
 func learnDialogs(ctx context.Context, client *bot.Client) error {
-	offsetDate, offsetID := 0, 0
-	var offsetPeer tg.InputPeerClass = &tg.InputPeerEmpty{}
-	for page := 0; page < 10; page++ {
-		result, err := client.API().MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{
-			OffsetDate: offsetDate, OffsetID: offsetID, OffsetPeer: offsetPeer, Limit: 100})
-		if err != nil {
-			return err
-		}
-		var dialogs []tg.DialogClass
-		var messages []tg.MessageClass
-		switch value := result.(type) {
-		case *tg.MessagesDialogs:
-			client.Peers().RememberUsers(value.Users)
-			client.Peers().RememberChats(value.Chats)
-			return nil
-		case *tg.MessagesDialogsSlice:
-			client.Peers().RememberUsers(value.Users)
-			client.Peers().RememberChats(value.Chats)
-			dialogs, messages = value.Dialogs, value.Messages
-		default:
-			return nil
-		}
-		if len(dialogs) < 100 {
-			return nil
-		}
-		last, ok := dialogs[len(dialogs)-1].(*tg.Dialog)
-		if !ok {
-			return nil
-		}
-		offsetID = last.TopMessage
-		for _, candidate := range messages {
-			if message, ok := candidate.(*tg.Message); ok && message.ID == offsetID {
-				offsetDate = message.Date
-			}
-		}
-		if next, err := client.InputPeer(last.Peer); err == nil {
-			offsetPeer = next
-		}
-	}
-	return nil
+	return client.EachDialog(ctx, bot.DialogPages{}, func(*tg.Dialog) {})
 }
 
 // fetch 按 id 读取消息，已经不存在的跳过。

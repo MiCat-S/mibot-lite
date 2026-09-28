@@ -306,85 +306,31 @@ func (s *abanService) managedGroups(ctx context.Context, client *bot.Client, ref
 	}
 	var groups []managedGroup
 	seen := map[int64]bool{}
+	collect := func(dialog *tg.Dialog) {
+		switch peer := dialog.Peer.(type) {
+		case *tg.PeerChannel:
+			info, known := client.Peers().Channel(peer.ChannelID)
+			if !known || seen[peer.ChannelID] || info.Left {
+				return
+			}
+			if !info.Creator && !info.AdminRights.BanUsers && !info.AdminRights.DeleteMessages {
+				return
+			}
+			seen[peer.ChannelID] = true
+			groups = append(groups, managedGroup{ID: peer.ChannelID, Title: info.Title, Channel: true, Hash: info.Hash})
+		case *tg.PeerChat:
+			info, known := client.Peers().Chat(peer.ChatID)
+			if !known || seen[peer.ChatID] || info.Left || !info.Creator && !info.AdminRights.BanUsers {
+				return
+			}
+			seen[peer.ChatID] = true
+			groups = append(groups, managedGroup{ID: peer.ChatID, Title: info.Title})
+		}
+	}
+	// 主列表和归档都要翻：归档里的群照样归这个账号管。
 	for _, folder := range []int{0, 1} {
-		offsetDate, offsetID := 0, 0
-		var offsetPeer tg.InputPeerClass = &tg.InputPeerEmpty{}
-		for page := 0; page < 20; page++ {
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
-			request := &tg.MessagesGetDialogsRequest{OffsetDate: offsetDate, OffsetID: offsetID, OffsetPeer: offsetPeer, Limit: 100}
-			if folder != 0 {
-				request.SetFolderID(folder)
-			}
-			result, err := client.API().MessagesGetDialogs(ctx, request)
-			if err != nil {
-				if wait, ok := tgerr.AsFloodWait(err); ok {
-					if kit.Sleep(ctx, wait) != nil {
-						return nil, ctx.Err()
-					}
-					continue
-				}
-				return nil, err
-			}
-			var dialogs []tg.DialogClass
-			var messages []tg.MessageClass
-			done := true
-			switch value := result.(type) {
-			case *tg.MessagesDialogs:
-				client.Peers().RememberUsers(value.Users)
-				client.Peers().RememberChats(value.Chats)
-				dialogs, messages = value.Dialogs, value.Messages
-			case *tg.MessagesDialogsSlice:
-				client.Peers().RememberUsers(value.Users)
-				client.Peers().RememberChats(value.Chats)
-				dialogs, messages, done = value.Dialogs, value.Messages, len(value.Dialogs) < 100
-			default:
-				done = true
-			}
-			for _, entry := range dialogs {
-				dialog, ok := entry.(*tg.Dialog)
-				if !ok {
-					continue
-				}
-				switch peer := dialog.Peer.(type) {
-				case *tg.PeerChannel:
-					info, known := client.Peers().Channel(peer.ChannelID)
-					if !known || seen[peer.ChannelID] || info.Left {
-						continue
-					}
-					if !info.Creator && !info.AdminRights.BanUsers && !info.AdminRights.DeleteMessages {
-						continue
-					}
-					seen[peer.ChannelID] = true
-					groups = append(groups, managedGroup{ID: peer.ChannelID, Title: info.Title, Channel: true, Hash: info.Hash})
-				case *tg.PeerChat:
-					info, known := client.Peers().Chat(peer.ChatID)
-					if !known || seen[peer.ChatID] || info.Left || !info.Creator && !info.AdminRights.BanUsers {
-						continue
-					}
-					seen[peer.ChatID] = true
-					groups = append(groups, managedGroup{ID: peer.ChatID, Title: info.Title})
-				}
-			}
-			if done || len(dialogs) == 0 {
-				break
-			}
-			last, _ := dialogs[len(dialogs)-1].(*tg.Dialog)
-			if last == nil {
-				break
-			}
-			offsetID = last.TopMessage
-			for _, item := range messages {
-				if message, ok := item.(*tg.Message); ok && message.ID == last.TopMessage {
-					offsetDate = message.Date
-				}
-			}
-			resolved, ok := client.Peers().InputPeer(last.Peer)
-			if !ok {
-				break
-			}
-			offsetPeer = resolved
+		if err := client.EachDialog(ctx, bot.DialogPages{Folder: folder, MaxPages: 20}, collect); err != nil {
+			return nil, err
 		}
 	}
 	if err := s.store.Update(func(cache *abanCache) error {
