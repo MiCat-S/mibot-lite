@@ -9,7 +9,6 @@ import (
 	"image/color"
 	"image/png"
 	"log/slog"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -67,7 +66,7 @@ func Register(a *app.App) {
 				token = inv.Arg(1)
 			}
 			count, err := strconv.Atoi(token)
-			if token == "" || !regexp.MustCompile(`^\d+$`).MatchString(token) || err != nil || count <= 0 {
+			if !kit.IsDigits(token) || err != nil || count <= 0 {
 				return kit.Usage(inv.Prefix, "dme [-f] 条数（正整数）")
 			}
 			mu.Lock()

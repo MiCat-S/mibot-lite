@@ -199,13 +199,13 @@ func stamp(config *eatStamp, face, mark image.Image) image.Image {
 	}
 	scale, rotate, opacity := 0.9, -12.0, 0.6
 	if config.Scale != nil {
-		scale = clampFloat(*config.Scale, 0.05, 4)
+		scale = min(max(*config.Scale, 0.05), 4)
 	}
 	if config.Rotate != nil {
-		rotate = clampFloat(*config.Rotate, -360, 360)
+		rotate = min(max(*config.Rotate, -360), 360)
 	}
 	if config.Opacity != nil {
-		opacity = clampFloat(*config.Opacity, 0, 1)
+		opacity = min(max(*config.Opacity, 0), 1)
 	}
 	canvas := imaging.ResizeCover(face, size, size)
 	bounds := mark.Bounds()

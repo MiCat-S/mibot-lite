@@ -46,20 +46,6 @@ func targetArgs(args []string) []string {
 	return targets
 }
 
-// isNumericID 对应原版的 /^-?\d+$/。
-func isNumericID(value string) bool {
-	digits := strings.TrimPrefix(value, "-")
-	if digits == "" {
-		return false
-	}
-	for _, r := range digits {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return true
-}
-
 // resolveTarget 找出命令针对的对象，顺序照原版 UserResolver：给了参数就用参数
 // （@用户名或数字 ID），否则取被回复消息的发送者，用户和频道身份都可以。
 // here 是命令所在的会话，在它里面找成员是查找链的一环。
@@ -91,7 +77,7 @@ func (s *abanService) resolveTarget(ctx context.Context, inv *command.Invocation
 // resolveArg 解析参数给出的目标。纯数字按 ID 处理：正数是用户，-100 开头是频道；
 // 其余按用户名解析，用户名可以属于用户也可以属于频道。
 func (s *abanService) resolveArg(ctx context.Context, client *bot.Client, here tg.InputPeerClass, arg string) (target, error) {
-	if !isNumericID(arg) {
+	if !kit.IsNumericID(arg) {
 		peer, err := client.ResolveUsername(ctx, strings.TrimPrefix(arg, "@"))
 		if err != nil {
 			return target{}, kit.Fail("无法解析该目标，可先回复其一则消息，或确认用户名和 ID 正确")

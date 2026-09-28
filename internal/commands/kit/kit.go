@@ -206,6 +206,22 @@ func MessageID(item tg.MessageClass) int {
 	return 0
 }
 
+// IsDigits 判断 value 是不是非空的一串 0–9（数量、编号这类参数）。
+func IsDigits(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// IsNumericID 判断 value 是不是带标记的数字 ID：可以有一个前导负号（群组、频道的 ID）。
+func IsNumericID(value string) bool { return IsDigits(strings.TrimPrefix(value, "-")) }
+
 // Clamp 把 value 限制在 [low, high] 里。
 func Clamp(value, low, high int) int {
 	if value < low {

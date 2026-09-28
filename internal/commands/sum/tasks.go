@@ -198,7 +198,7 @@ func sumParseAddOptions(rest []string) (sumAddOptions, error) {
 		case value == "--spoiler" || value == "--no-spoiler":
 			enabled := value == "--spoiler"
 			options.spoiler = &enabled
-		case regexp.MustCompile(`^\d+$`).MatchString(value):
+		case kit.IsDigits(value):
 			options.count, _ = strconv.Atoi(value)
 		default:
 			remark = append(remark, value)
@@ -212,7 +212,6 @@ var (
 	sumInviteLink  = regexp.MustCompile(`(?i)^(?:https?://)?t\.me/(?:\+|joinchat/)([A-Za-z0-9_-]+)`)
 	sumPrivateLink = regexp.MustCompile(`(?i)^(?:https?://)?t\.me/c/(\d+)`)
 	sumPublicLink  = regexp.MustCompile(`(?i)^(?:https?://)?t\.me/([A-Za-z0-9_]+)`)
-	sumNumericID   = regexp.MustCompile(`^-?\d+$`)
 )
 
 // sumTargetKind 把用户写的目标规整成要解析的形式：here、带标记的数字 ID、@用户名，
@@ -221,7 +220,7 @@ func sumTargetKind(target string) (normalized string, invite bool) {
 	switch {
 	case strings.EqualFold(target, "here"):
 		return "here", false
-	case sumNumericID.MatchString(target):
+	case kit.IsNumericID(target):
 		return target, false
 	}
 	if match := sumInviteLink.FindStringSubmatch(target); match != nil {

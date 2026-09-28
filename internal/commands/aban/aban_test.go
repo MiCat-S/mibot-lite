@@ -26,10 +26,3 @@ func TestParseDuration(t *testing.T) {
 	}
 }
 
-func TestIsNumericID(t *testing.T) {
-	for input, want := range map[string]bool{"42": true, "-1001234": true, "-": false, "": false, "@42": false, "4x2": false, "+42": false} {
-		if got := isNumericID(input); got != want {
-			t.Errorf("isNumericID(%q) = %v, want %v", input, got, want)
-		}
-	}
-}

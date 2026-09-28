@@ -57,7 +57,7 @@ var lendable = map[string]lending{
 	"eat2":   {ownerOnly: []string{"set"}},
 	"ai":     {ownerOnly: []string{"config", "model", "reasoning", "service", "prompt", "collapse", "timeout", "telegraph"}},
 	// .sum 或 .sum 数量：摘要当前群组。任务、配置、调试都只限本人。
-	"sum": {only: func(first string) bool { return first == "" || isNumber(first) }},
+	"sum": {only: func(first string) bool { return first == "" || kit.IsDigits(first) }},
 	// .speedtest、.speedtest 服务器编号、.speedtest list：测一次速、看服务器列表；help、config 只看说明。
 	"speedtest": {only: speedtestUse},
 }
@@ -67,12 +67,7 @@ func speedtestUse(first string) bool {
 	case "", "list", "servers", "列表", "help", "h", "config":
 		return true
 	}
-	return isNumber(first)
-}
-
-func isNumber(value string) bool {
-	_, err := strconv.Atoi(value)
-	return err == nil
+	return kit.IsDigits(first)
 }
 
 // delegationAllowed 判断一条命令能不能借出去。按别名展开后的真实命令判断。

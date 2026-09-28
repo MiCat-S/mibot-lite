@@ -102,7 +102,7 @@ func parseYvlu(inv *command.Invocation) (*yvluOptions, bool) {
 		sub = args[0]
 	}
 	switch {
-	case sub == "" || isDigits(sub):
+	case sub == "" || kit.IsDigits(sub):
 		options.Count = count(sub)
 	case sub == "r":
 		options.IncludeReply = true
@@ -138,18 +138,6 @@ func parseYvlu(inv *command.Invocation) (*yvluOptions, bool) {
 		return nil, false
 	}
 	return options, true
-}
-
-func isDigits(value string) bool {
-	if value == "" {
-		return false
-	}
-	for _, r := range value {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return true
 }
 
 // shiftEntities 丢掉完全落在 offset 之前的格式实体，其余原样保留。

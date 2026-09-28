@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,8 +32,6 @@ type receipt struct {
 type receiptDocument struct {
 	Pending *receipt `json:"pending"`
 }
-
-var chatIDPattern = regexp.MustCompile(`^-?[0-9]+$`)
 
 // restarter 向 systemd 提交重启，并留下回执。
 type restarter struct {
@@ -157,7 +154,7 @@ func (r *restarter) notifyReady(ctx context.Context, client *bot.Client) {
 		}))
 	}
 	age := time.Now().UnixMilli() - note.RequestedAt
-	if !chatIDPattern.MatchString(note.ChatID) || note.MessageID <= 0 || age < 0 || age > 10*60*1000 {
+	if !kit.IsNumericID(note.ChatID) || note.MessageID <= 0 || age < 0 || age > 10*60*1000 {
 		clear()
 		return
 	}

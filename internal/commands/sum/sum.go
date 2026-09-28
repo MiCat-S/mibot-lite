@@ -723,7 +723,7 @@ func (s *sumService) handle(ctx context.Context, inv *command.Invocation) error 
 // instant 立即总结当前群：.sum [数量] [--provider 名称]。
 func (s *sumService) instant(ctx context.Context, inv *command.Invocation, sub string) error {
 	count := 100
-	if sub != "" && regexp.MustCompile(`^\d+$`).MatchString(sub) {
+	if kit.IsDigits(sub) {
 		count, _ = strconv.Atoi(sub)
 	}
 	if count < 10 || count > 500 {

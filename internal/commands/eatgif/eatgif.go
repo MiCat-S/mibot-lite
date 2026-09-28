@@ -229,23 +229,13 @@ func pasteWithMask(canvas *image.RGBA, role *eatgifRole, face image.Image, maskD
 	}
 	shaped := image.Image(imaging.Resize(face, bounds.Dx(), bounds.Dy()))
 	if role.Rotate != nil && *role.Rotate != 0 {
-		shaped = imaging.Rotate(shaped, clampFloat(*role.Rotate, -360, 360))
+		shaped = imaging.Rotate(shaped, min(max(*role.Rotate, -360), 360))
 	}
 	if role.Brightness != nil && *role.Brightness != 1 {
-		shaped = imaging.Brightness(shaped, clampFloat(*role.Brightness, 0.1, 2))
+		shaped = imaging.Brightness(shaped, min(max(*role.Brightness, 0.1), 2))
 	}
 	imaging.Composite(canvas, imaging.ApplyMask(shaped, mask), role.X, role.Y)
 	return nil
-}
-
-func clampFloat(value, low, high float64) float64 {
-	if value < low {
-		return low
-	}
-	if value > high {
-		return high
-	}
-	return value
 }
 
 // help 是 .eatgif 的帮助：用法，加上当前可用的全部动画。目录读不到时只给用法。
