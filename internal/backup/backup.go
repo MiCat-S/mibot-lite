@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/MiCat-S/mibot-lite/internal/config"
+	"github.com/MiCat-S/mibot-lite/internal/fsutil"
 )
 
 const (
@@ -45,7 +46,7 @@ const (
 )
 
 // 部署根目录下的账号和设置文件。
-var rootFiles = []string{"config.json", "gotd-session.json", ".env"}
+var rootFiles = []string{config.ConfigFile, config.SessionFile, config.EnvFile}
 
 // stale 列出的文件，如果归档里没有新的来替换，Restore 就把它删掉。
 //
@@ -53,7 +54,7 @@ var rootFiles = []string{"config.json", "gotd-session.json", ".env"}
 // config.json 里的会话；如果留着一个旧的，就以旧的为准。把某人的
 // config.json 恢复到一个还放着另一个账号 gotd-session.json 的目录里，
 // 程序会悄无声息地继续以那个账号运行。
-var stale = []string{"gotd-session.json", "updates.json"}
+var stale = []string{config.SessionFile, config.StateFile}
 
 // ErrExists 表示目标目录里已经有账号，而调用方没有要求替换。
 var ErrExists = errors.New("this directory already has an account; restoring would replace it")
@@ -213,12 +214,12 @@ func Restore(archive io.Reader, root string, overwrite bool) ([]string, error) {
 	if len(files) == 0 {
 		return nil, errors.New("the backup is empty")
 	}
-	if body, ok := files["config.json"]; ok {
+	if body, ok := files[config.ConfigFile]; ok {
 		if _, err := config.Parse(body); err != nil {
 			return nil, fmt.Errorf("the backup's config.json is not usable: %w", err)
 		}
 	}
-	if !overwrite && regular(filepath.Join(root, "config.json")) {
+	if !overwrite && regular(filepath.Join(root, config.ConfigFile)) {
 		return nil, ErrExists
 	}
 
@@ -246,21 +247,5 @@ func Restore(archive io.Reader, root string, overwrite bool) ([]string, error) {
 }
 
 func writeAtomic(target string, body []byte) error {
-	temporary, err := os.CreateTemp(filepath.Dir(target), ".restore-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(temporary.Name())
-	if _, err := temporary.Write(body); err != nil {
-		temporary.Close()
-		return err
-	}
-	if err := temporary.Chmod(0o600); err != nil {
-		temporary.Close()
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	return os.Rename(temporary.Name(), target)
+	return fsutil.WriteFileAtomic(target, body, 0o600)
 }

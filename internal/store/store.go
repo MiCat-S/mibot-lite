@@ -7,8 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sync"
+
+	"github.com/MiCat-S/mibot-lite/internal/fsutil"
 )
 
 // Store 在磁盘上保存一个类型为 T 的 JSON 文档。
@@ -98,30 +99,5 @@ func writeAtomic(path string, value any) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	temporary, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".")
-	if err != nil {
-		return err
-	}
-	name := temporary.Name()
-	cleanup := func() { temporary.Close(); os.Remove(name) }
-	if err := temporary.Chmod(0o600); err != nil {
-		cleanup()
-		return err
-	}
-	if _, err := temporary.Write(append(encoded, '\n')); err != nil {
-		cleanup()
-		return err
-	}
-	if err := temporary.Sync(); err != nil {
-		cleanup()
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		os.Remove(name)
-		return err
-	}
-	return os.Rename(name, path)
+	return fsutil.WriteFileAtomic(path, append(encoded, '\n'), 0o600)
 }

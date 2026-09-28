@@ -23,14 +23,9 @@ import (
 	"golang.org/x/term"
 
 	"github.com/MiCat-S/mibot-lite/internal/config"
+	"github.com/MiCat-S/mibot-lite/internal/fsutil"
 	"github.com/MiCat-S/mibot-lite/internal/session"
 )
-
-// SessionFile 是 gotd 会话文件的文件名，与 MiBox 的 Go 宿主共用。
-const SessionFile = "gotd-session.json"
-
-// lockFile 是运行中的服务持有的实例锁，名字与 internal/app 保持一致。
-const lockFile = "mibot-lite.lock"
 
 // Options 是一次登录的配置。
 type Options struct {
@@ -60,7 +55,7 @@ func Run(ctx context.Context, options Options) error {
 		return fmt.Errorf("deployment directory %s does not exist; create it first", root)
 	}
 	existing := map[string]any{}
-	if raw, err := os.ReadFile(filepath.Join(root, "config.json")); err == nil {
+	if raw, err := os.ReadFile(filepath.Join(root, config.ConfigFile)); err == nil {
 		decoder := json.NewDecoder(strings.NewReader(string(raw)))
 		decoder.UseNumber()
 		if err := decoder.Decode(&existing); err != nil {
@@ -158,17 +153,17 @@ func Run(ctx context.Context, options Options) error {
 	if err != nil {
 		return err
 	}
-	if err := writeFile(filepath.Join(root, "config.json"), append(document, '\n')); err != nil {
+	if err := writeFile(filepath.Join(root, config.ConfigFile), append(document, '\n')); err != nil {
 		return err
 	}
-	file := &gotdsession.FileStorage{Path: filepath.Join(root, SessionFile)}
+	file := &gotdsession.FileStorage{Path: filepath.Join(root, config.SessionFile)}
 	if err := (&gotdsession.Loader{Storage: file}).Save(ctx, data); err != nil {
-		return fmt.Errorf("write %s: %w", SessionFile, err)
+		return fmt.Errorf("write %s: %w", config.SessionFile, err)
 	}
 	if err := os.Chmod(file.Path, 0o600); err != nil {
-		fmt.Fprintf(out, "Warning: could not restrict %s to owner-only (0600): %v\n", SessionFile, err)
+		fmt.Fprintf(out, "Warning: could not restrict %s to owner-only (0600): %v\n", config.SessionFile, err)
 	}
-	fmt.Fprintf(out, "Signed in as %s. config.json and %s written to %s\n", who, SessionFile, root)
+	fmt.Fprintf(out, "Signed in as %s. config.json and %s written to %s\n", who, config.SessionFile, root)
 	return nil
 }
 
@@ -178,7 +173,7 @@ func Run(ctx context.Context, options Options) error {
 // 根据 pid 文件或服务单元名去猜：不管部署是跑在 systemd 下、终端里，
 // 还是根本没在跑，结果都是对的。
 func refuseWhileRunning(root string) error {
-	path := filepath.Join(root, lockFile)
+	path := filepath.Join(root, config.LockFile)
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		// 锁文件连打开都打不开，并不能说明有东西在运行；如果目录
@@ -195,26 +190,7 @@ func refuseWhileRunning(root string) error {
 }
 
 func writeFile(path string, content []byte) error {
-	temporary, err := os.CreateTemp(filepath.Dir(path), ".config.json.")
-	if err != nil {
-		return err
-	}
-	name := temporary.Name()
-	if _, err := temporary.Write(content); err != nil {
-		temporary.Close()
-		os.Remove(name)
-		return err
-	}
-	if err := temporary.Chmod(0o600); err != nil {
-		temporary.Close()
-		os.Remove(name)
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		os.Remove(name)
-		return err
-	}
-	return os.Rename(name, path)
+	return fsutil.WriteFileAtomic(path, content, 0o600)
 }
 
 type terminal struct {

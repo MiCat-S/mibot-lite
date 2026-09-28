@@ -12,6 +12,20 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/MiCat-S/mibot-lite/internal/fsutil"
+)
+
+// 部署目录里的文件名。app、login、backup 都用这几个，改名只改这里。
+const (
+	ConfigFile = "config.json"
+	EnvFile    = ".env"
+	// SessionFile 是 gotd 的会话文件，和 MiBox 的 Go 宿主共用。
+	SessionFile = "gotd-session.json"
+	// StateFile 记着更新状态（pts、access hash）。
+	StateFile = "updates.json"
+	// LockFile 是运行中的服务持有的单实例锁。
+	LockFile = "mibot-lite.lock"
 )
 
 // MaxConfigBytes 是能接受的 config.json 的最大字节数。
@@ -102,7 +116,7 @@ func Parse(raw []byte) (*Config, error) {
 
 // Read 从部署根目录加载 config.json。
 func Read(root string) (*Config, error) {
-	file, err := os.Open(filepath.Join(root, "config.json"))
+	file, err := os.Open(filepath.Join(root, ConfigFile))
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +140,7 @@ type Env map[string]string
 // 再用进程环境变量里的所有 MIBOT_* 变量覆盖上去。
 func ReadEnv(root string, environ []string) Env {
 	env := Env{}
-	if file, err := os.Open(filepath.Join(root, ".env")); err == nil {
+	if file, err := os.Open(filepath.Join(root, EnvFile)); err == nil {
 		scanner := bufio.NewScanner(file)
 		for scanner.Scan() {
 			line := strings.TrimSpace(scanner.Text())
@@ -162,7 +176,7 @@ func ReadEnv(root string, environ []string) Env {
 // value 里不能有换行，也不能首尾是一对引号：ReadEnv 读的时候会把那对引号剥掉，
 // 写进去的就不是读出来的了。调用方负责先检查。
 func SetEnv(root, key, value string) error {
-	path := filepath.Join(root, ".env")
+	path := filepath.Join(root, EnvFile)
 	raw, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -185,23 +199,7 @@ func SetEnv(root, key, value string) error {
 	if !replaced {
 		lines = append(lines, key+"="+value)
 	}
-	temporary, err := os.CreateTemp(root, ".env-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(temporary.Name())
-	if _, err := temporary.WriteString(strings.Join(lines, "\n") + "\n"); err != nil {
-		temporary.Close()
-		return err
-	}
-	if err := temporary.Chmod(0o600); err != nil {
-		temporary.Close()
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	return os.Rename(temporary.Name(), path)
+	return fsutil.WriteFileAtomic(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600)
 }
 
 // Prefixes 返回命令前缀：优先用 MIBOT_PREFIX（以空格分隔），

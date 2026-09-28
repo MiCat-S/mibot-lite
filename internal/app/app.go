@@ -101,9 +101,6 @@ func sleepFor(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// SessionFile 是 gotd 的会话文件，和 MiBox 的 Go 宿主共用。
-const SessionFile = "gotd-session.json"
-
 // ErrRunning 表示部署目录已被另一个进程占用。
 var ErrRunning = errors.New("another mibot-lite instance already runs on this directory")
 
@@ -113,7 +110,7 @@ var ErrRunning = errors.New("another mibot-lite instance already runs on this di
 // 理由正好反过来：在运行中的服务底下改写 config.json，服务手里的会话
 // 就和文件里记的对不上了。
 func LockRoot(root string) (*os.File, error) {
-	lock, err := os.OpenFile(filepath.Join(root, "mibot-lite.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	lock, err := os.OpenFile(filepath.Join(root, config.LockFile), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
 	}
@@ -143,7 +140,7 @@ func Prepare(ctx context.Context, options Options) (*App, error) {
 	}
 	env := config.ReadEnv(root, os.Environ())
 
-	storage := &gotdsession.FileStorage{Path: filepath.Join(root, SessionFile)}
+	storage := &gotdsession.FileStorage{Path: filepath.Join(root, config.SessionFile)}
 	if _, err := session.Import(ctx, storage, cfg.Session, false); err != nil {
 		return nil, fmt.Errorf("convert session: %w", err)
 	}
@@ -166,7 +163,7 @@ func Prepare(ctx context.Context, options Options) (*App, error) {
 		Logs: options.Logs, Level: options.Level, ReadOnly: options.ReadOnly,
 		peers: bot.NewPeerCache(), lock: lock, options: options}
 
-	state, err := tgstate.Open(filepath.Join(root, "updates.json"))
+	state, err := tgstate.Open(filepath.Join(root, config.StateFile))
 	if err != nil {
 		logger.Warn("updates.state_unavailable", slog.String("error", err.Error()))
 	} else {

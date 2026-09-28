@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/gotd/td/telegram/updates"
+
+	"github.com/MiCat-S/mibot-lite/internal/fsutil"
 )
 
 var errNoState = errors.New("update state does not exist")
@@ -110,11 +112,7 @@ func (s *State) flushLocked() error {
 	if err != nil {
 		return err
 	}
-	temporary := s.path + ".tmp"
-	if err := os.WriteFile(temporary, encoded, 0o600); err != nil {
-		return err
-	}
-	if err := os.Rename(temporary, s.path); err != nil {
+	if err := fsutil.WriteFileAtomic(s.path, encoded, 0o600); err != nil {
 		return err
 	}
 	s.dirty = false

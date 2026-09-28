@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/MiCat-S/mibot-lite/internal/app"
+	"github.com/MiCat-S/mibot-lite/internal/config"
 )
 
 const account = `{"api_id": 1234567, "api_hash": "abc", "session": "1xyz"}`
@@ -94,10 +94,10 @@ func TestRoundTripKeepsConfigurationAndDropsTheRest(t *testing.T) {
 func TestSessionFileNameMatchesTheApp(t *testing.T) {
 	found := false
 	for _, name := range rootFiles {
-		found = found || name == app.SessionFile
+		found = found || name == config.SessionFile
 	}
 	if !found {
-		t.Fatalf("backup does not carry %s", app.SessionFile)
+		t.Fatalf("backup does not carry %s", config.SessionFile)
 	}
 }
 

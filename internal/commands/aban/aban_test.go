@@ -25,4 +25,3 @@ func TestParseDuration(t *testing.T) {
 		t.Fatalf("formatDuration(90m) = %q", got)
 	}
 }
-
