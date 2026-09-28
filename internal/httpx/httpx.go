@@ -141,8 +141,8 @@ func (e *StatusError) Error() string { return fmt.Sprintf("HTTP %d", e.Status) }
 // Reason 把传输失败转成能发到聊天里的说明，不泄露 URL 和主机名。
 //
 // 给用户看的错误（实现 UserMessage，如 command.Fail）照原话返回：调用方常常把整段
-// 「下载 + 解析 + 处理」的错误都交给它，以前「素材目录格式不对」、ffmpeg 失败这些
-// 都被说成「网络请求失败」。
+// 「下载 + 解析 + 处理」的错误都交给它，一律说成「网络请求失败」的话，「素材目录格式不对」、
+// ffmpeg 失败这些就都说错了。
 func Reason(err error) string {
 	var message interface{ UserMessage() string }
 	if errors.As(err, &message) {

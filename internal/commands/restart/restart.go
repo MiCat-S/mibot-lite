@@ -138,7 +138,7 @@ func (r *Restarter) notifyReady(ctx context.Context, client *bot.Client) {
 		return
 	}
 	note := *doc.Pending
-	clear := func() {
+	forget := func() {
 		kit.Warn(r.a, "restart.receipt_clear_failed", r.store.Update(func(doc *receiptDocument) error {
 			if doc.Pending != nil && doc.Pending.BootID == note.BootID && doc.Pending.RequestedAt == note.RequestedAt {
 				doc.Pending = nil
@@ -148,13 +148,13 @@ func (r *Restarter) notifyReady(ctx context.Context, client *bot.Client) {
 	}
 	age := time.Now().UnixMilli() - note.RequestedAt
 	if !kit.IsNumericID(note.ChatID) || note.MessageID <= 0 || age < 0 || age > 10*60*1000 {
-		clear()
+		forget()
 		return
 	}
 	peer, err := client.InputPeerFromChatID(note.ChatID)
 	if err != nil {
 		client.Logger().Warn("restart.receipt_unaddressable", slog.String("chat", note.ChatID))
-		clear()
+		forget()
 		return
 	}
 	text := "🔄 <b>重启服务</b>\n✅ 重启成功，服务已就绪"
@@ -167,7 +167,7 @@ func (r *Restarter) notifyReady(ctx context.Context, client *bot.Client) {
 	if err := client.EditMessage(ctx, peer, note.MessageID, text, false); err != nil {
 		client.Logger().Warn("restart.receipt_failed", slog.String("error", err.Error()))
 	}
-	clear()
+	forget()
 }
 
 func restartHelp(prefix string) string {

@@ -83,7 +83,7 @@ func quotePrefixes(prefixes []string) string {
 	return strings.Join(quoted, " • ")
 }
 
-// Register 注册 .prefix。
+// Register 注册 .prefix。改好的前缀立刻生效，并写进 .env 的 MIBOT_PREFIX。
 func Register(a *app.App) {
 	// 同时来两条 .prefix 时一条一条改，免得后改完的用旧列表盖掉先改完的。
 	var mu sync.Mutex

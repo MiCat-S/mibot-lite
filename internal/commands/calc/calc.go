@@ -227,7 +227,7 @@ func jsNumber(value float64) string {
 	return sign + digits[:1] + "." + digits[1:] + "e" + exponentSign + strconv.Itoa(power)
 }
 
-// Register 注册 .calc。
+// Register 注册 .calc。表达式自己解析，不交给任何求值器。
 func Register(a *app.App) {
 	help := func(prefix string) string {
 		return "🧮 <b>计算器</b>\n\n• " + command.Code(prefix+"calc 2+2*5") + "\n• " + command.Code(prefix+"calc (10-3)*4") + "\n• " + command.Code(prefix+"calc -(2-5)/3") + "\n支持括号、小数和负数。"

@@ -751,7 +751,7 @@ func newSaver(ctx context.Context, inv *command.Invocation, root string) *saver 
 }
 
 // collectSaveJobs 找出要保存的消息：一个范围、若干链接，或者被回复的那一条。
-// 给用户看的错误用 fail 包起来，由调用方原样显示。
+// 给用户看的错误是 kit.Fail，派发器原样显示。
 func collectSaveJobs(ctx context.Context, inv *command.Invocation, work *saver, request saveRequest) ([]saveJob, error) {
 	switch {
 	case request.Range != nil:
@@ -1105,7 +1105,7 @@ func saveHandle(ctx context.Context, inv *command.Invocation, settings *store.St
 	return inv.EditText(ctx, renderSaveResult(tally, target, root))
 }
 
-// Register 注册 .save。
+// Register 注册 .save。默认目标和来源设置存在 data/save.json。
 func Register(a *app.App) {
 	settings := kit.NewStore(a, "save.json", func() saveDocument { return saveDocument{} })
 	a.Registry.Register(&command.Command{

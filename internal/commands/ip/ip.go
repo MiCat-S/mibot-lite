@@ -112,7 +112,7 @@ func ipHelp(prefix string) string {
 		"• 回复一条含 IP、域名或链接的消息发 <code>" + p + "ip</code>\n\n数据来自 ip-api.com。"
 }
 
-// Register 注册 .ip。
+// Register 注册 .ip。不存东西，每次现查。
 func Register(a *app.App) {
 	ipHandle := func(ctx context.Context, inv *command.Invocation) error {
 		query := strings.TrimSpace(inv.Rest(0))

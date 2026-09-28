@@ -149,7 +149,7 @@ func formatInt(value int) string {
 	return string(digits)
 }
 
-// Register 注册 .whois。
+// Register 注册 .whois。查询历史和 24 小时的结果缓存存在 data/whois.json。
 func Register(a *app.App) {
 	data := kit.NewStore(a, "whois.json", func() whoisData { return whoisData{Cache: map[string]whoisItem{}} })
 	help := func(prefix string) string {

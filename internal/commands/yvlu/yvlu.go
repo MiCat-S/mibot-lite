@@ -367,7 +367,7 @@ func (s *yvluService) cacheAvatar(key string, photo *quotePhot) {
 	s.rendered[key] = photo
 }
 
-// Register 注册 .yvlu。
+// Register 注册 .yvlu。贴纸包设置存在 data/yvlu.json，语录图由远程服务渲染。
 func Register(a *app.App) {
 	service := &yvluService{a: a, store: kit.NewStore(a, "yvlu.json", func() yvluConfig { return yvluConfig{} })}
 	a.Registry.Register(&command.Command{Name: "yvlu", Group: command.GroupMedia, Description: "把消息做成语录贴纸",
@@ -431,8 +431,7 @@ func (s *yvluService) handle(ctx context.Context, inv *command.Invocation) error
 		return err
 	}
 	// 记录一条慢语录的时间花在了哪里。用 debug 级别，因为这是诊断信息：
-	// 「为什么花了七秒」的答案就是这三个数之一；以前靠猜，白白多部署了
-	// 一次。
+	// 「为什么花了七秒」的答案就是这三个数之一，不用靠猜。
 	inv.Log.Debug("yvlu.timing",
 		"collect", built.Sub(started).String(),
 		"render", rendered.Sub(built).String(),

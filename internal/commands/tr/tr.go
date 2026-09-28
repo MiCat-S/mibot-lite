@@ -181,7 +181,7 @@ func translateHelp(prefix string) string {
 		command.Code(fmt.Sprint(translateLimit)) + " 字符，长译文自动分段。"
 }
 
-// Register 注册 .tr。
+// Register 注册 .tr。默认目标语言存在 data/translate.json。
 func Register(a *app.App) {
 	settings := kit.NewStore(a, "translate.json", translateDefaults)
 	a.Registry.Register(&command.Command{

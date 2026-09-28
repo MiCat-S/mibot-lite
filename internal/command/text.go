@@ -35,8 +35,8 @@ func Code(value string) string { return bot.Code(value) }
 func Bold(value string) string { return bot.Bold(value) }
 
 // EscapedPages 把纯文本分页，每页转义后的 HTML 不超过 limit 个 UTF-16 单位，
-// 不会把一个字符拆开。每一页都已经转义过。以前按字节算，中文一个字 3 字节，
-// 一页只装得下三分之一。
+// 不会把一个字符拆开。每一页都已经转义过。不按字节算：中文一个字 3 字节，
+// 那样一页只装得下三分之一。
 func EscapedPages(text string, limit int) []string {
 	var pages []string
 	var page strings.Builder

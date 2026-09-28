@@ -449,8 +449,8 @@ func (p *ratePricer) binance(pair string) (float64, error) {
 }
 
 // inBridge 取一个币用某种稳定币计价的价格。币本身就是这种稳定币时，价格就是 1：
-// 币安上没有 USDTUSDT 这样的交易对，以前查 USDT 本身（比如帮助里的示例
-// .rate CNY USDT 7000）一律失败。
+// 币安上没有 USDTUSDT 这样的交易对，不特判的话，查 USDT 本身（比如帮助里的示例
+// .rate CNY USDT 7000）就会失败。
 func (p *ratePricer) inBridge(coin, bridge string) (float64, error) {
 	if coin == bridge {
 		return 1, nil
@@ -633,7 +633,7 @@ func rateHandle(ctx context.Context, inv *command.Invocation, service *rateServi
 	return inv.Edit(ctx, renderRate(pricer, source, target, amount, price, converted))
 }
 
-// Register 注册 .rate。
+// Register 注册 .rate。法币汇率在内存里缓存一会儿，不写文件。
 func Register(a *app.App) {
 	service := newRateService()
 	a.Registry.Register(&command.Command{Name: "rate", Group: command.GroupTools, Description: "查询汇率并换算金额", Usage: "货币 [目标货币] [数量]", Help: rateHelp, Timeout: 2 * time.Minute,

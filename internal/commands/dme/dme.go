@@ -49,7 +49,7 @@ func dmeHelp(prefix string) string {
 		"dme 999999</code> 删除全部可见的自己的消息\n普通数量单次最多 2000 条；仅处理命令之前的消息及当前话题。\n收藏夹直接删除；-f 模式下广播频道主直接按数量删除。\n防撤回编辑可能因消息类型、编辑时限或权限失败，不保证第三方副本被删除。"
 }
 
-// Register 注册 .dme。
+// Register 注册 .dme。设置存在 data/dme.json；同一个对话同时只跑一个。
 func Register(a *app.App) {
 	cfgStore := kit.NewStore(a, "dme.json", dmeDefaults)
 	var mu sync.Mutex

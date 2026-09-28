@@ -236,7 +236,7 @@ func runUpdate(ctx context.Context, a *app.App, inv *command.Invocation, restart
 }
 
 // executablePath 是正在运行的程序文件的真实路径（解开符号链接）。
-// 以前两个错误都被丢掉：EvalSymlinks 失败时路径变成空字符串，后面就去改名一个空路径。
+// 两个错误都要返回：EvalSymlinks 失败时照样往下走的话，路径是空字符串，后面会去改名一个空路径。
 func executablePath() (string, error) {
 	binary, err := os.Executable()
 	if err != nil {

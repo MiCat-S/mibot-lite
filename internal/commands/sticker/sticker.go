@@ -224,7 +224,7 @@ func packLink(name string) string {
 	return `<a href="https://t.me/addstickers/` + command.Escape(name) + `">` + command.Escape(name) + `</a>`
 }
 
-// Register 注册 .sticker。
+// Register 注册 .sticker。默认贴纸包存在 data/sticker.json。
 func Register(a *app.App) {
 	saved := kit.NewStore(a, "sticker.json", func() settings { return settings{} })
 	a.Registry.Register(&command.Command{Name: "sticker", Group: command.GroupMedia, Description: "把贴纸存进自己的贴纸包", Usage: "[to 包名|包名|cancel]", Help: help, Timeout: 2 * time.Minute,

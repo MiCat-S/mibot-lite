@@ -145,7 +145,7 @@ func (r *Ring) Held() int {
 // Handler 把经它转交的每条记录脱敏后，复制一份到环形缓冲区。
 //
 // 它包在真正的 handler 外面，而不是取代它，所以 journal 收到的内容
-// 和以前完全一样。
+// 和不包这一层时完全一样。
 type Handler struct {
 	next   slog.Handler
 	ring   *Ring

@@ -25,7 +25,7 @@ func sumProviderView(provider sumProvider) string {
 }
 
 // config 处理 .sum config：list、add、del、set。改动成功统一回一句「已更新」；
-// 出错时返回 fail，由调用方原样显示。
+// 出错时返回 kit.Fail，派发器原样显示。
 func (s *sumService) config(ctx context.Context, inv *command.Invocation) error {
 	action, name, property := strings.ToLower(inv.Arg(1)), inv.Arg(2), inv.Arg(3)
 	if action == "" {

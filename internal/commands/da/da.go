@@ -58,7 +58,7 @@ type daSlot struct {
 }
 
 // save 存下任务进度。存不进去不中断删除（进度只是给 status 和重启后恢复用的），但要记日志：
-// 以前这些错误全被丢掉，重启后任务从哪里继续、删了多少都可能是旧的，而没人知道为什么。
+// 不然重启后任务从哪里继续、删了多少都可能是旧的，却没人知道为什么。
 func (s *daService) save(task *daTask) {
 	task.LastUpdate = time.Now().UnixMilli()
 	copied := *task
@@ -218,7 +218,7 @@ func (s *daService) start(ctx context.Context, inv *command.Invocation) bool {
 	return true
 }
 
-// Register 注册 .da。
+// Register 注册 .da。任务存在 data/da.json；启动时把上次没跑完的任务标成暂停。
 func Register(a *app.App) {
 	service := &daService{a: a, store: kit.NewStore(a, "da.json", func() daDB { return daDB{Tasks: []daTask{}} }), active: map[string]*daSlot{}}
 	// --check 不改文件：这时正在运行的服务可能真有任务在跑。

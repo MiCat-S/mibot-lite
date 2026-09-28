@@ -125,7 +125,7 @@ func binHelp(prefix string) string {
 		"只会用前 8 位去查，多输入的数字在发请求之前就丢掉了。数据来自 binlist.net，免费额度很小，查多了会限流。"
 }
 
-// Register 注册 .bin。
+// Register 注册 .bin。不存东西，每次现查。
 func Register(a *app.App) {
 	binHandle := func(ctx context.Context, inv *command.Invocation) error {
 		input := inv.Rest(0)

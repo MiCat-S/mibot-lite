@@ -58,7 +58,7 @@ func backupHelp(prefix string) string {
 		"这个文件等同于你的账号，不要转发给别人——要给别人看问题，用 <code>" + p + "log</code>，那个是脱敏的。"
 }
 
-// Register 注册 .bf。
+// Register 注册 .bf。备份哪些文件由 internal/backup 决定，和 --backup 是同一份。
 func Register(a *app.App) {
 	handle := func(ctx context.Context, inv *command.Invocation) error {
 		if err := inv.EditText(ctx, kit.Working("正在打包配置")); err != nil {

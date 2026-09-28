@@ -436,7 +436,7 @@ type avatarPair struct{ me, you image.Image }
 // faces 下载并解码双方的头像。
 //
 // 「对方」是被回复消息的发送者，用户、频道、群都可以：以频道身份发言、
-// 频道推到讨论组的消息、匿名管理员，发送者都不是用户，以前一律被拒。
+// 频道推到讨论组的消息、匿名管理员，发送者都不是用户，所以不能只认用户。
 // 「自己」见 ownFace。
 func (s *eatgifService) faces(ctx context.Context, inv *command.Invocation, reply *bot.Message) (*avatarPair, error) {
 	me, err := loadFace(ctx, inv.Client, ownFace(inv), "你")

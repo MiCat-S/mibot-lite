@@ -105,7 +105,7 @@ func logHelp(prefix string) string {
 
 // setLogLevel 在运行中调高或调低日志级别。
 //
-// 以前要调高级别，得改服务单元再重启账号，而一重启，正在追查的那个
+// 不然要调高级别就得改服务单元再重启账号，而一重启，正在追查的那个
 // 现场也就没了。
 func setLogLevel(ctx context.Context, a *app.App, inv *command.Invocation) error {
 	if a.Level == nil {
@@ -131,7 +131,7 @@ func setLogLevel(ctx context.Context, a *app.App, inv *command.Invocation) error
 	return inv.Edit(ctx, "日志级别已设为 "+command.Code(a.Level.Level().String())+note)
 }
 
-// Register 注册 .log。
+// Register 注册 .log。读的是内存里最近的日志（app.Logs），不读磁盘上的文件。
 func Register(a *app.App) {
 	handle := func(ctx context.Context, inv *command.Invocation) error {
 		switch strings.ToLower(inv.Arg(0)) {

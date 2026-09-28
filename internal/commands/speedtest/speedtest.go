@@ -266,8 +266,8 @@ func extractOokla(archive []byte, target string) (string, error) {
 
 // cliFailure 是测速工具以非零状态退出。
 //
-// Explained 是发进聊天的那句话，其余字段写进日志：以前日志里只剩一句
-// "ookla failed: exit status 2"，是哪台服务器、为什么失败都看不出来。
+// Explained 是发进聊天的那句话，其余字段写进日志：光有一句 "ookla failed: exit status 2"，
+// 是哪台服务器、为什么失败都看不出来。
 type cliFailure struct {
 	Kind string
 	Exit error
@@ -473,7 +473,7 @@ const speedNameLimit = 28
 
 // renderServers 把列表排成每台服务器一行。
 //
-// 以前每台占两行、第二行缩进写位置，10 台就是 20 行，读起来像一堵墙。
+// 每台占两行、第二行缩进写位置的话，10 台就是 20 行，读起来像一堵墙。
 // 等宽表格能让 ID 对齐，但服务器名经常是日文，而 CJK 字符在 pre 块里
 // 本来就对不齐，所以干脆把 ID 放在最前面，其余内容跟在后面。
 func renderServers(servers []speedServer, pinned int, prefix string) string {
@@ -551,7 +551,7 @@ var logStamp = regexp.MustCompile(`^(\[[^\]]*\]\s*)+`)
 //
 // Ookla 的原因不总在同一个地方：多数错误是 stderr 上的一条 JSON 日志记录；被限流时
 // 是 stderr 上的几行纯文本；测到一半连接被对端重置时，只在 stdout 打一行
-// {"error":"Cannot write: "}，stderr 是空的。以前只看 stderr 的最后一行，最后这种
+// {"error":"Cannot write: "}，stderr 是空的。只看 stderr 最后一行的话，最后这种
 // 失败就只剩一句 exit status 2，聊天里也只能回「测速失败」。
 //
 // JSON 记录只取 error 字段或 message 字段，外面那层包装在聊天里只是噪音；进度记录

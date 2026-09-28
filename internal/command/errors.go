@@ -76,14 +76,13 @@ func IsUserError(err error) (string, bool) {
 }
 
 // Brief 把错误概括成能发进聊天的一句话，不带 URL、主机名、路径这类细节：
-//   - 给用户看的错误（Fail）：原样；
+//   - 给用户看的错误（Fail）：原样，超过 80 个字截断；
 //   - Telegram RPC 错误：只给错误码；
-//   - HTTP 请求失败：httpx.Reason 的概括（超时、HTTP 状态码、网络不通）；
 //   - 找不到对话的 access hash、超时：一句固定的说明；
+//   - HTTP 请求失败：httpx.Reason 的概括（超时、HTTP 状态码、网络不通）；
+//   - 已经拼成文字、里面还认得出错误码的：只给错误码；
 //   - 其余：「内部错误，详情见日志」。Go 的网络错误会带完整 URL（包括用户自己设的 API 地址），
 //     不能原样发出去。
-//
-// 结果最多 80 个字符。
 func Brief(err error) string {
 	if err == nil {
 		return ""
