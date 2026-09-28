@@ -32,17 +32,6 @@ func TestRender(t *testing.T) {
 	}
 }
 
-func TestDuration(t *testing.T) {
-	for value, want := range map[time.Duration]string{
-		3*time.Hour + 4*time.Minute + 5*time.Second: "03:04:05",
-		50*time.Hour + 3*time.Minute:                "2天 02:03:00",
-	} {
-		if got := duration(value); got != want {
-			t.Errorf("%v → %q，应为 %q", value, got, want)
-		}
-	}
-}
-
 func TestHealthThresholds(t *testing.T) {
 	for _, c := range []struct {
 		percent float64

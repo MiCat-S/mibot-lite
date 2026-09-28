@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -23,6 +22,7 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/command"
 	"github.com/MiCat-S/mibot-lite/internal/httpx"
 	"github.com/MiCat-S/mibot-lite/internal/store"
+	"github.com/MiCat-S/mibot-lite/internal/sysinfo"
 )
 
 // Fail 返回要原样显示给用户的错误，见 command.Fail。
@@ -214,14 +214,12 @@ func OnOffText(value bool) string {
 	return "off"
 }
 
-func FormatBytes(size int) string {
-	switch {
-	case size >= 1<<20:
-		return fmt.Sprintf("%.1f MB", float64(size)/(1<<20))
-	case size >= 1<<10:
-		return fmt.Sprintf("%.1f KB", float64(size)/(1<<10))
+// FormatBytes 按 1024 进位写字节数，见 sysinfo.FormatBytes。
+func FormatBytes(size int64) string {
+	if size < 0 {
+		size = 0
 	}
-	return strconv.Itoa(size) + " B"
+	return sysinfo.FormatBytes(uint64(size))
 }
 
 func Download(ctx context.Context, url, target string, limit int64) (string, error) {

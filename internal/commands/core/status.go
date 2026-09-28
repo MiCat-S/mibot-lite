@@ -37,10 +37,6 @@ func gaugeOf(capacity sysinfo.Capacity) statuscard.Gauge {
 	return statuscard.Gauge{Percent: percent, Known: ok}
 }
 
-func formatBytes(value uint64) string {
-	return fmt.Sprintf("%.1f MB", sysinfo.Megabytes(value))
-}
-
 // statusCaption 是卡片下面的文字说明。不写主机名和网卡：.status 可以借给别人用，
 // 那些归 .sysinfo（只限本人）。
 func statusCaption(a *app.App, registry *command.Registry, resources sysinfo.Resources) string {
@@ -52,16 +48,16 @@ func statusCaption(a *app.App, registry *command.Registry, resources sysinfo.Res
 	}
 	hostUptime := "不可用"
 	if host.Uptime > 0 {
-		hostUptime = formatUptime(host.Uptime.Seconds())
+		hostUptime = sysinfo.FormatUptime(host.Uptime)
 	}
 	row := func(label, value string) string { return "• " + label + ": " + command.Code(value) }
 	return strings.Join([]string{
 		"<b>🧠 进程</b>",
 		row("版本", kit.Version(a)),
-		row("运行时间", formatUptime(time.Since(a.Started).Seconds())),
+		row("运行时间", sysinfo.FormatUptime(time.Since(a.Started))),
 		row("PID", fmt.Sprintf("%d · %d 个 goroutine", os.Getpid(), process.Goroutines)),
 		row("CPU", fmt.Sprintf("%.1f%%", resources.ProcessCPU)),
-		row("RSS · Go 堆", formatBytes(process.RSS)+" · "+formatBytes(process.HeapAlloc)),
+		row("RSS · Go 堆", sysinfo.FormatBytes(process.RSS)+" · "+sysinfo.FormatBytes(process.HeapAlloc)),
 		row("命令 · 前缀", fmt.Sprintf("%d 个 · %s", len(registry.Commands()), strings.Join(registry.Prefixes(), " "))),
 		"",
 		"<b>🖥 主机</b>",

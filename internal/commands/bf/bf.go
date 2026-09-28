@@ -35,7 +35,7 @@ func backupCaption(version string, names []string, size int) string {
 		quoted[index] = command.Escape(name)
 	}
 	return "📦 <b>mibot-lite 配置备份</b> · " + command.Escape(version) + "\n" +
-		strconv.Itoa(len(names)) + " 个文件，" + command.Escape(kit.FormatBytes(size)) + "：" +
+		strconv.Itoa(len(names)) + " 个文件，" + command.Escape(kit.FormatBytes(int64(size))) + "：" +
 		strings.Join(quoted, "、") + more + "\n\n" +
 		"⚠️ <b>这个文件就是你的账号</b>：里面有登录会话和各命令的 API 密钥。不要转发给任何人。\n\n" +
 		"<b>在新机器上恢复</b>\n" +

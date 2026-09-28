@@ -84,7 +84,7 @@ func TestRenderShowsTheNewFields(t *testing.T) {
 		Timestamp: "2026-09-22T10:53:22Z",
 	}, 30*time.Second, "")
 	for _, want := range []string{"ID <code>48463</code>", "Tencent AS132203", "43.153.x.x", "🇯🇵 JP",
-		"（共 298.5 MB）", "（共 41.0 MB）", "2026-09-22 10:53:22 UTC"} {
+		"（共 284.7 MB）", "（共 39.1 MB）", "2026-09-22 10:53:22 UTC"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("report is missing %q:\n%s", want, text)
 		}
@@ -98,18 +98,13 @@ func TestRenderShowsTheNewFields(t *testing.T) {
 	}
 }
 
-func TestCountryFlagAndVolume(t *testing.T) {
+func TestCountryFlag(t *testing.T) {
 	if got := countryFlag("JP"); got != "🇯🇵" {
 		t.Errorf("countryFlag = %q", got)
 	}
 	for _, bad := range []string{"", "jp", "JPN", "1A"} {
 		if got := countryFlag(bad); got != "" {
 			t.Errorf("countryFlag(%q) = %q", bad, got)
-		}
-	}
-	for bytes, want := range map[float64]string{2.5e9: "2.50 GB", 298.52e6: "298.5 MB", 5400: "5.4 KB", 12: "12 B"} {
-		if got := formatVolume(bytes); got != want {
-			t.Errorf("formatVolume(%v) = %q, want %q", bytes, got, want)
 		}
 	}
 	if got := formatTimestamp("not a time"); got != "not a time" {

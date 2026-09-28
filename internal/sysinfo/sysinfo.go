@@ -56,6 +56,35 @@ func residentBytes() uint64 {
 // Megabytes 把字节数换算成用于显示的 MB 数。
 func Megabytes(value uint64) float64 { return float64(value) / (1 << 20) }
 
+// FormatUptime 把一段时长写成「2天 03:04:05」，不满一天写「03:04:05」。
+// .status 的卡片和文字、.sysinfo 都用它，同一个时长只有一种写法。
+func FormatUptime(value time.Duration) string {
+	if value < 0 {
+		return "--"
+	}
+	total := int64(value.Seconds())
+	clock := fmt.Sprintf("%02d:%02d:%02d", total%86400/3600, total%3600/60, total%60)
+	if days := total / 86400; days > 0 {
+		return fmt.Sprintf("%d天 %s", days, clock)
+	}
+	return clock
+}
+
+// FormatBytes 按 1024 进位写成 B、KB、MB、GB。内存、磁盘、文件大小都用它，
+// 各处的「MB」是同一个大小。
+func FormatBytes(size uint64) string {
+	value := float64(size)
+	switch {
+	case size >= 1<<30:
+		return fmt.Sprintf("%.2f GB", value/(1<<30))
+	case size >= 1<<20:
+		return fmt.Sprintf("%.1f MB", value/(1<<20))
+	case size >= 1<<10:
+		return fmt.Sprintf("%.1f KB", value/(1<<10))
+	}
+	return fmt.Sprintf("%d B", size)
+}
+
 // Host 是 .sysinfo 报告的机器信息。
 type Host struct {
 	Hostname      string

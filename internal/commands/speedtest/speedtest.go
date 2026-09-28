@@ -680,19 +680,6 @@ func formatLatency(d time.Duration) string {
 	return fmt.Sprintf("%.1f ms", float64(d.Microseconds())/1000)
 }
 
-// formatVolume 把字节数按 1000 进位显示，和带宽的单位一致。
-func formatVolume(bytes float64) string {
-	switch {
-	case bytes >= 1e9:
-		return fmt.Sprintf("%.2f GB", bytes/1e9)
-	case bytes >= 1e6:
-		return fmt.Sprintf("%.1f MB", bytes/1e6)
-	case bytes >= 1e3:
-		return fmt.Sprintf("%.1f KB", bytes/1e3)
-	}
-	return fmt.Sprintf("%.0f B", bytes)
-}
-
 // formatTimestamp 把工具报的时刻换成 UTC 显示；解析不了就原样给出。
 func formatTimestamp(value string) string {
 	value = strings.TrimSpace(value)
@@ -800,7 +787,7 @@ func render(result *reading, elapsed time.Duration, note string) string {
 	transfer := func(label string, bits, bytes float64) string {
 		line := label + command.Code(formatSpeed(bits))
 		if bytes > 0 {
-			line += "（共 " + command.Escape(formatVolume(bytes)) + "）"
+			line += "（共 " + command.Escape(kit.FormatBytes(int64(bytes))) + "）"
 		}
 		return line
 	}

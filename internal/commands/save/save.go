@@ -546,7 +546,7 @@ func (s *saver) remake(ctx context.Context, message *tg.Message) (tg.InputMediaC
 // 这类主机上 /tmp 是 tmpfs，视频放在那里就等于占着内存。
 func (s *saver) download(ctx context.Context, source *bot.MediaSource) (string, error) {
 	if source.Size > saveMaxBytes {
-		return "", kit.Failf("文件 %s，超过 Telegram 的上限", kit.FormatBytes(int(source.Size)))
+		return "", kit.Failf("文件 %s，超过 Telegram 的上限", kit.FormatBytes(source.Size))
 	}
 	if err := os.MkdirAll(s.partial, 0o700); err != nil {
 		return "", err
@@ -556,7 +556,7 @@ func (s *saver) download(ctx context.Context, source *bot.MediaSource) (string, 
 		return "", err
 	}
 	if source.Size > 0 {
-		s.progress("⬇️ 下载中… " + kit.FormatBytes(int(source.Size)))
+		s.progress("⬇️ 下载中… " + kit.FormatBytes(source.Size))
 	} else {
 		s.progress("⬇️ 下载中…")
 	}

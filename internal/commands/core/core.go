@@ -55,7 +55,7 @@ func Register(a *app.App) {
 				"主机: " + command.Code(machine.Hostname),
 				"系统: " + command.Code(machine.Platform),
 				"内核: " + command.Code(machine.KernelRelease),
-				"运行时间: " + command.Code(formatUptime(machine.Uptime.Seconds())),
+				"运行时间: " + command.Code(sysinfo.FormatUptime(machine.Uptime)),
 				"负载: " + command.Code(fmt.Sprintf("%.2f / %.2f / %.2f", machine.LoadAverage[0], machine.LoadAverage[1], machine.LoadAverage[2])),
 				"CPU: " + command.Code(fmt.Sprintf("%d 核", machine.CPUs)),
 				"系统内存: " + command.Code(fmt.Sprintf("%.2f / %.2f MB", sysinfo.Megabytes(machine.TotalMemory-machine.FreeMemory), sysinfo.Megabytes(machine.TotalMemory))),
@@ -102,11 +102,6 @@ func memoryReport() string {
 		"Goroutine: "+command.Code(fmt.Sprint(current.Goroutines)),
 	)
 	return strings.Join(lines, "\n")
-}
-
-func formatUptime(seconds float64) string {
-	total := int64(seconds)
-	return fmt.Sprintf("%d天 %d小时 %d分钟", total/86400, (total/3600)%24, (total/60)%60)
 }
 
 // renderHelpList 按分组列出命令，每行「.名字（.简写） — 说明」，和 README 的表格同一套分组。

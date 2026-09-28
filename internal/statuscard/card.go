@@ -21,6 +21,8 @@ import (
 	"golang.org/x/image/font/sfnt"
 	"golang.org/x/image/math/fixed"
 	"golang.org/x/image/vector"
+
+	"github.com/MiCat-S/mibot-lite/internal/sysinfo"
 )
 
 //go:embed NotoSansSC-status-subset.ttf
@@ -87,19 +89,6 @@ func gaugeColor(gauge Gauge, normal color.RGBA) color.RGBA {
 	return normal
 }
 
-// duration 写成「2天 03:04:05」或「03:04:05」。
-func duration(value time.Duration) string {
-	if value < 0 {
-		return "--"
-	}
-	total := int(value.Seconds())
-	clock := fmt.Sprintf("%02d:%02d:%02d", total%86400/3600, total%3600/60, total%60)
-	if days := total / 86400; days > 0 {
-		return fmt.Sprintf("%d天 %s", days, clock)
-	}
-	return clock
-}
-
 // Render 画出卡片，返回 PNG。
 func Render(card Card) ([]byte, error) {
 	face, err := loadFont()
@@ -127,7 +116,7 @@ func Render(card Card) ([]byte, error) {
 	c.text(label, 205, 374, tone, alignLeft)
 
 	c.text(c.fitted("在线", 100, 42, 30), 88, 555, hex(0x9fb2c5), alignLeft)
-	c.text(c.fitted(duration(card.Uptime), 500, 68, 48), 205, 555, hex(0xf1f5f9), alignLeft)
+	c.text(c.fitted(sysinfo.FormatUptime(card.Uptime), 500, 68, 48), 205, 555, hex(0xf1f5f9), alignLeft)
 
 	c.gauge(810, 115, "CPU", card.CPU, gaugeColor(card.CPU, hex(0x34f59a)))
 	c.gauge(1174, 115, "内存", card.Memory, gaugeColor(card.Memory, hex(0x34f59a)))
