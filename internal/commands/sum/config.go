@@ -209,11 +209,11 @@ func (s *sumService) configSet(ctx context.Context, inv *command.Invocation, db 
 		}
 		return false, s.update(func(db *sumDB) error { db.AIConfig.MaxOutputLength = length; return nil })
 	case "reasoning", "service":
-		values := ai.ReasoningValues
+		valid := ai.ValidReasoning
 		if name == "service" {
-			values = ai.TierValues
+			valid = ai.ValidTier
 		}
-		if !slices.Contains(values, property) {
+		if !valid(property) {
 			return false, kit.Fail("无效选项")
 		}
 		return false, s.update(func(db *sumDB) error {

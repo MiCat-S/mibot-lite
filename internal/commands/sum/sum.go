@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net/url"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -443,10 +442,10 @@ func (b sumBackend) call(ctx context.Context, db sumDB, messages, prompt string)
 	timeout := sumTimeout(db)
 	if b.own != nil {
 		reasoning, tier := db.AIConfig.DefaultReasoningEffort, db.AIConfig.DefaultServiceTier
-		if !slices.Contains(ai.ReasoningValues, reasoning) {
+		if !ai.ValidReasoning(reasoning) {
 			reasoning = "auto"
 		}
-		if !slices.Contains(ai.TierValues, tier) {
+		if !ai.ValidTier(tier) {
 			tier = "auto"
 		}
 		return sumCallAI(ctx, *b.own, messages, prompt, reasoning, tier, timeout)

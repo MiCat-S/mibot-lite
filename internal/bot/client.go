@@ -150,7 +150,8 @@ func InputUser(peer tg.InputPeerClass) (tg.InputUserClass, bool) {
 }
 
 // ParseHTML 把 HTML 转成纯文本和格式实体，不解析 tg://user?id= 提及（只留文字）。
-// 能访问 Client 时用它的 parseHTML，那个会把见过的用户变成真正的提及。
+// 发消息走 Client 的 parseHTML，那个会把见过的用户变成真正的提及；这个导出版给别的包的
+// 测试核对自己拼的 HTML 能不能被发送时的解析器接受。
 func ParseHTML(text string) (string, []tg.MessageEntityClass, error) {
 	return parseHTML(text, nil)
 }

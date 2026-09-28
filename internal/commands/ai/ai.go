@@ -24,10 +24,9 @@ import (
 // 对话、搜索、识图和翻译已经移植；图片和视频生成没有移植。
 
 var (
-	// ReasoningValues 是思考强度的可选值。
-	ReasoningValues = []string{"auto", "none", "minimal", "low", "medium", "high", "xhigh"}
-	// TierValues 是服务等级的可选值。
-	TierValues      = []string{"auto", "default", "priority", "fast", "flex"}
+	// reasoningValues 是思考强度的可选值，tierValues 是服务等级的可选值。
+	reasoningValues = []string{"auto", "none", "minimal", "low", "medium", "high", "xhigh"}
+	tierValues      = []string{"auto", "default", "priority", "fast", "flex"}
 	aiProviderTypes = []string{"openai-compatible", "openai", "gemini", "anthropic", "codex", "doubao", "moonshot", "local-cliproxy"}
 	aiHostTypes     = map[string]string{
 		"generativelanguage.googleapis.com": "gemini", "api.anthropic.com": "anthropic", "chatgpt.com": "codex",
@@ -87,6 +86,12 @@ type aiConfig struct {
 	Telegraph                    aiTelegraph           `json:"telegraph"`
 }
 
+// ValidReasoning 判断 value 是不是可选的思考强度。
+func ValidReasoning(value string) bool { return slices.Contains(reasoningValues, value) }
+
+// ValidTier 判断 value 是不是可选的服务等级。
+func ValidTier(value string) bool { return slices.Contains(tierValues, value) }
+
 func aiDefaults() aiConfig {
 	return aiConfig{Configs: map[string]aiProvider{}, CurrentChatReasoningEffort: "auto", CurrentChatServiceTier: "auto",
 		CurrentSearchReasoningEffort: "auto", CurrentSearchServiceTier: "auto", ImagePreview: true, VideoPreview: true,
@@ -102,14 +107,14 @@ func (c *aiConfig) normalize() {
 		c.Configs[tag] = provider
 	}
 	for _, field := range []*string{&c.CurrentChatReasoningEffort, &c.CurrentSearchReasoningEffort} {
-		if !slices.Contains(ReasoningValues, strings.ToLower(strings.TrimSpace(*field))) {
+		if !slices.Contains(reasoningValues, strings.ToLower(strings.TrimSpace(*field))) {
 			*field = "auto"
 		} else {
 			*field = strings.ToLower(strings.TrimSpace(*field))
 		}
 	}
 	for _, field := range []*string{&c.CurrentChatServiceTier, &c.CurrentSearchServiceTier} {
-		if !slices.Contains(TierValues, strings.ToLower(strings.TrimSpace(*field))) {
+		if !slices.Contains(tierValues, strings.ToLower(strings.TrimSpace(*field))) {
 			*field = "auto"
 		} else {
 			*field = strings.ToLower(strings.TrimSpace(*field))
@@ -339,9 +344,9 @@ func (s *Service) handle(ctx context.Context, inv *command.Invocation) error {
 		if mode != "chat" && mode != "search" {
 			return kit.Usage(inv.Prefix, "ai "+sub+" chat|search 值")
 		}
-		values := ReasoningValues
+		values := reasoningValues
 		if sub == "service" {
-			values = TierValues
+			values = tierValues
 		}
 		if !slices.Contains(values, value) {
 			return kit.Fail("无效选项")

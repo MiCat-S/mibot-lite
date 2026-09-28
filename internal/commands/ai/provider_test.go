@@ -68,7 +68,7 @@ func TestErrorDetail(t *testing.T) {
 	if got := HTTPFailure(429, nil, secret); got != "请求过于频繁，稍后再试" {
 		t.Fatalf("429 = %q", got)
 	}
-	if got := MaskSecret("a sk%2Bx b sk+x", "sk+x"); got != "a *** b ***" {
+	if got := maskSecret("a sk%2Bx b sk+x", "sk+x"); got != "a *** b ***" {
 		t.Fatalf("URL 编码的密钥也要打码：%q", got)
 	}
 }

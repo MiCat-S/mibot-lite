@@ -375,8 +375,8 @@ const errorDetailLimit = 200
 
 var whitespaceRun = regexp.MustCompile(`\s+`)
 
-// MaskSecret 把 text 里出现的密钥（原文或 URL 编码后的形式）换成 ***。
-func MaskSecret(text, secret string) string {
+// maskSecret 把 text 里出现的密钥（原文或 URL 编码后的形式）换成 ***。
+func maskSecret(text, secret string) string {
 	secret = strings.TrimSpace(secret)
 	if len(secret) < 4 {
 		return text
@@ -406,7 +406,7 @@ func ErrorDetail(body []byte, secret string) string {
 	} else if !strings.HasPrefix(text, "<") {
 		detail = text
 	}
-	detail = strings.TrimSpace(whitespaceRun.ReplaceAllString(MaskSecret(detail, secret), " "))
+	detail = strings.TrimSpace(whitespaceRun.ReplaceAllString(maskSecret(detail, secret), " "))
 	if !utf8.ValidString(detail) {
 		detail = strings.ToValidUTF8(detail, "")
 	}
@@ -510,7 +510,7 @@ func aiProviderFailed(payload map[string]any) bool {
 
 // providerFailure 是 2xx 响应里带着错误时给用户看的说明。
 func providerFailure(payload map[string]any, secret string) error {
-	detail := strings.TrimSpace(whitespaceRun.ReplaceAllString(MaskSecret(errorMessageOf(payload), secret), " "))
+	detail := strings.TrimSpace(whitespaceRun.ReplaceAllString(maskSecret(errorMessageOf(payload), secret), " "))
 	if runes := []rune(detail); len(runes) > errorDetailLimit {
 		detail = string(runes[:errorDetailLimit]) + "…"
 	}
