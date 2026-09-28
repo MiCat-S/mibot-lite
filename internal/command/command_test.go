@@ -1,9 +1,15 @@
 package command
 
 import (
+	"context"
+	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 	"testing"
+	"unicode/utf8"
+
+	"github.com/gotd/td/tgerr"
 )
 
 func registry() *Registry {
@@ -82,13 +88,44 @@ func TestRegisterRejectsDuplicates(t *testing.T) {
 	r.Register(&Command{Name: "ping"})
 }
 
-func TestBriefPrefersRPCCode(t *testing.T) {
-	if got := Brief(errTest("rpc error code 400: CHAT_ADMIN_REQUIRED (400)")); got != "CHAT_ADMIN_REQUIRED" {
-		t.Fatalf("got %q", got)
+// Brief 的结果会发进聊天：只能是给用户看的话、RPC 错误码或一句固定说明，
+// 不能带 URL（用户自己设的 AI 中转地址会出现在 Go 的网络错误里），也不能切开一个字。
+func TestBrief(t *testing.T) {
+	if got := Brief(tgerr.New(400, "CHAT_ADMIN_REQUIRED")); got != "CHAT_ADMIN_REQUIRED" {
+		t.Errorf("typed RPC error: got %q", got)
 	}
-	long := strings.Repeat("x", 200)
-	if got := Brief(errTest(long)); len(got) != 80 {
-		t.Fatalf("long errors must be cut, got %d chars", len(got))
+	if got := Brief(fmt.Errorf("ban: %w", tgerr.New(420, "FLOOD_WAIT_5"))); got != "FLOOD_WAIT_5" {
+		t.Errorf("wrapped FLOOD_WAIT: got %q", got)
+	}
+	if got := Brief(errTest("rpc error code 400: CHAT_ADMIN_REQUIRED (400)")); got != "CHAT_ADMIN_REQUIRED" {
+		t.Errorf("RPC error flattened to text: got %q", got)
+	}
+	leak := &url.Error{Op: "Post", URL: "https://my-private-relay.example.com:8443/v1/chat/completions?KEY_ID=A_B", Err: errTest("connection refused")}
+	if got := Brief(leak); strings.Contains(got, "http") || strings.Contains(got, "example") || strings.Contains(got, "KEY_ID") {
+		t.Errorf("a network error leaked its URL: %q", got)
+	}
+	if got := Brief(fmt.Errorf("wait: %w", context.DeadlineExceeded)); got != "超时" {
+		t.Errorf("deadline: got %q", got)
+	}
+	long := Fail(strings.Repeat("错", 100))
+	if got := Brief(long); !utf8.ValidString(got) || utf8.RuneCountInString(got) != 81 || !strings.HasSuffix(got, "…") {
+		t.Errorf("a long user error must be cut on a character boundary: %q", got)
+	}
+	if got := Brief(errTest("open /root/mibot-lite/data/x.json: permission denied")); got != "内部错误，详情见日志" {
+		t.Errorf("an internal error leaked its detail: %q", got)
+	}
+}
+
+// 用户错误要能穿过包装认出来；不实现 UserMessage 的普通错误不算。
+func TestUserErrors(t *testing.T) {
+	if text, ok := IsUserError(fmt.Errorf("outer: %w", Failf("第 %d 条不存在", 3))); !ok || text != "第 3 条不存在" {
+		t.Errorf("wrapped user error: %q %v", text, ok)
+	}
+	if _, ok := IsUserError(errTest("plain")); ok {
+		t.Error("a plain error was taken for a user error")
+	}
+	if got := Truncate("错错错", 3); got != "错错错" {
+		t.Errorf("Truncate cut a short string: %q", got)
 	}
 }
 

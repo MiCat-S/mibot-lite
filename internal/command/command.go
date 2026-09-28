@@ -416,7 +416,7 @@ func (r *Registry) run(ctx context.Context, client *bot.Client, message, trigger
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				inv.Log.Error("command.panic", slog.Any("panic", recovered))
-				_ = inv.EditText(context.WithoutCancel(ctx), "命令执行时发生内部错误")
+				_ = inv.EditText(context.WithoutCancel(ctx), "❌ 命令执行时发生内部错误")
 			}
 		}()
 		started := time.Now()
@@ -435,12 +435,17 @@ func (r *Registry) run(ctx context.Context, client *bot.Client, message, trigger
 			// 进程要退出了：不回「执行失败」，连接也正在关，发不出去。
 			inv.Log.Info("command.aborted", slog.String("chat", message.ChatID), slog.Int("message", message.ID), slog.Duration("took", time.Since(started)))
 		case ctx.Err() != nil:
+		case isUserError(err):
+			// 用法不对、没有权限、对方不存在这类：不是故障，照原话告诉用户，日志只记一笔。
+			text, _ := IsUserError(err)
+			inv.Log.Info("command.refused", slog.String("chat", message.ChatID), slog.Int("message", message.ID), slog.String("reason", text))
+			_ = inv.EditText(context.WithoutCancel(ctx), "❌ "+text)
 		case errors.Is(err, context.DeadlineExceeded):
 			inv.Log.Warn("command.timeout", slog.String("chat", message.ChatID))
-			_ = inv.EditText(context.WithoutCancel(ctx), "命令执行超时")
+			_ = inv.EditText(context.WithoutCancel(ctx), "❌ 命令执行超时")
 		default:
 			inv.Log.Error("command.failed", slog.String("chat", message.ChatID), slog.Int("message", message.ID), slog.String("error", err.Error()))
-			_ = inv.EditText(context.WithoutCancel(ctx), "命令执行失败："+Brief(err))
+			_ = inv.EditText(context.WithoutCancel(ctx), "❌ 命令执行失败："+Brief(err))
 		}
 	}()
 }
@@ -456,24 +461,3 @@ func (r *Registry) Wait(timeout time.Duration) bool {
 		return false
 	}
 }
-
-// Brief 把错误转成适合发到聊天里的文字：有 Telegram RPC 错误码就只给
-// 错误码，否则给一句简短的通用说明，绝不带 URL 或主机名。
-func Brief(err error) string {
-	if err == nil {
-		return ""
-	}
-	text := err.Error()
-	if match := rpcCode.FindString(text); match != "" {
-		return match
-	}
-	if errors.Is(err, bot.ErrUnaddressablePeer) {
-		return "无法定位目标会话"
-	}
-	if len(text) > 80 {
-		text = text[:80]
-	}
-	return text
-}
-
-var rpcCode = regexp.MustCompile(`\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b`)

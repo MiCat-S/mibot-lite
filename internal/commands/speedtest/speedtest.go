@@ -1007,7 +1007,8 @@ func (s *speedtester) diagnose(ctx context.Context, inv *command.Invocation) err
 		case errors.Is(err, errNotOokla):
 			lines = append(lines, label+": "+command.Code(path)+"\n  不是 Ookla 官方 CLI（可能是 Python 版 speedtest-cli），不会当官方 CLI 用")
 		default:
-			lines = append(lines, label+": "+command.Code(path)+"\n  无法运行："+command.Escape(command.Brief(err)))
+			// diagnose 只限本人，而且就是为了看清为什么跑不起来：给原因原文，不用 Brief 的概括。
+			lines = append(lines, label+": "+command.Code(path)+"\n  无法运行："+command.Escape(command.Truncate(err.Error(), 160)))
 		}
 	}
 	if path, err := exec.LookPath("speedtest"); err == nil {
@@ -1047,7 +1048,7 @@ func (s *speedtester) reinstall(ctx context.Context, inv *command.Invocation, do
 	}
 	version, err := probeVersion(path, s.home())
 	if err != nil {
-		return inv.EditText(ctx, "❌ 下载好的 CLI 无法运行："+command.Brief(err))
+		return inv.EditText(ctx, "❌ 下载好的 CLI 无法运行："+command.Truncate(err.Error(), 160))
 	}
 	return inv.Edit(ctx, "✅ Ookla CLI "+done+"\n路径："+command.Code(path)+"\n"+command.Escape(version))
 }

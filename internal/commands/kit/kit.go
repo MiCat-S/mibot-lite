@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -26,23 +25,14 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/store"
 )
 
-// userError 是要显示在聊天里的消息，不是写给日志的。
-type userError struct{ text string }
+// Fail 返回要原样显示给用户的错误，见 command.Fail。
+func Fail(text string) error { return command.Fail(text) }
 
-func (e userError) Error() string { return e.text }
+// Failf 同 Fail，文字按 fmt.Sprintf 格式化。
+func Failf(format string, args ...any) error { return command.Failf(format, args...) }
 
-func Fail(text string) error { return userError{text: text} }
-
-func Failf(format string, args ...any) error { return userError{text: fmt.Sprintf(format, args...)} }
-
-// IsUserError 判断 err 是否带着要发到聊天里的消息。
-func IsUserError(err error) (string, bool) {
-	var ue userError
-	if errors.As(err, &ue) {
-		return ue.text, true
-	}
-	return "", false
-}
+// IsUserError 取出错误里要给用户看的那句话，见 command.IsUserError。
+func IsUserError(err error) (string, bool) { return command.IsUserError(err) }
 
 // Feedback 按 MiBox 的 ui.renderFeedback 的样式生成一行状态。
 func Feedback(state, title, detail string) string {

@@ -19,8 +19,14 @@ import (
 	"time"
 )
 
-// ErrUnavailable 表示本机上找不到 ffmpeg。
-var ErrUnavailable = errors.New("ffmpeg 不可用，请先安装 ffmpeg")
+// ErrUnavailable 表示本机上找不到 ffmpeg。它是给用户看的错误（实现 UserMessage），
+// 命令直接返回它，聊天里就显示这句话。
+var ErrUnavailable error = unavailable{}
+
+type unavailable struct{}
+
+func (unavailable) Error() string       { return "ffmpeg 不可用，请先安装 ffmpeg" }
+func (unavailable) UserMessage() string { return "主机没有安装 ffmpeg，请先安装" }
 
 var candidates = []string{"/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/opt/homebrew/bin/ffmpeg"}
 
