@@ -21,7 +21,7 @@ func TestDelegableNamesExist(t *testing.T) {
 	RegisterAll(a)
 	for _, name := range sudo.Delegable() {
 		if _, ok := a.Registry.Lookup(name); !ok {
-			t.Errorf("delegable 里的 %q 不是已注册的命令", name)
+			t.Errorf("lendable 里的 %q 不是已注册的命令", name)
 		}
 	}
 	for _, ownerOnly := range []string{"sudo", "sure", "dme", "da", "acn", "autochangename", "prefix", "alias", "bf", "log", "save", "restart", "update", "sb", "unsb", "sysinfo", "refresh", "aban"} {

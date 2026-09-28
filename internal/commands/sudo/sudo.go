@@ -26,8 +26,16 @@ import (
 // .sudo add 本身——被授权的人可以再去授权别人。这里改成白名单：只有下面表里
 // 列出的命令能借出去，其余只限本人；以后新加的命令默认也不能借，要借得在表里写明。
 
-// delegable 是能借出去的命令，值是其中只限本人的子命令（第一个参数）。
-// 子命令多的命令（sum、speedtest）改在 delegableUse 里只列能借的用法。
+// lending 是一条命令能借出去的范围。
+type lending struct {
+	// ownerOnly 是其中只限本人的子命令（第一个参数），比如改设置的 config。
+	ownerOnly []string
+	// only 不为空时只放行它认可的用法（看第一个参数），其余包括以后新加的子命令都只限本人。
+	// 给子命令多、以后还会加的命令用。
+	only func(first string) bool
+}
+
+// lendable 是能借出去的命令（正式名字；路由里的命令已经把 .st 这类简写换成了正式名字）。
 //
 // 不在表里的，按类别：
 //   - 管授权的：sudo、sure。
@@ -37,29 +45,21 @@ import (
 //   - 管进程的：restart、update。
 //   - 跨群的：sb、unsb（在账号管理的所有群里封禁），借用应该只作用于当前这个群。
 //   - 会暴露主机信息的：sysinfo（显示主机名）。
-var delegable = map[string][]string{
-	"ping": nil, "help": nil, "version": nil, "status": nil, "memory": nil,
-	"calc": nil, "rate": nil, "gt": nil, "ip": nil, "bin": nil, "ids": nil, "dc": nil,
-	"re":        nil,
-	"speedtest": nil,
-	"tr":        {"set"},
-	"yvlu":      {"config", "s"},
-	"whois":     {"clear", "history"},
-	"eatgif":    {"clear"},
-	"eat":       {"set"},
-	"eat2":      {"set"},
-	"ai":        {"config", "model", "reasoning", "service", "prompt", "collapse", "timeout", "telegraph"},
-	"sum":       nil,
-	"ban":       nil, "unban": nil, "kick": nil, "mute": nil, "unmute": nil,
-}
-
-// delegableUse 是子命令多、以后还会加的命令：不列「不能借的」，只列能借的用法，
-// 其余一律只限本人，新加的子命令默认也借不出去。
-var delegableUse = map[string]func(first string) bool{
-	// .sum 或 .sum 数量：总结当前群。任务、配置、调试都只限本人。
-	"sum": func(first string) bool { return first == "" || isNumber(first) },
+var lendable = map[string]lending{
+	"ping": {}, "help": {}, "version": {}, "status": {}, "memory": {},
+	"calc": {}, "rate": {}, "gt": {}, "ip": {}, "bin": {}, "ids": {}, "dc": {}, "re": {},
+	"ban": {}, "unban": {}, "kick": {}, "mute": {}, "unmute": {},
+	"tr":     {ownerOnly: []string{"set"}},
+	"yvlu":   {ownerOnly: []string{"config", "s"}},
+	"whois":  {ownerOnly: []string{"clear", "history"}},
+	"eatgif": {ownerOnly: []string{"clear"}},
+	"eat":    {ownerOnly: []string{"set"}},
+	"eat2":   {ownerOnly: []string{"set"}},
+	"ai":     {ownerOnly: []string{"config", "model", "reasoning", "service", "prompt", "collapse", "timeout", "telegraph"}},
+	// .sum 或 .sum 数量：摘要当前群组。任务、配置、调试都只限本人。
+	"sum": {only: func(first string) bool { return first == "" || isNumber(first) }},
 	// .speedtest、.speedtest 服务器编号、.speedtest list：测一次速、看服务器列表；help、config 只看说明。
-	"speedtest": speedtestUse,
+	"speedtest": {only: speedtestUse},
 }
 
 func speedtestUse(first string) bool {
@@ -75,10 +75,9 @@ func isNumber(value string) bool {
 	return err == nil
 }
 
-// delegationAllowed 判断一条命令能不能借出去。按别名展开后的真实命令判断；
-// 路由里的命令已经是正式名字（.st 是 speedtest），表里只写正式名字。
+// delegationAllowed 判断一条命令能不能借出去。按别名展开后的真实命令判断。
 func delegationAllowed(route command.Route) bool {
-	ownerOnly, ok := delegable[route.Command]
+	rule, ok := lendable[route.Command]
 	if !ok {
 		return false
 	}
@@ -86,16 +85,16 @@ func delegationAllowed(route command.Route) bool {
 	if len(route.Args) > 0 {
 		first = strings.ToLower(route.Args[0])
 	}
-	if use, ok := delegableUse[route.Command]; ok {
-		return use(first)
+	if rule.only != nil {
+		return rule.only(first)
 	}
-	return first == "" || !slices.Contains(ownerOnly, first)
+	return first == "" || !slices.Contains(rule.ownerOnly, first)
 }
 
 // Delegable 按字母顺序列出能借出去的命令（正式名字）。
 func Delegable() []string {
-	names := make([]string, 0, len(delegable))
-	for name := range delegable {
+	names := make([]string, 0, len(lendable))
+	for name := range lendable {
 		names = append(names, name)
 	}
 	sort.Strings(names)
@@ -105,11 +104,11 @@ func Delegable() []string {
 // Lending 说明一条命令（正式名字）能借出去多少："all" 整条都能借，"partly" 只借得出一部分用法，
 // "none" 只限本人。README 表格里的「可借」一栏由测试拿它核对。
 func Lending(name string) string {
-	ownerOnly, ok := delegable[name]
+	rule, ok := lendable[name]
 	switch {
 	case !ok:
 		return "none"
-	case delegableUse[name] != nil || len(ownerOnly) > 0:
+	case rule.only != nil || len(rule.ownerOnly) > 0:
 		return "partly"
 	}
 	return "all"
@@ -333,43 +332,31 @@ func removeEntry(entries []delegateEntry, id string) ([]delegateEntry, bool) {
 	return entries, false
 }
 
+// roster 是一份名单的读写方式和说法；用户名单和对话名单只在这些地方不同。
+type roster struct {
+	title, empty   string // 列表的标题、名单为空时的说明
+	missing        string // 要删的不在名单里，%s 是 ID
+	added, removed string // 加进、移出之后的说法
+	// people 为真是用户名单：账号自己不能加进去。
+	people  bool
+	entries func(*delegateDocument) *[]delegateEntry
+	resolve func(ctx context.Context, inv *command.Invocation, argument string) (delegateEntry, error)
+}
+
 // manageLists 处理 sudo 和 sure 共有的用户、对话名单子命令。第一个返回值表示参数是不是这些子命令。
 func manageLists(ctx context.Context, inv *command.Invocation, saved *store.Store[delegateDocument], name string) (bool, error) {
-	action := strings.ToLower(inv.Arg(0))
-	target := inv.Arg(1)
+	action, target := strings.ToLower(inv.Arg(0)), inv.Arg(1)
+	list := roster{title: name + " 用户名单", empty: "当前没有任何用户", missing: name + " 名单里没有 %s",
+		added: "已授权", removed: "已取消授权", people: true,
+		entries: func(document *delegateDocument) *[]delegateEntry { return &document.Users }, resolve: resolveUser}
 	if action == "chat" {
-		sub := strings.ToLower(inv.Arg(1))
-		target = inv.Arg(2)
-		switch sub {
-		case "ls", "list", "":
-			current, err := saved.Read()
-			if err != nil {
-				return true, err
-			}
-			return true, inv.Edit(ctx, renderEntries("对话名单", current.Chats, "⚠️ 没有设对话名单，所有对话里都能用"))
-		case "add", "del":
-			chat, err := resolveChat(ctx, inv, target)
-			if err != nil {
-				return true, err
-			}
-			changed := false
-			if err := saved.Update(func(document *delegateDocument) error {
-				if sub == "add" {
-					document.Chats, changed = addEntry(document.Chats, chat)
-				} else {
-					document.Chats, changed = removeEntry(document.Chats, chat.ID)
-				}
-				return nil
-			}); err != nil {
-				return true, err
-			}
-			if sub == "del" && !changed {
-				return true, kit.Failf("对话名单里没有 %s", chat.ID)
-			}
-			verb := map[string]string{"add": "已加入", "del": "已移出"}[sub]
-			return true, inv.Edit(ctx, "✅ "+verb+" "+command.Escape(name)+" 对话名单："+command.Escape(chat.Name)+" "+command.Code(chat.ID))
+		action, target = strings.ToLower(inv.Arg(1)), inv.Arg(2)
+		if action == "" {
+			action = "ls"
 		}
-		return false, nil
+		list = roster{title: "对话名单", empty: "⚠️ 没有设对话名单，所有对话里都能用", missing: "对话名单里没有 %s",
+			added: "已加入 " + name + " 对话名单", removed: "已移出 " + name + " 对话名单",
+			entries: func(document *delegateDocument) *[]delegateEntry { return &document.Chats }, resolve: resolveChat}
 	}
 	switch action {
 	case "ls", "list":
@@ -377,31 +364,35 @@ func manageLists(ctx context.Context, inv *command.Invocation, saved *store.Stor
 		if err != nil {
 			return true, err
 		}
-		return true, inv.Edit(ctx, renderEntries(name+" 用户名单", current.Users, "当前没有任何用户"))
+		return true, inv.Edit(ctx, renderEntries(list.title, *list.entries(&current), list.empty))
 	case "add", "del":
-		user, err := resolveUser(ctx, inv, target)
+		entry, err := list.resolve(ctx, inv, target)
 		if err != nil {
 			return true, err
 		}
-		if user.ID == strconv.FormatInt(inv.Client.SelfID(), 10) {
+		if list.people && entry.ID == strconv.FormatInt(inv.Client.SelfID(), 10) {
 			return true, kit.Fail("不能把账号自己加进名单")
 		}
 		changed := false
 		if err := saved.Update(func(document *delegateDocument) error {
+			entries := list.entries(document)
 			if action == "add" {
-				document.Users, changed = addEntry(document.Users, user)
+				*entries, changed = addEntry(*entries, entry)
 			} else {
-				document.Users, changed = removeEntry(document.Users, user.ID)
+				*entries, changed = removeEntry(*entries, entry.ID)
 			}
 			return nil
 		}); err != nil {
 			return true, err
 		}
-		if action == "del" && !changed {
-			return true, kit.Failf("%s 名单里没有 %s", name, user.ID)
+		verb := list.added
+		if action == "del" {
+			if !changed {
+				return true, kit.Failf(list.missing, entry.ID)
+			}
+			verb = list.removed
 		}
-		verb := map[string]string{"add": "已授权", "del": "已取消授权"}[action]
-		return true, inv.Edit(ctx, "✅ "+verb+"："+command.Escape(user.Name)+" "+command.Code(user.ID))
+		return true, inv.Edit(ctx, "✅ "+verb+"："+command.Escape(entry.Name)+" "+command.Code(entry.ID))
 	}
 	return false, nil
 }
