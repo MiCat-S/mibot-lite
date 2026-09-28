@@ -33,6 +33,25 @@ const (
 	height = 900
 )
 
+// 卡片上画的固定文字。字体是子集（见包注释），只含 ASCII、「·」「…」和这里用到的汉字：
+// 改了这些文字，要确认字体里有这些字，否则线上只会看到方框。TestFontCoversCardText 会查。
+const (
+	titleSuffix   = " · 运行状态"
+	labelOnline   = "在线"
+	healthAlert   = "资源告警"
+	healthWarning = "需要关注"
+	healthNormal  = "运行正常"
+	gaugeCPU      = "CPU"
+	gaugeMemory   = "内存"
+	gaugeDisk     = "磁盘"
+	gaugeSwap     = "Swap"
+)
+
+// cardText 是上面所有的固定文字，加上时长（sysinfo.FormatUptime 的「天」）、百分比、
+// 读不到时的「--」和截断用的「…」。测试逐字检查字体覆盖。
+var cardText = []string{titleSuffix, labelOnline, healthAlert, healthWarning, healthNormal,
+	gaugeCPU, gaugeMemory, gaugeDisk, gaugeSwap, "0123456789天 :%-…"}
+
 // Gauge 是一个圆环仪表的读数，Known 为假时显示 --。
 type Gauge struct {
 	Percent float64
@@ -72,11 +91,11 @@ func health(card Card) (string, color.RGBA) {
 	}
 	switch {
 	case highest >= 90:
-		return "资源告警", hex(0xfb7185)
+		return healthAlert, hex(0xfb7185)
 	case highest >= 75:
-		return "需要关注", hex(0xfbbf24)
+		return healthWarning, hex(0xfbbf24)
 	}
-	return "运行正常", hex(0x34f59a)
+	return healthNormal, hex(0x34f59a)
 }
 
 func gaugeColor(gauge Gauge, normal color.RGBA) color.RGBA {
@@ -102,7 +121,8 @@ func Render(card Card) ([]byte, error) {
 	c.grid()
 	c.strokeRoundedRect(30, 30, width-60, height-60, 34, 4, hex(0x0e83bd))
 	c.radioMark(120, 140)
-	c.text(c.fitted(card.Name+" · 运行状态", 595, 68, 42), 180, 150, hex(0xf1f5f9), alignLeft)
+	title, size := c.fitted(card.Name+titleSuffix, 595, 68, 42)
+	c.text(title, size, 180, 150, hex(0xf1f5f9), alignLeft)
 	c.line(82, 235, 755, 235, 3, hex(0x215a78))
 
 	label, tone := health(card)
@@ -112,19 +132,21 @@ func Render(card Card) ([]byte, error) {
 		c.fillPath(func() { c.circle(128, 370, radius) }, withAlpha(tone, 0.08))
 	}
 	c.fillPath(func() { c.circle(128, 370, 42) }, tone)
-	c.size = 68
-	c.text(label, 205, 374, tone, alignLeft)
+	c.text(label, 68, 205, 374, tone, alignLeft)
 
-	c.text(c.fitted("在线", 100, 42, 30), 88, 555, hex(0x9fb2c5), alignLeft)
-	c.text(c.fitted(sysinfo.FormatUptime(card.Uptime), 500, 68, 48), 205, 555, hex(0xf1f5f9), alignLeft)
+	online, size := c.fitted(labelOnline, 100, 42, 30)
+	c.text(online, size, 88, 555, hex(0x9fb2c5), alignLeft)
+	uptime, size := c.fitted(sysinfo.FormatUptime(card.Uptime), 500, 68, 48)
+	c.text(uptime, size, 205, 555, hex(0xf1f5f9), alignLeft)
 
-	c.gauge(810, 115, "CPU", card.CPU, gaugeColor(card.CPU, hex(0x34f59a)))
-	c.gauge(1174, 115, "内存", card.Memory, gaugeColor(card.Memory, hex(0x34f59a)))
-	c.gauge(810, 395, "磁盘", card.Disk, gaugeColor(card.Disk, hex(0xfbbf24)))
-	c.gauge(1174, 395, "Swap", card.Swap, gaugeColor(card.Swap, hex(0x22d3ee)))
+	c.gauge(810, 115, gaugeCPU, card.CPU, gaugeColor(card.CPU, hex(0x34f59a)))
+	c.gauge(1174, 115, gaugeMemory, card.Memory, gaugeColor(card.Memory, hex(0x34f59a)))
+	c.gauge(810, 395, gaugeDisk, card.Disk, gaugeColor(card.Disk, hex(0xfbbf24)))
+	c.gauge(1174, 395, gaugeSwap, card.Swap, gaugeColor(card.Swap, hex(0x22d3ee)))
 
 	c.line(82, 732, 1518, 732, 3, hex(0x215a78))
-	c.text(c.fitted(card.Footer, 1370, 34, 24), width/2, 805, hex(0xb8c7d7), alignCenter)
+	footer, size := c.fitted(card.Footer, 1370, 34, 24)
+	c.text(footer, size, width/2, 805, hex(0xb8c7d7), alignCenter)
 
 	var out bytes.Buffer
 	if err := (&png.Encoder{CompressionLevel: png.BestSpeed}).Encode(&out, c.img); err != nil {
@@ -153,8 +175,6 @@ type canvas struct {
 	img   *image.RGBA
 	font  *sfnt.Font
 	faces map[float64]font.Face
-	// size 是 fitted 最后选定的字号，text 用它。
-	size float64
 	// path 是共用的光栅器，pending 是正在拼的形状的子路径。
 	path    *vector.Rasterizer
 	pending [][][2]float64
@@ -338,14 +358,15 @@ func (c *canvas) gauge(x, y float64, label string, value Gauge, tone color.RGBA)
 	if value.Known {
 		percent = fmt.Sprintf("%d%%", int(math.Round(value.Percent)))
 	}
-	c.size = 38
-	c.text(percent, centerX, centerY+2, hex(0xf1f5f9), alignCenter)
+	c.text(percent, 38, centerX, centerY+2, hex(0xf1f5f9), alignCenter)
 	c.line(x+205, y+61, x+205, y+boxHeight-61, 2, withAlpha(color.RGBA{R: 63, G: 132, B: 170, A: 255}, 0.55))
+	// v2 里「Swap」比其他标签大一号（43 对 42），照抄以便和 v2 的卡片逐像素对上。
 	maximum := 42.0
-	if label == "Swap" {
+	if label == gaugeSwap {
 		maximum = 43
 	}
-	c.text(c.fitted(label, 88, maximum, 24), x+232, centerY+2, hex(0xf1f5f9), alignLeft)
+	name, size := c.fitted(label, 88, maximum, 24)
+	c.text(name, size, x+232, centerY+2, hex(0xf1f5f9), alignLeft)
 }
 
 func (c *canvas) face(size float64) font.Face {
@@ -360,27 +381,25 @@ func (c *canvas) face(size float64) font.Face {
 	return face
 }
 
-// fitted 从 maximum 往下每次减 2 找一个放得下的字号；到 minimum 还放不下就截断加省略号。
-// 选定的字号记在 c.size 里，紧接着的 text 用它。
-func (c *canvas) fitted(value string, maxWidth, maximum, minimum float64) string {
+// fitted 从 maximum 往下每次减 2 找一个放得下的字号，返回要画的文字和字号；
+// 到 minimum 还放不下就截断加省略号。
+func (c *canvas) fitted(value string, maxWidth, maximum, minimum float64) (string, float64) {
 	for size := maximum; size >= minimum; size -= 2 {
 		if face := c.face(size); face != nil && float64(font.MeasureString(face, value).Round()) <= maxWidth {
-			c.size = size
-			return value
+			return value, size
 		}
 	}
-	c.size = minimum
 	face := c.face(minimum)
 	runes := []rune(value)
 	for len(runes) > 0 && face != nil && float64(font.MeasureString(face, string(runes)+"…").Round()) > maxWidth {
 		runes = runes[:len(runes)-1]
 	}
-	return string(runes) + "…"
+	return string(runes) + "…", minimum
 }
 
-// text 在 (x, y) 写一行字，y 是文字的垂直中线（canvas 的 textBaseline = middle）。
-func (c *canvas) text(value string, x, y float64, tone color.RGBA, align alignment) {
-	face := c.face(c.size)
+// text 用 size 号字在 (x, y) 写一行字，y 是文字的垂直中线（canvas 的 textBaseline = middle）。
+func (c *canvas) text(value string, size, x, y float64, tone color.RGBA, align alignment) {
+	face := c.face(size)
 	if face == nil {
 		return
 	}

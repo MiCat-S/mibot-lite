@@ -77,6 +77,7 @@ func status(ctx context.Context, a *app.App, registry *command.Registry, inv *co
 	defer drawing.Unlock()
 	resources := sysinfo.SampleResources(ctx, a.Root, 160*time.Millisecond)
 	caption := statusCaption(a, registry, resources)
+	// 页脚画在卡片上，只能用 ASCII 和「·」：卡片的字体是子集（statuscard.TestFontCoversCardText）。
 	footer := "MiBot Lite " + kit.Version(a) + "  ·  Go " + runtime.Version()
 	if version := gotdVersion(); version != "" {
 		footer += "  ·  gotd " + version
