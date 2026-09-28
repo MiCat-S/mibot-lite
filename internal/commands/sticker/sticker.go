@@ -178,7 +178,7 @@ func add(ctx context.Context, api *tg.Client, name, title string, sticker *found
 
 // save 存贴纸：指定了包就存进那个包；否则按 用户名_格式_序号 依次找一个没满的包，
 // 都满了或者不存在就新建下一个。
-func save(ctx context.Context, client *bot.Client, target string, sticker *found) (string, bool, error) {
+func save(ctx context.Context, client *bot.Client, prefix, target string, sticker *found) (string, bool, error) {
 	api := client.API()
 	username := ownUsername(client.Self())
 	title := "@" + username + " 的收藏（" + sticker.kind.label + "）"
@@ -190,7 +190,7 @@ func save(ctx context.Context, client *bot.Client, target string, sticker *found
 		return target, created, friendly(err)
 	}
 	if username == "" {
-		return "", false, kit.Fail("账号没有用户名，没法自动给贴纸包起名。先用 .sticker 包名 设一个默认包")
+		return "", false, kit.Fail("账号没有用户名，没法自动给贴纸包起名。先用 " + prefix + "sticker 包名 设一个默认包")
 	}
 	for index := 1; index <= autoPacks; index++ {
 		name := username + sticker.kind.suffix + "_" + strconv.Itoa(index)
@@ -200,7 +200,7 @@ func save(ctx context.Context, client *bot.Client, target string, sticker *found
 		}
 		return name, created, friendly(err)
 	}
-	return "", false, kit.Failf("自动命名的 %d 个贴纸包都满了，用 .sticker to 包名 存到别的包", autoPacks)
+	return "", false, kit.Failf("自动命名的 %d 个贴纸包都满了，用 %ssticker to 包名 存到别的包", autoPacks, prefix)
 }
 
 func help(prefix string) string {
@@ -256,7 +256,7 @@ func Register(a *app.App) {
 			if err := inv.EditText(ctx, "⏳ 正在收藏…"); err != nil {
 				return err
 			}
-			name, created, err := save(ctx, inv.Client, target, sticker)
+			name, created, err := save(ctx, inv.Client, inv.Prefix, target, sticker)
 			if err != nil {
 				if text, ok := kit.IsUserError(err); ok {
 					return inv.EditText(ctx, "❌ "+text)

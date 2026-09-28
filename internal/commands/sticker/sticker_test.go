@@ -113,7 +113,7 @@ func TestSaveFindsOrCreatesAPack(t *testing.T) {
 		for name, count := range c.existing {
 			fake.count[name] = count
 		}
-		pack, created, err := save(context.Background(), client(fake, c.username), c.target, c.sticker)
+		pack, created, err := save(context.Background(), client(fake, c.username), ".", c.target, c.sticker)
 		if c.failure != "" {
 			text, _ := kit.IsUserError(err)
 			if !strings.Contains(text, c.failure) {
@@ -131,7 +131,7 @@ func TestSaveFindsOrCreatesAPack(t *testing.T) {
 // 文档里另一个表示「满了」的错误码也要能换到下一个包。
 func TestSaveSkipsFullPackWithEitherCode(t *testing.T) {
 	fake := &packs{fullCode: "STICKERPACK_STICKERS_TOO_MUCH", capacity: 3, count: map[string]int{"cat_static_1": 3}}
-	pack, created, err := save(context.Background(), client(fake, "cat"), "", staticSticker())
+	pack, created, err := save(context.Background(), client(fake, "cat"), ".", "", staticSticker())
 	if err != nil || pack != "cat_static_2" || !created {
 		t.Errorf("得到 %q created=%v err=%v，应新建 cat_static_2", pack, created, err)
 	}

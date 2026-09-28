@@ -40,10 +40,11 @@ import (
 //   - 会暴露主机信息的：sysinfo（显示主机名）。
 var delegable = map[string][]string{
 	"ping": nil, "help": nil, "h": nil, "version": nil, "ver": nil, "status": nil, "memory": nil,
-	"calc": nil, "rate": nil, "tr": nil, "gt": nil, "ip": nil, "bin": nil, "ids": nil, "dc": nil,
+	"calc": nil, "rate": nil, "gt": nil, "ip": nil, "bin": nil, "ids": nil, "dc": nil,
 	"re":        nil,
 	"speedtest": nil,
 	"st":        nil,
+	"tr":        {"set"},
 	"yvlu":      {"config", "s"},
 	"whois":     {"clear", "history"},
 	"eatgif":    {"clear"},
@@ -59,14 +60,14 @@ var delegable = map[string][]string{
 var delegableUse = map[string]func(first string) bool{
 	// .sum 或 .sum 数量：总结当前群。任务、配置、调试都只限本人。
 	"sum": func(first string) bool { return first == "" || isNumber(first) },
-	// .speedtest、.speedtest 服务器编号、.speedtest list：测一次速、看服务器列表。
+	// .speedtest、.speedtest 服务器编号、.speedtest list：测一次速、看服务器列表；help、config 只看说明。
 	"speedtest": speedtestUse,
 	"st":        speedtestUse,
 }
 
 func speedtestUse(first string) bool {
 	switch first {
-	case "", "list", "servers", "列表", "help", "h":
+	case "", "list", "servers", "列表", "help", "h", "config":
 		return true
 	}
 	return isNumber(first)

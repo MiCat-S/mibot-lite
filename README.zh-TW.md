@@ -74,7 +74,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 |---|---|---|
 | `.calc 算式` | 四則運算 | ✓ |
 | `.rate 貨幣 [目標] [數量]` | 匯率與換算 | ✓ |
-| `.tr [語言] 文字` | Google 翻譯，不用設定 | ✓ |
+| `.tr [語言] 文字` | Google 翻譯，不用設定 | 部分 |
 | `.gt [語言] 文字` | AI 翻譯 | ✓ |
 | `.whois 網域` | 網域註冊資訊，支援批次查詢 | 部分 |
 | `.ip [IP\|網域]` | IP 的位置與電信業者 | ✓ |

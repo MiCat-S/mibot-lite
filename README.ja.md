@@ -80,7 +80,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 |---|---|---|
 | `.calc 式` | 四則演算 | ✓ |
 | `.rate 通貨 [換算先] [金額]` | 為替レートと換算 | ✓ |
-| `.tr [言語] テキスト` | Google 翻訳、設定不要 | ✓ |
+| `.tr [言語] テキスト` | Google 翻訳、設定不要 | 一部 |
 | `.gt [言語] テキスト` | AI 翻訳 | ✓ |
 | `.whois ドメイン` | ドメインの登録情報、一括検索にも対応 | 一部 |
 | `.ip [IP\|ドメイン]` | IP の所在地と回線事業者 | ✓ |

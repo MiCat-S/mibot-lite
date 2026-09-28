@@ -81,7 +81,7 @@ owner; blank means owner only.
 |---|---|---|
 | `.calc <expression>` | Arithmetic | ✓ |
 | `.rate <currency> [target] [amount]` | Exchange rates and conversion | ✓ |
-| `.tr [language] <text>` | Google Translate, no setup needed | ✓ |
+| `.tr [language] <text>` | Google Translate, no setup needed | partly |
 | `.gt [language] <text>` | AI translation | ✓ |
 | `.whois <domain>` | Domain registration data, in batches too | partly |
 | `.ip [IP\|domain]` | Location and network of an IP | ✓ |
