@@ -247,6 +247,6 @@ func Register(a *app.App) {
 			if err != nil {
 				return kit.Failf("计算失败：%s", err.Error())
 			}
-			return inv.Edit(ctx, "<b>计算结果</b>\n"+command.Code(expression)+" = "+command.Code(formatCalc(result)))
+			return inv.Edit(ctx, "🧮 <b>计算结果</b>\n"+command.Code(expression)+" = "+command.Code(formatCalc(result)))
 		}})
 }

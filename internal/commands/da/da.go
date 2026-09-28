@@ -41,7 +41,7 @@ type daDB struct {
 
 func daHelp(prefix string) string {
 	p := command.Escape(prefix)
-	return "<b>批量删除</b>\n\n<code>" + p + "da true</code> 开始或恢复删除\n<code>" + p + "da stop</code> 停止任务\n<code>" + p + "da status</code> 状态发送到收藏夹\n管理员删除全部消息，普通成员仅删除自己的消息。"
+	return "🧹 <b>批量删除群组消息</b>\n\n• <code>" + p + "da true</code> 开始或继续删除\n• <code>" + p + "da stop</code> 停止任务\n• <code>" + p + "da status</code> 把进度发到收藏夹\n\n管理员删除全部消息，普通成员只删自己的消息。"
 }
 
 type daService struct {
@@ -87,7 +87,7 @@ func (s *daService) progress(ctx context.Context, client *bot.Client, task *daTa
 	state := "已停止"
 	switch {
 	case task.SleepUntil != nil && *task.SleepUntil > time.Now().UnixMilli():
-		state = fmt.Sprintf("休眠中 (%d秒)", int(math.Ceil(float64(*task.SleepUntil-time.Now().UnixMilli())/1000)))
+		state = fmt.Sprintf("休眠中（%d 秒）", int(math.Ceil(float64(*task.SleepUntil-time.Now().UnixMilli())/1000)))
 	case task.IsRunning:
 		state = "运行中"
 	case task.IsPaused:
@@ -97,9 +97,9 @@ func (s *daService) progress(ctx context.Context, client *bot.Client, task *daTa
 	if len(tail) > 3 {
 		tail = tail[len(tail)-3:]
 	}
-	text := fmt.Sprintf("<b>删除任务：%s</b>\n群聊：%s\n状态：%s\n已删除：%d 条\n删除速度：%.2f 条/秒\n运行时长：%d小时 %d分钟 %d秒\n最后更新：%s\n%s",
+	text := fmt.Sprintf("🧹 <b>删除任务：%s</b>\n群组：%s\n状态：%s\n已删除：%d 条\n删除速度：%.2f 条/秒\n运行时长：%d小时 %d分钟 %d秒\n最后更新：%s\n%s",
 		command.Escape(status), command.Escape(task.ChatName), state, task.DeletedMessages, float64(task.DeletedMessages)/float64(seconds),
-		seconds/3600, seconds%3600/60, seconds%60, time.UnixMilli(task.LastUpdate).Format("2006/1/2 15:04:05"), command.Escape(strings.Join(tail, "\n")))
+		seconds/3600, seconds%3600/60, seconds%60, time.UnixMilli(task.LastUpdate).Format("2006-01-02 15:04:05"), command.Escape(strings.Join(tail, "\n")))
 	if task.SavedMessageID > 0 {
 		err := client.EditMessage(ctx, &tg.InputPeerSelf{}, task.SavedMessageID, text, false)
 		if err == nil {

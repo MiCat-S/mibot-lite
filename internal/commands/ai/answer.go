@@ -36,16 +36,16 @@ func sourcesHTML(sources []aiSource) string {
 		}
 		rows = append(rows, fmt.Sprintf("%d. <a href=\"%s\">%s</a>", index+1, command.Escape(item.URL), command.Escape(title)))
 	}
-	return "\n\n<b>🔗 Sources</b>\n" + strings.Join(rows, "\n")
+	return "\n\n<b>来源</b>\n" + strings.Join(rows, "\n")
 }
 
-// telegraphLinkHTML 是回答太长、改发 Telegraph 时放在 A: 下面的内容。
+// telegraphLinkHTML 是回答太长、改发 Telegraph 时放在「答：」下面的内容。
 func telegraphLinkHTML(link string) string {
-	return "📰内容比较长，Telegraph 观感更好喔:\n🔗 <a href=\"" + command.Escape(link) + "\">点我阅读内容</a>"
+	return "📰 回答比较长，放在 Telegraph 上了：<a href=\"" + command.Escape(link) + "\">点这里阅读</a>"
 }
 
-// answerPages 按 MiBox 的版式排出回答：Q: 问题、A: 回答，开启折叠时两段各自包进
-// 可展开的引用；超长时分页，续页带「续 (i/n)」标签，最后一页署上服务商标签。
+// answerPages 按 MiBox 的版式排出回答：「问：」问题、「答：」回答，开启折叠时两段各自包进
+// 可展开的引用；超长时分页，续页带「续（i/n）」标签，最后一页署上服务商标签。
 func answerPages(question, answerHTML, tag string, collapse bool) []string {
 	wrap := func(html string) string {
 		if collapse && strings.TrimSpace(html) != "" {
@@ -57,15 +57,15 @@ func answerPages(question, answerHTML, tag string, collapse bool) []string {
 	if collapse {
 		separator = "\n"
 	}
-	source := "Q:\n" + wrap(command.Escape(question)) + separator + "A:\n" + wrap(answerHTML)
+	source := "问：\n" + wrap(command.Escape(question)) + separator + "答：\n" + wrap(answerHTML)
 	pages := htmlPages(source, answerPageLimit)
 	for index := range pages {
 		if index > 0 {
-			pages[index] = fmt.Sprintf("📋 <b>续 (%d/%d):</b>\n\n", index, len(pages)-1) + pages[index]
+			pages[index] = fmt.Sprintf("<b>续（%d/%d）</b>\n\n", index, len(pages)-1) + pages[index]
 		}
 	}
 	if tag != "" {
-		pages[len(pages)-1] += "\n<i>🍀Powered by " + command.Escape(tag) + "</i>"
+		pages[len(pages)-1] += "\n<i>🍀 由 " + command.Escape(tag) + " 生成</i>"
 	}
 	return pages
 }
@@ -274,7 +274,7 @@ func telegraphMarkdown(question, answer string, sources []aiSource) string {
 			}
 			rows = append(rows, fmt.Sprintf("%d. %s\n%s", index+1, title, item.URL))
 		}
-		markdown += "\n**Sources:**\n" + strings.Join(rows, "\n") + "\n"
+		markdown += "\n**来源**\n" + strings.Join(rows, "\n") + "\n"
 	}
 	return markdown
 }

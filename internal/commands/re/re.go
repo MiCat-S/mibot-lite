@@ -22,8 +22,8 @@ import (
 func Register(a *app.App) {
 	help := func(prefix string) string {
 		p := command.Escape(prefix)
-		return "🔁 <b>消息复读</b>\n\n回复一条消息，把从它开始往后的若干条消息转发到当前会话。\n\n• 回复消息发送 <code>" + p + "re</code> - 转发一条，一次\n• <code>" + p +
-			"re 3</code> - 转发被回复的消息和它之后的 2 条，已删除的消息不算数\n• <code>" + p + "re 3 2</code> - 将这 3 条消息重复转发 2 次\n\n" +
+		return "🔁 <b>消息复读</b>\n\n回复一条消息，把从它开始往后的若干条消息转发到当前对话。\n\n• 回复消息发送 <code>" + p + "re</code> 转发一条，一次\n• <code>" + p +
+			"re 3</code> 转发被回复的消息和它之后的 2 条，已删除的消息不算数\n• <code>" + p + "re 3 2</code> 将这 3 条消息重复转发 2 次\n\n" +
 			"消息数最多 20，复读次数最多 10。对话禁止转发时，改为把内容重新发一遍。"
 	}
 	a.Registry.Register(&command.Command{Name: "re", Group: command.GroupMedia, Description: "重复转发回复的消息", Usage: "[消息数] [次数]", Help: help,

@@ -62,7 +62,7 @@ func chatModelFor(cfg aiConfig, tag string) (string, error) {
 		model = cfg.CurrentChatModel
 	}
 	if model == "" {
-		return "", kit.Fail("请先配置 ai chat 模型")
+		return "", kit.Fail("请先用 .ai model chat 配置聊天模型")
 	}
 	return model, AssertAllowedModel(model)
 }

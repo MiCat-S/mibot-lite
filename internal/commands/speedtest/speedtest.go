@@ -349,7 +349,7 @@ func runExternal(ctx context.Context, path, kind, home string, server int) (*rea
 		switch {
 		case errors.Is(ctx.Err(), context.DeadlineExceeded):
 			failure.TimedOut = true
-			failure.Explained = "测速两分钟还没测完，已经中止，稍后再试或换一台服务器"
+			failure.Explained = "测速两分钟还没测完，已经中止，稍后再试或换一台测速服务器"
 		case failure.Detail != "":
 			failure.Explained = explainCLI(failure.Detail)
 		}
@@ -448,7 +448,7 @@ func listServers(ctx context.Context, path, home string) ([]speedServer, error) 
 	tool.Stderr = &complaint
 	if err := tool.Run(); err != nil {
 		if detail := failureDetail(out.String(), complaint.String()); detail != "" {
-			return nil, kit.Fail("取服务器列表失败：" + explainCLI(detail))
+			return nil, kit.Fail("读取测速服务器列表失败：" + explainCLI(detail))
 		}
 		return nil, fmt.Errorf("speedtest -L failed: %w", err)
 	}
@@ -456,7 +456,7 @@ func listServers(ctx context.Context, path, home string) ([]speedServer, error) 
 		Servers []speedServer `json:"servers"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &parsed); err != nil {
-		return nil, kit.Fail("无法解析服务器列表")
+		return nil, kit.Fail("无法解析测速服务器列表")
 	}
 	if len(parsed.Servers) == 0 {
 		return nil, kit.Fail("没有可用的测速服务器")
@@ -613,11 +613,11 @@ type cliReason struct {
 //   - 测到一半对端重置连接（errno 104）时只有 "Cannot read: " 或 "Cannot write: "，
 //     某些服务器约三四次就有一次，重测多半又自动挑中它，所以要换一台。
 var cliReasons = []cliReason{
-	{markers: []string{"Limit reached", "Too many requests"}, text: "测得太频繁，被 Speedtest 限流了，过一阵再试"},
+	{markers: []string{"Limit reached", "Too many requests"}, text: "测得太频繁，被 Speedtest 限流了，稍后再试"},
 	{markers: []string{"NoServersException", "No servers defined"}, text: "找不到指定的测速服务器，ID 可能不对或已经下线", retry: true},
-	{markers: []string{"Configuration"}, text: "Speedtest 暂时拒绝了这台机器的请求，通常是短时间内测得太频繁，过一阵再试"},
-	{markers: []string{"Cannot read from socket", "Latency test failed"}, text: "这个服务器现在连不上，换一个 ID 或用自动挑选", retry: true},
-	{markers: []string{"Cannot read:", "Cannot write:", "Connection reset", "Broken pipe"}, text: "测速服务器测到一半断开了连接，稍后再试，或换一台服务器固定下来", retry: true},
+	{markers: []string{"Configuration"}, text: "Speedtest 暂时拒绝了这台主机的请求，通常是短时间内测得太频繁，稍后再试"},
+	{markers: []string{"Cannot read from socket", "Latency test failed"}, text: "这台测速服务器现在连不上，换一个 ID 或用自动挑选", retry: true},
+	{markers: []string{"Cannot read:", "Cannot write:", "Connection reset", "Broken pipe"}, text: "测速服务器测到一半断开了连接，稍后再试，或换一台测速服务器固定下来", retry: true},
 }
 
 func reasonFor(detail string) (cliReason, bool) {
@@ -739,23 +739,23 @@ func speedtestHelp(dataDir, prefix string, pinned int) string {
 	if tool != "" {
 		source = "使用 " + kind + "：" + tool
 	}
-	server := "自动挑选最近的服务器"
+	server := "自动挑选最近的测速服务器"
 	if pinned > 0 {
 		server = "固定用 " + strconv.Itoa(pinned)
 	}
-	return "🚀 <b>网络测速</b>\n\n测量这台服务器的出口带宽。\n\n• <code>" + p +
+	return "🚀 <b>网络测速</b>\n\n测量主机的出口带宽。\n\n• <code>" + p +
 		"speedtest</code> 完整测速\n• <code>" + p + "st</code> 同上，简写\n• <code>" + p +
-		"speedtest list</code> 列出可用服务器\n• <code>" + p +
-		"speedtest &lt;ID&gt;</code> 只这一次用指定服务器\n• <code>" + p +
-		"speedtest set &lt;ID&gt;</code> 设为默认服务器\n• <code>" + p +
+		"speedtest list</code> 列出可用测速服务器\n• <code>" + p +
+		"speedtest ID</code> 只这一次用指定的测速服务器\n• <code>" + p +
+		"speedtest set ID</code> 设为默认测速服务器\n• <code>" + p +
 		"speedtest clear</code> 恢复自动挑选\n• <code>" + p +
 		"speedtest config</code> 看当前设置\n• <code>" + p +
 		"speedtest diagnose</code> 检查 CLI 能否运行\n• <code>" + p +
 		"speedtest fix</code> / <code>update</code> 重新下载官方 CLI（版本固定为 " + ooklaVersion + "）\n\n<b>当前来源</b>\n" + command.Escape(source) +
-		"\n\n<b>当前服务器</b>\n" + command.Escape(server) +
+		"\n\n<b>当前测速服务器</b>\n" + command.Escape(server) +
 		"\n\n用 Ookla 官方 CLI 测：它自己挑就近的测速服务器，报得出 ISP，还会给一张结果图。没装的话首次" +
 		"运行会把官方静态构件下载到部署目录（校验 SHA-256，不写系统目录），之后直接复用。\n\n" +
-		"指定的服务器测不通时会自动退回自动挑选；自动挑到的服务器测到一半断开时，会换最近的另一台重测，" +
+		"指定的测速服务器测不通时会自动退回自动挑选；自动挑到的测速服务器测到一半断开时，会换最近的另一台重测，" +
 		"两种情况都会在结果里说明。被 Speedtest 限流时不重试。输出里的出口地址会打码。"
 }
 
@@ -763,24 +763,24 @@ func speedtestHelp(dataDir, prefix string, pinned int) string {
 func render(result *reading, elapsed time.Duration, note string) string {
 	lines := []string{"🚀 <b>网络测速</b>", ""}
 	if result.Server != "" {
-		server := "📍 节点: " + command.Code(result.Server)
+		server := "📍 节点：" + command.Code(result.Server)
 		if result.ServerID > 0 {
 			server += " · ID " + command.Code(strconv.Itoa(result.ServerID))
 		}
 		lines = append(lines, server)
 	}
 	if isp := strings.TrimSpace(result.ISP + " " + result.ASN); isp != "" {
-		lines = append(lines, "🏢 运营商: "+command.Code(isp))
+		lines = append(lines, "🏢 运营商："+command.Code(isp))
 	}
 	if result.ExternalIP != "" {
-		address := "🌐 出口: " + command.Code(maskAddress(result.ExternalIP))
+		address := "🌐 出口：" + command.Code(maskAddress(result.ExternalIP))
 		if flag := countryFlag(result.Country); flag != "" {
 			address += " " + flag + " " + result.Country
 		}
 		lines = append(lines, address)
 	}
 	lines = append(lines, "")
-	latency := "⏱ 延迟: " + command.Code(formatLatency(result.Latency))
+	latency := "⏱ 延迟：" + command.Code(formatLatency(result.Latency))
 	if result.Jitter > 0 {
 		latency += "（抖动 " + command.Escape(formatLatency(result.Jitter)) + "）"
 	}
@@ -793,10 +793,10 @@ func render(result *reading, elapsed time.Duration, note string) string {
 	}
 	lines = append(lines,
 		latency,
-		transfer("⬇️ 下载: ", result.Download, result.DownloadBytes),
-		transfer("⬆️ 上传: ", result.Upload, result.UploadBytes))
+		transfer("⬇️ 下载：", result.Download, result.DownloadBytes),
+		transfer("⬆️ 上传：", result.Upload, result.UploadBytes))
 	if result.Timestamp != "" {
-		lines = append(lines, "🕒 时间: "+command.Code(formatTimestamp(result.Timestamp)))
+		lines = append(lines, "🕒 时间："+command.Code(formatTimestamp(result.Timestamp)))
 	}
 	lines = append(lines, "")
 	if note != "" {
@@ -874,17 +874,17 @@ func (s *speedtester) setting(ctx context.Context, inv *command.Invocation) (boo
 		if err := s.settings.Update(func(value *speedtestDocument) error { value.Server = 0; return nil }); err != nil {
 			return true, err
 		}
-		return true, inv.Edit(ctx, "✅ 已恢复自动挑选服务器\n<i>想再固定一台，"+
+		return true, inv.Edit(ctx, "✅ 已恢复自动挑选测速服务器\n<i>想再固定一台，"+
 			command.Escape(inv.Prefix+"speedtest list")+" 看有哪些</i>")
 	case "set":
 		id, err := strconv.Atoi(inv.Arg(1))
 		if err != nil || id <= 0 {
-			return true, kit.Failf("用法：%sspeedtest set 服务器 ID，ID 用 %sspeedtest list 查", inv.Prefix, inv.Prefix)
+			return true, kit.Failf("用法：%sspeedtest set ID，ID 用 %sspeedtest list 查", inv.Prefix, inv.Prefix)
 		}
 		if err := s.settings.Update(func(value *speedtestDocument) error { value.Server = id; return nil }); err != nil {
 			return true, err
 		}
-		return true, inv.Edit(ctx, "✅ 默认服务器已设为 "+command.Code(strconv.Itoa(id))+
+		return true, inv.Edit(ctx, "✅ 默认测速服务器已设为 "+command.Code(strconv.Itoa(id))+
 			"\n<i>测不通会自动退回自动挑选；取消固定用 "+command.Escape(inv.Prefix+"speedtest clear")+"</i>")
 	}
 	return false, nil
@@ -892,7 +892,7 @@ func (s *speedtester) setting(ctx context.Context, inv *command.Invocation) (boo
 
 // list 列出 CLI 能看到的测速服务器。
 func (s *speedtester) list(ctx context.Context, inv *command.Invocation) error {
-	if err := inv.Edit(ctx, "🌐 正在取服务器列表…"); err != nil {
+	if err := inv.EditText(ctx, kit.Working("正在读取测速服务器列表")); err != nil {
 		return err
 	}
 	tool, kind, err := s.ensureTool(ctx, inv)
@@ -900,7 +900,7 @@ func (s *speedtester) list(ctx context.Context, inv *command.Invocation) error {
 		return installProblem(err)
 	}
 	if kind != "ookla" {
-		return inv.EditText(ctx, "只有 Ookla 官方 CLI 能列出服务器，当前用的是 speedtest-cli")
+		return kit.Fail("只有 Ookla 官方 CLI 能列出测速服务器，当前用的是 speedtest-cli")
 	}
 	servers, err := listServers(ctx, tool, s.home())
 	if err != nil {
@@ -932,7 +932,7 @@ func (s *speedtester) measure(ctx context.Context, inv *command.Invocation, tool
 	next, note := 0, ""
 	switch {
 	case server > 0:
-		note = "服务器 " + strconv.Itoa(server) + " 没测通，已改用自动挑选。换一台用 " +
+		note = "测速服务器 " + strconv.Itoa(server) + " 没测通，已改用自动挑选。换一台用 " +
 			inv.Prefix + "speedtest list，取消固定用 " + inv.Prefix + "speedtest clear"
 	case failure != nil && failure.Tested > 0 && kind == "ookla":
 		if servers, err := listServers(ctx, tool, s.home()); err == nil {
@@ -946,7 +946,7 @@ func (s *speedtester) measure(ctx context.Context, inv *command.Invocation, tool
 		if next > 0 {
 			dropped := failure.TestedName
 			if dropped == "" {
-				dropped = "服务器"
+				dropped = "测速服务器"
 			}
 			note = "自动挑到的 " + dropped + "（" + strconv.Itoa(failure.Tested) + "）没测完，已换一台重测"
 		}
@@ -1076,7 +1076,7 @@ func (s *speedtester) handle(ctx context.Context, inv *command.Invocation) error
 	}
 	where := "，约需一分钟…"
 	if server > 0 {
-		where = "（服务器 " + strconv.Itoa(server) + "），约需一分钟…"
+		where = "（测速服务器 " + strconv.Itoa(server) + "），约需一分钟…"
 	}
 	if err := inv.Edit(ctx, "🚀 <b>网络测速</b>\n\n正在通过 "+command.Escape(kind)+" 测速"+command.Escape(where)); err != nil {
 		return err
@@ -1087,7 +1087,7 @@ func (s *speedtester) handle(ctx context.Context, inv *command.Invocation) error
 		return kit.FailWith("测速失败", err)
 	}
 	if once && note == "" {
-		note = "本次指定了服务器，未改动默认设置"
+		note = "本次指定了测速服务器，未改动默认设置"
 	}
 	if s.egress != nil && result.ExternalIP != "" {
 		found := s.egress(ctx, result.ExternalIP)

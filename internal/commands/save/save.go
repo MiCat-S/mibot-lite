@@ -196,7 +196,7 @@ func describeTarget(target string) string {
 	case isSelfTarget(target):
 		return "收藏夹"
 	case isLocalTarget(target):
-		return "服务器本地 save/ 目录"
+		return "主机本地的 save/ 目录"
 	}
 	return target
 }
@@ -529,7 +529,7 @@ func (s *saver) remake(ctx context.Context, message *tg.Message) (tg.InputMediaC
 			return nil, err
 		}
 		defer os.Remove(path)
-		s.progress("⬆️ 上传中…")
+		s.progress(kit.Working("正在上传"))
 		file, err := s.upload.FromPath(ctx, path)
 		if err != nil {
 			return nil, err
@@ -556,9 +556,9 @@ func (s *saver) download(ctx context.Context, source *bot.MediaSource) (string, 
 		return "", err
 	}
 	if source.Size > 0 {
-		s.progress("⬇️ 下载中… " + kit.FormatBytes(source.Size))
+		s.progress(kit.Working("正在下载 " + kit.FormatBytes(source.Size)))
 	} else {
-		s.progress("⬇️ 下载中…")
+		s.progress(kit.Working("正在下载"))
 	}
 	if err := s.client.DownloadTo(ctx, source, file); err != nil {
 		file.Close()
@@ -689,7 +689,7 @@ func saveHelp(prefix string) string {
 		"• <code>" + p + "save 链接1|链接2</code> 保存两条之间的所有消息，缺号自动跳过，一次最多 " + strconv.Itoa(saveRangeLimit) + " 条\n" +
 		"• 末尾加一个目标只这一次发到那里：<code>" + p + "save 链接 @某人</code>、<code>" + p + "save 链接 local</code>\n\n" +
 		"<b>设置</b>\n" +
-		"• <code>" + p + "save to 目标</code> 默认目标：<code>me</code>（收藏夹）、<code>@用户名</code>、对话 ID、<code>local</code>（存到服务器）\n" +
+		"• <code>" + p + "save to 目标</code> 默认目标：<code>me</code>（收藏夹）、<code>@用户名</code>、对话 ID、<code>local</code>（存到主机）\n" +
 		"• <code>" + p + "save target</code> 看当前设置\n" +
 		"• <code>" + p + "save source on|off</code> 保存后回复一条来源说明，带原消息链接\n\n" +
 		"<b>链接</b>\n支持 <code>t.me/用户名/编号</code>、<code>t.me/c/数字/编号</code>，以及带话题的形式。私密对话要求账号是成员。\n\n" +
@@ -869,7 +869,7 @@ func collectSaveRange(ctx context.Context, inv *command.Invocation, work *saver,
 	for id := from.ID; id <= to.ID; id++ {
 		ids = append(ids, id)
 	}
-	if err := inv.EditText(ctx, "💾 正在读取 "+strconv.Itoa(count)+" 个编号…"); err != nil {
+	if err := inv.EditText(ctx, kit.Working("正在读取 "+strconv.Itoa(count)+" 个编号")); err != nil {
 		return nil, err
 	}
 	messages, err := work.fetch(ctx, peer, ids)

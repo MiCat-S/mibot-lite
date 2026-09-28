@@ -149,17 +149,17 @@ func Reason(err error) string {
 	switch {
 	case errors.As(err, &status):
 		if status.Status == 429 {
-			return "请求过于频繁，请稍后重试"
+			return "请求过于频繁，稍后再试"
 		}
 		return fmt.Sprintf("服务返回 HTTP %d", status.Status)
 	case errors.Is(err, context.DeadlineExceeded):
-		return "请求超时，请稍后重试"
+		return "请求超时，稍后再试"
 	case errors.Is(err, ErrTooLarge):
 		return "响应数据过大"
 	}
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
-		return "请求超时，请稍后重试"
+		return "请求超时，稍后再试"
 	}
-	return "网络请求失败，请稍后重试"
+	return "网络请求失败，稍后再试"
 }

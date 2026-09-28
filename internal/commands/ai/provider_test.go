@@ -65,7 +65,7 @@ func TestErrorDetail(t *testing.T) {
 	if got := HTTPFailure(401, []byte(`{"error":{"message":"bad key sk-secret-123"}}`), secret); got != "AI 接口返回 HTTP 401：bad key ***" {
 		t.Fatalf("HTTPFailure = %q", got)
 	}
-	if got := HTTPFailure(429, nil, secret); got != "请求过于频繁，请稍后重试" {
+	if got := HTTPFailure(429, nil, secret); got != "请求过于频繁，稍后再试" {
 		t.Fatalf("429 = %q", got)
 	}
 	if got := MaskSecret("a sk%2Bx b sk+x", "sk+x"); got != "a *** b ***" {

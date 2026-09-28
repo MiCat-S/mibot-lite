@@ -50,9 +50,9 @@ func statusCaption(a *app.App, registry *command.Registry, resources sysinfo.Res
 	if host.Uptime > 0 {
 		hostUptime = sysinfo.FormatUptime(host.Uptime)
 	}
-	row := func(label, value string) string { return "• " + label + ": " + command.Code(value) }
+	row := func(label, value string) string { return "• " + label + "：" + command.Code(value) }
 	return strings.Join([]string{
-		"<b>🧠 进程</b>",
+		"<b>进程</b>",
 		row("版本", kit.Version(a)),
 		row("运行时间", sysinfo.FormatUptime(time.Since(a.Started))),
 		row("PID", fmt.Sprintf("%d · %d 个 goroutine", os.Getpid(), process.Goroutines)),
@@ -60,12 +60,12 @@ func statusCaption(a *app.App, registry *command.Registry, resources sysinfo.Res
 		row("RSS · Go 堆", sysinfo.FormatBytes(process.RSS)+" · "+sysinfo.FormatBytes(process.HeapAlloc)),
 		row("命令 · 前缀", fmt.Sprintf("%d 个 · %s", len(registry.Commands()), strings.Join(registry.Prefixes(), " "))),
 		"",
-		"<b>🖥 主机</b>",
+		"<b>主机</b>",
 		row("系统", resources.OS+" · "+host.Platform),
 		row("内核", kit.OrDefault(host.KernelRelease, "不可用")),
 		row("主机在线", hostUptime),
 		row("负载 1 / 5 / 15 分钟", load),
-		row("状态采样", fmt.Sprintf("%dms", resources.Sampled.Milliseconds())),
+		row("状态采样", fmt.Sprintf("%d ms", resources.Sampled.Milliseconds())),
 	}, "\n")
 }
 
@@ -102,5 +102,5 @@ func status(ctx context.Context, a *app.App, registry *command.Registry, inv *co
 	} else {
 		inv.Log.Warn("status.card_render_failed", "error", err.Error())
 	}
-	return inv.Edit(ctx, "<b>MiBot Lite 状态</b>\n\n"+caption)
+	return inv.Edit(ctx, "📊 <b>运行状态</b>\n\n"+caption)
 }

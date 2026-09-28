@@ -319,7 +319,7 @@ func renderIDs(info *entityInfo, joined time.Time, now time.Time) string {
 		lines = append(lines, "👤 <b>"+command.Escape(info.name)+"</b>", "",
 			"• 用户名："+command.Code(username),
 			"• ID："+command.Code(idText),
-			"• 注册时间："+command.Code("约 "+estimateCreation(info.id, now).Format("2006年1月"))+" <i>按 ID 估算，误差约两个月</i>")
+			"• 注册时间："+command.Code("约 "+estimateCreation(info.id, now).Format("2006 年 1 月"))+" <i>按 ID 估算，误差约两个月</i>")
 		if !joined.IsZero() {
 			lines = append(lines, "• 入群时间："+command.Code(joined.Format("2006-01-02 15:04")))
 		}
@@ -373,7 +373,7 @@ func renderIDs(info *entityInfo, joined time.Time, now time.Time) string {
 func idsHelp(prefix string) string {
 	p := command.Escape(prefix)
 	return "🆔 <b>用户信息</b>\n\n" +
-		"• <code>" + p + "ids</code> 自己\n• <code>" + p + "ids @用户名</code> 或 <code>" + p + "ids 用户ID</code>，也可以在命令后提及对方\n" +
+		"• <code>" + p + "ids</code> 自己\n• <code>" + p + "ids @用户名</code> 或 <code>" + p + "ids 用户 ID</code>，也可以在命令后提及对方\n" +
 		"• 回复某人的消息发 <code>" + p + "ids</code>\n\n" +
 		"显示 ID、用户名、估算的注册时间、所在 DC、共同群组数、简介和跳转链接；在超级群里还会显示入群时间。频道和群也能查。\n\n" +
 		"注册时间是按 ID 估算的，Telegram 不公开真实时间。"

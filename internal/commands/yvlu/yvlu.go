@@ -63,7 +63,7 @@ func yvluHelp(prefix string) string {
 	p := command.Escape(prefix)
 	return "📝 <b>生成文字语录贴纸</b>\n\n• <code>" + p + "yvlu [消息数]</code> 回复消息生成语录，最多 5 条\n• <code>" + p +
 		"yvlu r [消息数]</code> 包含被引用的内容\n• <code>" + p + "yvlu f 文本</code> 伪造文本（<code>fr</code> 同时包含回复）\n• <code>" + p +
-		"yvlu u 用户ID/用户名 [消息数]</code> 伪造发送者（<code>ur</code> 同时包含回复）\n• <code>" + p +
+		"yvlu u 用户 ID|@用户名 [消息数]</code> 伪造发送者（<code>ur</code> 同时包含回复）\n• <code>" + p +
 		"yvlu webp|image|png|stories [消息数]</code> 指定输出格式\n• <code>" + p + "yvlu s</code> 保存回复的贴纸或图片到贴纸包\n• <code>" + p +
 		"yvlu config</code> 查看配置\n• <code>" + p + "yvlu config sticker 名称</code> 设置贴纸包\n\n图片由远程 quote 服务渲染，需要网络可达。"
 }
@@ -410,11 +410,11 @@ func (s *yvluService) handle(ctx context.Context, inv *command.Invocation) error
 	if sub := strings.ToLower(inv.Arg(0)); sub == "u" || sub == "ur" {
 		peer, err := inv.Client.ResolveTarget(ctx, inv.Arg(1))
 		if err != nil {
-			return kit.Failf("无法获取 %s 的信息，请检查用户ID/用户名是否正确", inv.Arg(1))
+			return kit.Failf("无法获取 %s 的信息，请检查用户 ID 或用户名是否正确", inv.Arg(1))
 		}
 		author, err := fakeAuthor(ctx, inv, peer)
 		if err != nil {
-			return kit.Failf("无法获取 %s 的信息，请检查用户ID/用户名是否正确", inv.Arg(1))
+			return kit.Failf("无法获取 %s 的信息，请检查用户 ID 或用户名是否正确", inv.Arg(1))
 		}
 		options.FakeSender, options.FakeAuthor = peer, author
 	}
@@ -537,7 +537,7 @@ func (s *yvluService) config(ctx context.Context, inv *command.Invocation) error
 			return err
 		}
 		name := current.StickerSet
-		text := "<b>当前配置</b>\n贴纸包名称：" + command.Code(kit.OrDefault(name, "(未设置)"))
+		text := "📝 <b>语录配置</b>\n贴纸包名称：" + command.Code(kit.OrDefault(name, "未设置"))
 		if name != "" {
 			text += "\n贴纸包链接：t.me/addstickers/" + command.Escape(name)
 		}
@@ -548,7 +548,7 @@ func (s *yvluService) config(ctx context.Context, inv *command.Invocation) error
 	}
 	name := strings.Join(inv.Args[2:], "_")
 	if name == "" {
-		return kit.Failf("请提供贴纸包名称，用法：%syvlu config sticker 贴纸包名称", inv.Prefix)
+		return kit.Usage(inv.Prefix, "yvlu config sticker 贴纸包名称")
 	}
 	if !stickerSetName.MatchString(name) {
 		return kit.Fail("贴纸包名称只能包含字母、数字和下划线")

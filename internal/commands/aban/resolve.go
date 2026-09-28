@@ -72,7 +72,7 @@ func (s *abanService) resolveTarget(ctx context.Context, inv *command.Invocation
 		return target{}, err
 	}
 	if reply == nil {
-		return target{}, kit.Fail("请回复一条消息，或指定 @用户名 / 用户ID")
+		return target{}, kit.Fail("请回复一条消息，或者指定 @用户名、用户 ID")
 	}
 	switch sender := reply.Sender.(type) {
 	case *tg.PeerUser:
@@ -279,7 +279,7 @@ func userTarget(client *bot.Client, peer tg.InputPeerClass, id int64) (target, e
 	return target{peer: peer, id: id, display: info.DisplayName()}, nil
 }
 
-// channelTarget 组装频道目标，显示成「频道: 标题 (@用户名)」（同原版 formatUser）。
+// channelTarget 组装频道目标，显示成「频道：标题 (@用户名)」（同原版 formatUser）。
 // 缓存里没有时用 channels.getChannels（access hash 填 0）试一次，teleproto 按 ID 取频道时也这样试。
 func channelTarget(ctx context.Context, client *bot.Client, id int64) (target, error) {
 	peer, ok := client.Peers().InputPeer(&tg.PeerChannel{ChannelID: id})
@@ -293,7 +293,7 @@ func channelTarget(ctx context.Context, client *bot.Client, id int64) (target, e
 		return target{}, kit.Fail("无法解析该频道，可先回复其一则消息")
 	}
 	info, _ := client.Peers().Channel(id)
-	display := "频道: " + kit.OrDefault(info.Title, "-100"+strconv.FormatInt(id, 10))
+	display := "频道：" + kit.OrDefault(info.Title, "-100"+strconv.FormatInt(id, 10))
 	if info.Username != "" {
 		display += " (@" + info.Username + ")"
 	}

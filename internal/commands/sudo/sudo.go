@@ -417,14 +417,14 @@ func sudoHelp(prefix string) string {
 		"• <code>" + p + "sudo chat del</code> / <code>chat ls</code>\n\n" +
 		"⚠️ 没设对话名单时，名单里的人在所有有你的对话里都能用。\n\n" +
 		"<b>能借出去的命令</b>\n" + command.Escape(delegableList(prefix)) + "\n" +
-		"其中改设置的子命令（如 ai config、tr set、speedtest set）只限本人；sum 只能借「总结当前群」，定时任务和配置都不行。\n\n" +
+		"其中改设置的子命令（如 ai config、tr set、speedtest set）只限本人；sum 只能借「摘要当前群组」，定时任务和配置都不行。\n\n" +
 		"<b>只限你本人</b>\n授权管理、删消息、改昵称或前缀别名、备份与日志、转存消息、重启更新、跨所有群的封禁、看主机信息。" +
 		"名单里的人发这些命令，账号只会回一句没有权限。"
 }
 
 func sureHelp(prefix string) string {
 	p := command.Escape(prefix)
-	return "✅ <b>sure：让别人触发指定的消息或命令</b>\n\n" +
+	return "🎯 <b>sure：让别人触发指定的消息或命令</b>\n\n" +
 		"比 sudo 窄：名单里的人发的消息要和规则对上，账号才会以你的身份发出去；规则可以重定向成别的命令。\n\n" +
 		"<b>用户和对话</b>\n" +
 		"• <code>" + p + "sure add</code> / <code>del</code> / <code>ls</code> 和 sudo 一样\n" +
@@ -464,7 +464,7 @@ func manageRules(ctx context.Context, inv *command.Invocation, saved *store.Stor
 		if len(current.Messages) == 0 {
 			return inv.Edit(ctx, "⚠️ 还没有消息规则，sure 不会生效。\n"+command.Code(inv.Prefix+"sure msg add _command:/sb")+" 添加一条")
 		}
-		lines := []string{"<b>消息规则</b>"}
+		lines := []string{"🎯 <b>消息规则</b>"}
 		for _, rule := range current.Messages {
 			line := command.Code(strconv.Itoa(rule.ID)) + " " + command.Code(rule.Msg)
 			if rule.Redirect != "" {

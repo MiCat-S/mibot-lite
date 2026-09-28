@@ -131,7 +131,7 @@ func Register(a *app.App) {
 		if found := findAddress(query); found != "" {
 			query = found
 		}
-		if err := inv.EditText(ctx, "🔍 正在查询 "+query+"…"); err != nil {
+		if err := inv.EditText(ctx, kit.Working("正在查询 "+query)); err != nil {
 			return err
 		}
 		response, err := httpx.Do(ctx, httpx.Request{URL: strings.Replace(ipAPI, "%s", url.PathEscape(query), 1), Timeout: 15 * time.Second, MaxBytes: 64 << 10})

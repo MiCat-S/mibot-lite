@@ -136,7 +136,7 @@ func Register(a *app.App) {
 		if !ok {
 			return kit.Fail("卡头至少要 6 位数字")
 		}
-		if err := inv.EditText(ctx, "🔍 正在查询卡头 "+bin+"…"); err != nil {
+		if err := inv.EditText(ctx, kit.Working("正在查询卡头 "+bin)); err != nil {
 			return err
 		}
 		response, err := httpx.Do(ctx, httpx.Request{URL: "https://lookup.binlist.net/" + bin,

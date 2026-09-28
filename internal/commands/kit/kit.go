@@ -37,7 +37,8 @@ func FailWith(text string, cause error) error { return command.FailWith(text, ca
 // IsUserError 取出错误里要给用户看的那句话，见 command.IsUserError。
 func IsUserError(err error) (string, bool) { return command.IsUserError(err) }
 
-// Feedback 按 MiBox 的 ui.renderFeedback 的样式生成一行状态。
+// Feedback 生成一行状态（STYLE.md 的第三层）：状态 emoji 加标题，标题不加粗；
+// detail 不为空时另起一行。state 是 success、error 或 working。
 func Feedback(state, title, detail string) string {
 	icon := "⏳"
 	switch state {
@@ -46,7 +47,7 @@ func Feedback(state, title, detail string) string {
 	case "error":
 		icon = "❌"
 	}
-	text := icon + " " + command.Bold(title)
+	text := icon + " " + command.Escape(title)
 	if detail != "" {
 		text += "\n" + command.Escape(detail)
 	}
@@ -89,6 +90,10 @@ func Warn(a *app.App, event string, err error) {
 		a.Logger.Warn(event, "error", err.Error())
 	}
 }
+
+// Working 是「⏳ 正在…」这样的进行中提示（纯文本，调用方用 EditText 发）。text 以「正在」开头，
+// 不用自己加省略号。
+func Working(text string) string { return "⏳ " + strings.TrimSuffix(text, "…") + "…" }
 
 // Usage 返回「用法：<前缀><用法>」这样给用户看的错误，前缀取用户实际用的那个，照抄就能用。
 func Usage(prefix, usage string) error { return command.Fail("用法：" + prefix + usage) }
@@ -207,11 +212,12 @@ func OrDefault(value, fallback string) string {
 	return value
 }
 
+// OnOffText 是开关状态的显示：开启或关闭（参数照旧收 on/off，显示用中文，见 STYLE.md）。
 func OnOffText(value bool) string {
 	if value {
-		return "on"
+		return "开启"
 	}
-	return "off"
+	return "关闭"
 }
 
 // FormatBytes 按 1024 进位写字节数，见 sysinfo.FormatBytes。

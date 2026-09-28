@@ -72,7 +72,7 @@ func logHeader(a *app.App, shown, held int, filter string) string {
 	lines = append(lines,
 		"",
 		"已脱敏：聊天与账号 ID 换成 #xxxx（同一个仍是同一个），消息内容、密钥、",
-		"URL 路径与 IP 地址已移除。进程重启后这里就空了，那种情况要看服务器日志。",
+		"URL 路径与 IP 地址已移除。进程重启后这里就空了，那种情况要看主机上的日志。",
 		strings.Repeat("-", 60),
 		"")
 	return strings.Join(lines, "\n")
@@ -99,7 +99,7 @@ func logHelp(prefix string) string {
 		p + "log debug on</code> 临时调到 debug 级别，<code>off</code> 调回来\n\n<b>脱敏</b>\n" +
 		"聊天与账号 ID 在写进内存时就换成了 #xxxx，同一个仍然是同一个，但看不出是谁；" +
 		"消息内容、密钥、URL 路径和 IP 地址直接丢弃。文件可以放心转发。\n\n" +
-		"日志只留在进程里，重启就没了。要看重启之前的，得上服务器翻 journalctl。"
+		"日志只留在进程里，重启就没了。要看重启之前的，得到主机上翻 journalctl。"
 }
 
 // setLogLevel 在运行中调高或调低日志级别。

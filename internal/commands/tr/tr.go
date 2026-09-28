@@ -130,7 +130,7 @@ func translateText(ctx context.Context, text, target string) (*translateResult, 
 		return nil, err
 	}
 	if response.Status == 429 {
-		return nil, kit.Fail("翻译服务暂时拒绝了请求（429），请稍后重试")
+		return nil, kit.Fail("翻译服务暂时拒绝了请求（429），稍后再试")
 	}
 	if !response.OK() {
 		return nil, kit.Failf("翻译服务返回 HTTP %d", response.Status)
@@ -265,6 +265,6 @@ func runTranslate(ctx context.Context, inv *command.Invocation, settings *store.
 	}
 	pages := command.EscapedPages(result.Text, command.PageLimit)
 	pages[0] = "🌐 <b>翻译</b>（" + command.Escape(source) + " → " + command.Escape(languageName(target)) +
-		"）\n\n<b>原文:</b>\n<code>" + command.Escape(preview) + suffix + "</code>\n\n<b>译文:</b>\n" + pages[0]
+		"）\n\n<b>原文</b>\n<code>" + command.Escape(preview) + suffix + "</code>\n\n<b>译文</b>\n" + pages[0]
 	return kit.SendPages(ctx, inv, pages)
 }

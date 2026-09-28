@@ -251,7 +251,7 @@ func clampFloat(value, low, high float64) float64 {
 // help 是 .eatgif 的帮助：用法，加上当前可用的全部动画。目录读不到时只给用法。
 func (s *eatgifService) help(prefix string) string {
 	p := command.Escape(prefix)
-	text := "🎬 <b>头像动图表情</b>\n\n回复一条消息（用户或频道发的都可以），把双方头像合成为动画贴纸。\n\n" +
+	text := "🎬 <b>头像动画贴纸</b>\n\n回复一条消息（用户或频道发的都可以），把双方头像合成为动画贴纸。\n\n" +
 		"• 回复一条消息发 <code>" + p + "eatgif 名称</code> 生成\n• <code>" + p +
 		"eatgif list</code> 列出全部可用动画\n• <code>" + p + "eatgif clear</code> 清空素材缓存\n\n"
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -265,7 +265,7 @@ func (s *eatgifService) help(prefix string) string {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	lines := []string{"<b>全部动画</b>（" + strconv.Itoa(len(names)) + " 款）"}
+	lines := []string{"🎬 <b>全部动画</b>（" + strconv.Itoa(len(names)) + " 款）"}
 	for _, name := range names {
 		lines = append(lines, "• "+command.Code(name)+" "+command.Escape(catalog[name].Desc))
 	}
@@ -298,7 +298,7 @@ func Register(a *app.App) {
 					names = append(names, name)
 				}
 				sort.Strings(names)
-				lines := []string{"<b>头像动图表情</b>", command.Code(inv.Prefix+"eatgif 名称") + "（需回复目标）", ""}
+				lines := []string{"🎬 <b>头像动画贴纸</b>", command.Code(inv.Prefix+"eatgif 名称") + "（需回复目标）", ""}
 				for _, name := range names {
 					lines = append(lines, "• "+command.Code(name)+" - "+command.Escape(catalog[name].Desc))
 				}
@@ -327,7 +327,7 @@ func Register(a *app.App) {
 			service.mu.Unlock()
 			defer func() { service.mu.Lock(); service.running = false; service.mu.Unlock() }()
 
-			if err := inv.EditText(ctx, "正在生成："+selected.Desc); err != nil {
+			if err := inv.EditText(ctx, kit.Working("正在生成「"+selected.Desc+"」")); err != nil {
 				return err
 			}
 			var spec eatgifSpec

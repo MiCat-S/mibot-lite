@@ -33,43 +33,43 @@ func Register(a *app.App) {
 				return kit.FailWith("Telegram 延迟测试失败", err)
 			}
 			editing := time.Now()
-			if err := inv.EditText(ctx, "Pong!"); err != nil {
+			if err := inv.EditText(ctx, "🏓 Pong"); err != nil {
 				return err
 			}
-			return inv.EditText(ctx, fmt.Sprintf("Pong!\nTelegram API: %d ms\n消息编辑: %d ms", elapsed.Milliseconds(), time.Since(editing).Milliseconds()))
+			return inv.Edit(ctx, fmt.Sprintf("🏓 <b>延迟</b>\nTelegram 接口：%d ms\n消息编辑：%d ms", elapsed.Milliseconds(), time.Since(editing).Milliseconds()))
 		}},
-		&command.Command{Name: "version", Aliases: []string{"ver"}, Group: command.GroupSystem, Description: "查看版本信息", Handle: func(ctx context.Context, inv *command.Invocation) error {
+		&command.Command{Name: "version", Aliases: []string{"ver"}, Group: command.GroupSystem, Description: "查看版本信息", Help: versionHelp, Handle: func(ctx context.Context, inv *command.Invocation) error {
 			return inv.Edit(ctx, versionText(a))
 		}},
-		&command.Command{Name: "memory", Group: command.GroupSystem, Description: "查看进程内存占用", Handle: func(ctx context.Context, inv *command.Invocation) error {
+		&command.Command{Name: "memory", Group: command.GroupSystem, Description: "查看进程内存占用", Help: memoryHelp, Handle: func(ctx context.Context, inv *command.Invocation) error {
 			return inv.Edit(ctx, memoryReport())
 		}},
 		&command.Command{Name: "status", Group: command.GroupSystem, Description: "查看运行状态卡片", Help: statusHelp, Handle: func(ctx context.Context, inv *command.Invocation) error {
 			return status(ctx, a, registry, inv)
 		}},
-		&command.Command{Name: "sysinfo", Group: command.GroupSystem, Description: "查看详细系统信息", Handle: func(ctx context.Context, inv *command.Invocation) error {
+		&command.Command{Name: "sysinfo", Group: command.GroupSystem, Description: "查看详细系统信息", Help: sysinfoHelp, Handle: func(ctx context.Context, inv *command.Invocation) error {
 			machine := sysinfo.ReadHost()
 			process := sysinfo.Read()
 			lines := []string{
-				"<b>系统信息</b>", "",
-				"主机: " + command.Code(machine.Hostname),
-				"系统: " + command.Code(machine.Platform),
-				"内核: " + command.Code(machine.KernelRelease),
-				"运行时间: " + command.Code(sysinfo.FormatUptime(machine.Uptime)),
-				"负载: " + command.Code(fmt.Sprintf("%.2f / %.2f / %.2f", machine.LoadAverage[0], machine.LoadAverage[1], machine.LoadAverage[2])),
-				"CPU: " + command.Code(fmt.Sprintf("%d 核", machine.CPUs)),
-				"系统内存: " + command.Code(fmt.Sprintf("%.2f / %.2f MB", sysinfo.Megabytes(machine.TotalMemory-machine.FreeMemory), sysinfo.Megabytes(machine.TotalMemory))),
+				"🖥 <b>系统信息</b>", "",
+				"主机：" + command.Code(machine.Hostname),
+				"系统：" + command.Code(machine.Platform),
+				"内核：" + command.Code(machine.KernelRelease),
+				"运行时间：" + command.Code(sysinfo.FormatUptime(machine.Uptime)),
+				"负载：" + command.Code(fmt.Sprintf("%.2f / %.2f / %.2f", machine.LoadAverage[0], machine.LoadAverage[1], machine.LoadAverage[2])),
+				"CPU：" + command.Code(fmt.Sprintf("%d 核", machine.CPUs)),
+				"系统内存：" + command.Code(fmt.Sprintf("%.2f / %.2f MB", sysinfo.Megabytes(machine.TotalMemory-machine.FreeMemory), sysinfo.Megabytes(machine.TotalMemory))),
 				"",
 				"<b>MiBot Lite 进程</b>",
-				"Go: " + command.Code(runtime.Version()),
-				"PID: " + command.Code(fmt.Sprint(os.Getpid())),
-				"RSS: " + command.Code(fmt.Sprintf("%.2f MB", sysinfo.Megabytes(process.RSS))),
-				"Heap: " + command.Code(fmt.Sprintf("%.2f / %.2f MB", sysinfo.Megabytes(process.HeapAlloc), sysinfo.Megabytes(process.HeapSys))),
-				"Sys: " + command.Code(fmt.Sprintf("%.2f MB", sysinfo.Megabytes(process.Sys))),
+				"Go：" + command.Code(runtime.Version()),
+				"PID：" + command.Code(fmt.Sprint(os.Getpid())),
+				"RSS：" + command.Code(fmt.Sprintf("%.2f MB", sysinfo.Megabytes(process.RSS))),
+				"Heap：" + command.Code(fmt.Sprintf("%.2f / %.2f MB", sysinfo.Megabytes(process.HeapAlloc), sysinfo.Megabytes(process.HeapSys))),
+				"Sys：" + command.Code(fmt.Sprintf("%.2f MB", sysinfo.Megabytes(process.Sys))),
 			}
 			return inv.Edit(ctx, strings.Join(lines, "\n"))
 		}},
-		&command.Command{Name: "help", Aliases: []string{"h"}, Group: command.GroupSystem, Description: "查看命令列表或说明", Usage: "[命令]", Handle: func(ctx context.Context, inv *command.Invocation) error {
+		&command.Command{Name: "help", Aliases: []string{"h"}, Group: command.GroupSystem, Description: "查看命令列表或说明", Usage: "[命令]", Help: helpHelp, Handle: func(ctx context.Context, inv *command.Invocation) error {
 			if name := inv.Arg(0); name != "" {
 				return inv.Edit(ctx, renderCommandHelp(registry, inv.Prefix, name))
 			}
@@ -80,26 +80,26 @@ func Register(a *app.App) {
 
 func versionText(a *app.App) string {
 	return strings.Join([]string{
-		"<b>MiBot Lite 版本</b>", "",
-		"MiBot Lite: " + command.Code(kit.Version(a)),
-		"Go: " + command.Code(runtime.Version()),
-		"平台: " + command.Code(runtime.GOOS+" "+runtime.GOARCH),
-		"PID: " + command.Code(fmt.Sprint(os.Getpid())),
+		"🔖 <b>版本信息</b>", "",
+		"MiBot Lite：" + command.Code(kit.Version(a)),
+		"Go：" + command.Code(runtime.Version()),
+		"平台：" + command.Code(runtime.GOOS+" "+runtime.GOARCH),
+		"PID：" + command.Code(fmt.Sprint(os.Getpid())),
 	}, "\n")
 }
 
 func memoryReport() string {
 	current := sysinfo.Read()
-	lines := []string{"<b>内存状态</b>", ""}
+	lines := []string{"🧠 <b>内存状态</b>", ""}
 	if current.RSS > 0 {
-		lines = append(lines, "RSS（进程总占用）: "+command.Code(fmt.Sprintf("%.2f MB", sysinfo.Megabytes(current.RSS))))
+		lines = append(lines, "RSS（进程总占用）："+command.Code(fmt.Sprintf("%.2f MB", sysinfo.Megabytes(current.RSS))))
 	} else {
-		lines = append(lines, "RSS（进程总占用）: "+command.Code("不可用"))
+		lines = append(lines, "RSS（进程总占用）："+command.Code("不可用"))
 	}
 	lines = append(lines,
-		"Heap（Go 已用 / 预留）: "+command.Code(fmt.Sprintf("%.2f / %.2f MB", sysinfo.Megabytes(current.HeapAlloc), sysinfo.Megabytes(current.HeapSys))),
-		"Sys（运行时预留）: "+command.Code(fmt.Sprintf("%.2f MB", sysinfo.Megabytes(current.Sys))),
-		"Goroutine: "+command.Code(fmt.Sprint(current.Goroutines)),
+		"Heap（Go 已用 / 预留）："+command.Code(fmt.Sprintf("%.2f / %.2f MB", sysinfo.Megabytes(current.HeapAlloc), sysinfo.Megabytes(current.HeapSys))),
+		"Sys（运行时预留）："+command.Code(fmt.Sprintf("%.2f MB", sysinfo.Megabytes(current.Sys))),
+		"Goroutine："+command.Code(fmt.Sprint(current.Goroutines)),
 	)
 	return strings.Join(lines, "\n")
 }
@@ -193,4 +193,22 @@ func probe(ctx context.Context, target string) string {
 func statusHelp(prefix string) string {
 	return "📊 <b>运行状态</b>\n\n<code>" + command.Escape(prefix) + "status</code> 发一张状态卡片：健康状态、在线时长，" +
 		"CPU、内存、磁盘、Swap 的占用；卡片下面附进程和主机的文字说明。CPU 要采样约 160 毫秒。"
+}
+
+func versionHelp(prefix string) string {
+	return "🔖 <b>版本信息</b>\n\n" + command.Code(prefix+"version") + "（简写 " + command.Code(prefix+"ver") + "）显示 MiBot Lite 和 Go 的版本、平台和进程号。"
+}
+
+func memoryHelp(prefix string) string {
+	return "🧠 <b>内存状态</b>\n\n" + command.Code(prefix+"memory") + " 显示本进程的 RSS、Go 堆、运行时预留的内存和 goroutine 数。"
+}
+
+func sysinfoHelp(prefix string) string {
+	return "🖥 <b>系统信息</b>\n\n" + command.Code(prefix+"sysinfo") + " 显示主机名、系统、内核、在线时长、负载、CPU 和内存，以及本进程的版本和内存。" +
+		"里面有主机名，只限本人使用；借给别人的是 " + command.Code(prefix+"status") + "。"
+}
+
+func helpHelp(prefix string) string {
+	return "📖 <b>命令帮助</b>\n\n• " + command.Code(prefix+"help") + " 按分组列出全部命令\n• " + command.Code(prefix+"help 命令") +
+		" 看一条命令的用法和说明，命令可以带前缀、写简写或别名\n• " + command.Code("命令 --help") + " 同上，只显示帮助、不执行"
 }

@@ -597,7 +597,7 @@ func (s *sumService) summarize(ctx context.Context, client *bot.Client, job sumJ
 		return "", err
 	}
 	if len(rows) == 0 {
-		return "", kit.Fail("未找到可总结的消息")
+		return "", kit.Fail("没有可以摘要的消息")
 	}
 	prompt := job.prompt
 	if prompt == "" {
@@ -617,7 +617,7 @@ func (s *sumService) summarize(ctx context.Context, client *bot.Client, job sumJ
 	if job.spoiler && !strings.Contains(output, "<blockquote expandable>") {
 		output = "<blockquote expandable>" + output + "</blockquote>"
 	}
-	return "📊 <b>群组总结</b>\n" + command.Escape(title) + " · " + time.Now().Format("2006-01-02 15:04") + "\n\n" + output, nil
+	return "🧾 <b>群组消息摘要</b>\n" + command.Escape(title) + " · " + time.Now().Format("2006-01-02 15:04") + "\n\n" + output, nil
 }
 
 // pushTarget 是任务的推送目标：任务自己的，否则默认推送目标，都没有就是收藏夹。
@@ -656,12 +656,12 @@ func (s *sumService) push(ctx context.Context, client *bot.Client, task sumTask)
 func sumHelp(prefix string) string {
 	p := command.Escape(prefix)
 	code := func(args string) string { return "<code>" + p + "sum" + command.Escape(args) + "</code>" }
-	return "<b>群消息总结</b>\n\n• " + code("") + " - 总结当前群最近 100 条消息\n• " + code(" 200") + " - 指定消息数量，范围 10-500\n• " + code(" 100 --provider 名称") + " - 临时选择 AI 配置（sum 的配置名或 ai 的标签）\n\n" +
-		"<b>定时总结</b>\n• " + code(" add here 2h 100") + " - 定时总结当前群，推送到默认目标（默认收藏夹）\n• " + code(" add @群组 \"0 9,21 * * *\" --time 12 --provider 名称 --spoiler 备注") + "\n" +
+	return "🧾 <b>群组消息摘要</b>\n\n• " + code("") + " 摘要当前群组最近 100 条消息\n• " + code(" 200") + " 指定消息数量，范围 10–500\n• " + code(" 100 --provider 名称") + " 临时选择 AI 配置（sum 的配置名或 ai 的标签）\n\n" +
+		"<b>定时摘要</b>\n• " + code(" add here 2h 100") + " 定时摘要当前群组，推送到默认目标（默认收藏夹）\n• " + code(" add @群组 \"0 9,21 * * *\" --time 12 --provider 名称 --spoiler 备注") + "\n" +
 		"  群组可以是 here、数字 ID、@用户名、t.me 链接或邀请链接；间隔为 30m、2h、1d，或五、六字段 Cron（六字段第一位是秒）\n" +
 		"• " + code(" list") + " / " + code(" run ID") + " / " + code(" del ID") + " / " + code(" disable ID") + " / " + code(" enable ID") + "\n" +
 		"• " + code(" edit ID spoiler on|off") + " / " + code(" edit ID provider [名称]") + " / " + code(" edit ID prompt [内容]") + "\n" +
-		"• " + code(" reorder") + " - 按当前顺序重新编号\n• " + code(" debug [数量]") + " - 预览发给 AI 的文本\n\n" +
+		"• " + code(" reorder") + " 按当前顺序重新编号\n• " + code(" debug [数量]") + " 预览发给 AI 的文本\n\n" +
 		"<b>AI 配置</b>\n• " + code(" config list") + "\n• " + code(" config add 名称 BaseURL API_KEY 模型 [auto|chat|responses|gemini|anthropic]") + "\n• " + code(" config set default 名称") + "\n• " +
 		code(" config set 名称 model|url|key|type 值") + "\n• " + code(" config set preview|spoiler|reply on|off") + "\n• " + code(" config set push 目标") + "\n• " + code(" config set timeout 秒数") + " / " + code(" config set maxoutput 字符数") + "\n• " +
 		code(" config set reasoning|service 值") + "\n• " + code(" config set prompt 内容|reset|show") + "\n• " + code(" config del 名称") + "\n\n没有 sum 自己的 AI 配置时，使用 ai 命令的聊天模型。"
@@ -689,7 +689,7 @@ func Register(a *app.App) {
 		<-ctx.Done()
 		service.cron.Stop()
 	})
-	a.Registry.Register(&command.Command{Name: "sum", Group: command.GroupAI, Description: "生成群组消息摘要", Usage: "[数量]", Help: sumHelp, Timeout: 10 * time.Minute,
+	a.Registry.Register(&command.Command{Name: "sum", Group: command.GroupAI, Description: "生成群组消息摘要", Usage: "[消息数]", Help: sumHelp, Timeout: 10 * time.Minute,
 		Handle: func(ctx context.Context, inv *command.Invocation) error {
 			return kit.FailWith("摘要失败", service.handle(ctx, inv))
 		}})
@@ -735,7 +735,7 @@ func (s *sumService) instant(ctx context.Context, inv *command.Invocation, sub s
 			provider = inv.Args[index+1]
 		}
 	}
-	if err := inv.EditText(ctx, "📝 正在生成群聊摘要..."); err != nil {
+	if err := inv.EditText(ctx, kit.Working("正在生成群组消息摘要")); err != nil {
 		return err
 	}
 	db, err := s.read()
@@ -774,7 +774,7 @@ func (s *sumService) debug(ctx context.Context, inv *command.Invocation) error {
 	if value, err := strconv.Atoi(inv.Arg(1)); err == nil && value > 0 {
 		count = kit.Clamp(value, 1, 500)
 	}
-	if err := inv.EditText(ctx, "⏳ 正在获取消息..."); err != nil {
+	if err := inv.EditText(ctx, kit.Working("正在读取消息")); err != nil {
 		return err
 	}
 	rows, _, err := s.readMessages(ctx, inv.Client, inv.Message.ChatID, inv.Message.ID, count, 0)
@@ -786,7 +786,7 @@ func (s *sumService) debug(ctx context.Context, inv *command.Invocation) error {
 	}
 	preview := sumFormatMessages(rows)
 	if runes := []rune(preview); len(runes) > 2000 {
-		preview = "...(前面省略)...\n\n" + string(runes[len(runes)-2000:])
+		preview = "…（前面省略）…\n\n" + string(runes[len(runes)-2000:])
 	}
 	return kit.SendPages(ctx, inv, command.HTMLPages("📋 发送给 AI 的文本预览（最后2000字符）：\n\n"+command.Code(preview), command.PageLimit))
 }

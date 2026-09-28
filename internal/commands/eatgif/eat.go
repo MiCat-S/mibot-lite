@@ -340,7 +340,7 @@ func eatCatalogLines(catalog map[string]eatEntry) []string {
 const eatLegend = "👥 同时用对方和你的头像　🙋 只用你的头像　其余只用对方的"
 
 func eatList(catalog map[string]eatEntry, prefix, name string) string {
-	lines := []string{"<b>头像表情包</b>（" + strconv.Itoa(len(catalog)) + " 款）",
+	lines := []string{"😋 <b>头像表情贴纸</b>（" + strconv.Itoa(len(catalog)) + " 款）",
 		"回复一条消息发 " + command.Code(prefix+name+" 名称") + "，不写名称随机挑一款", eatLegend, ""}
 	return strings.Join(append(lines, eatCatalogLines(catalog)...), "\n")
 }
@@ -348,7 +348,7 @@ func eatList(catalog map[string]eatEntry, prefix, name string) string {
 // help 是 .eat 的帮助：用法，加上当前素材目录里的全部款式。目录读不到时只给用法。
 func (s *eatService) help(prefix string) string {
 	p := command.Escape(prefix)
-	text := "😋 <b>头像表情包</b>\n\n把头像合成到表情图里，发成贴纸。\n\n" +
+	text := "😋 <b>头像表情贴纸</b>\n\n把头像合成到表情图里，发成贴纸。\n\n" +
 		"<b>用法</b>\n" +
 		"• 回复一条消息发 <code>" + p + "eat 名称</code>，用对方的头像生成，比如 <code>" + p + "eat bc</code>；不写名称随机挑一款\n" +
 		"• <code>" + p + "eat2 名称</code> 同上，但用被回复的图片或贴纸代替头像\n" +
@@ -361,7 +361,7 @@ func (s *eatService) help(prefix string) string {
 	if err != nil {
 		return text + "素材目录暂时读不到（" + command.Escape(httpx.Reason(err)) + "），稍后发 <code>" + p + "eat</code> 查看全部款式。"
 	}
-	lines := []string{"<b>全部款式</b>（" + strconv.Itoa(len(catalog)) + " 款）", eatLegend}
+	lines := []string{"😋 <b>全部款式</b>（" + strconv.Itoa(len(catalog)) + " 款）", eatLegend}
 	lines = append(lines, eatCatalogLines(catalog)...)
 	return text + strings.Join(lines, "\n") + "\n\n素材来自 TeleBox 插件仓库，首次使用时下载并缓存，需要主机装有 ffmpeg。"
 }
@@ -413,7 +413,7 @@ func registerEat(a *app.App) {
 			if !ok {
 				return kit.Failf("找不到 %s，不回复消息发 %s%s 看全部款式", key, inv.Prefix, name)
 			}
-			if err := inv.EditText(ctx, "正在生成「"+entry.Name+"」…"); err != nil {
+			if err := inv.EditText(ctx, kit.Working("正在生成「"+entry.Name+"」")); err != nil {
 				return err
 			}
 			result, err := service.render(ctx, inv, reply, root, entry, fromImage)
@@ -497,7 +497,7 @@ func (s *eatService) set(ctx context.Context, inv *command.Invocation, name, lin
 			return err
 		}
 	}
-	if err := inv.EditText(ctx, "正在重新下载素材目录…"); err != nil {
+	if err := inv.EditText(ctx, kit.Working("正在重新下载素材目录")); err != nil {
 		return err
 	}
 	catalog, _, err := s.load(ctx, true)

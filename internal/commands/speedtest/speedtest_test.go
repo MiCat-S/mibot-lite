@@ -137,7 +137,7 @@ func TestFailureDetailReadsBothStreams(t *testing.T) {
 // 所以把它们的翻译和要不要重试固定下来。
 func TestExplainCLI(t *testing.T) {
 	for detail, want := range map[string]string{
-		"Configuration - Could not retrieve or read configuration (ConfigurationError)": "过一阵再试",
+		"Configuration - Could not retrieve or read configuration (ConfigurationError)": "稍后再试",
 		"Limit reached: Speedtest CLI. Too many requests received.":                     "限流",
 		"Error: [0] Cannot read from socket: ":                                          "换一个 ID",
 		"Cannot write:":                                                                 "断开了连接",

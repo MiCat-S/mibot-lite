@@ -331,7 +331,7 @@ func (s *sumService) add(ctx context.Context, inv *command.Invocation) error {
 		return err
 	}
 	if target == "" || interval == "" || options.count < 10 || options.count > 500 {
-		return kit.Fail("用法：sum add here|群组 2h 100")
+		return kit.Usage(inv.Prefix, "sum add here|群组 2h 100")
 	}
 	spec, err := sumIntervalCron(interval)
 	if err != nil {
@@ -467,7 +467,7 @@ func (s *sumService) fire(id string) {
 				// 会显示在 .sum list 里：给用户看的错误照原话，其余只记概括，不带 URL。
 				db.Tasks[index].LastError = command.Brief(err)
 			} else {
-				db.Tasks[index].LastResult, db.Tasks[index].LastError = "总结完成，已推送到 "+target, ""
+				db.Tasks[index].LastResult, db.Tasks[index].LastError = "摘要完成，已推送到 "+target, ""
 			}
 		}
 		return nil
@@ -502,7 +502,7 @@ func (s *sumService) list(ctx context.Context, inv *command.Invocation) error {
 		return err
 	}
 	if len(db.Tasks) == 0 {
-		return inv.Edit(ctx, "<b>摘要任务</b>\n暂无定时任务")
+		return inv.Edit(ctx, "🧾 <b>摘要任务</b>\n还没有定时任务")
 	}
 	tasks := append([]sumTask(nil), db.Tasks...)
 	sort.SliceStable(tasks, func(a, b int) bool {
@@ -511,7 +511,7 @@ func (s *sumService) list(ctx context.Context, inv *command.Invocation) error {
 		return left < right
 	})
 	now := time.Now()
-	blocks := []string{"📋 <b>摘要任务</b>"}
+	blocks := []string{"🧾 <b>摘要任务</b>"}
 	for _, task := range tasks {
 		lines := []string{command.Code(task.ID) + " • " + command.Escape(kit.OrDefault(task.Remark, kit.OrDefault(task.ChatDisplay, task.ChatID)))}
 		lines = append(lines, "群组："+command.Escape(kit.OrDefault(task.ChatDisplay, task.ChatID)), "间隔："+command.Code(task.Interval))
@@ -576,12 +576,12 @@ func (s *sumService) runNow(ctx context.Context, inv *command.Invocation) error 
 	}
 	if s.running[task.ID] {
 		s.mu.Unlock()
-		return kit.Fail("该任务正在执行，请稍后再试")
+		return kit.Fail("该任务正在执行，稍后再试")
 	}
 	s.running[task.ID] = true
 	s.mu.Unlock()
 	defer func() { s.mu.Lock(); delete(s.running, task.ID); s.mu.Unlock() }()
-	if err := inv.EditText(ctx, "📝 正在生成摘要..."); err != nil {
+	if err := inv.EditText(ctx, kit.Working("正在生成摘要")); err != nil {
 		return err
 	}
 	if err := s.push(ctx, inv.Client, task); err != nil {
@@ -634,7 +634,7 @@ func (s *sumService) toggle(ctx context.Context, inv *command.Invocation, sub st
 func (s *sumService) edit(ctx context.Context, inv *command.Invocation) error {
 	id, property, value := inv.Arg(1), strings.ToLower(inv.Arg(2)), inv.Rest(3)
 	if id == "" || property == "" {
-		return kit.Fail("用法：sum edit ID spoiler on|off | provider [名称] | prompt [内容]")
+		return kit.Usage(inv.Prefix, "sum edit 任务 ID spoiler on|off、provider [名称] 或 prompt [内容]")
 	}
 	db, err := s.read()
 	if err != nil {

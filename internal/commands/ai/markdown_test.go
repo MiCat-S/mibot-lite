@@ -91,16 +91,16 @@ func TestHTMLPages(t *testing.T) {
 // TestAnswerPages 检查 Q/A 版式、折叠、续页标签和署名。
 func TestAnswerPages(t *testing.T) {
 	pages := answerPages("问<题>", "<b>答</b>", "main", true)
-	want := "Q:\n<blockquote expandable>问&lt;题&gt;</blockquote>\nA:\n<blockquote expandable><b>答</b></blockquote>\n<i>🍀Powered by main</i>"
+	want := "问：\n<blockquote expandable>问&lt;题&gt;</blockquote>\n答：\n<blockquote expandable><b>答</b></blockquote>\n<i>🍀 由 main 生成</i>"
 	if len(pages) != 1 || pages[0] != want {
 		t.Fatalf("got %q", pages)
 	}
 	plain := answerPages("q", "a", "", false)
-	if plain[0] != "Q:\nq\n\nA:\na" {
+	if plain[0] != "问：\nq\n\n答：\na" {
 		t.Fatalf("不折叠时的版式不对：%q", plain)
 	}
 	long := answerPages("q", strings.Repeat("长\n", 3000), "t", true)
-	if len(long) < 2 || !strings.HasPrefix(long[1], "📋 <b>续 (1/") || !strings.HasSuffix(long[len(long)-1], "Powered by t</i>") {
+	if len(long) < 2 || !strings.HasPrefix(long[1], "<b>续（1/") || !strings.HasSuffix(long[len(long)-1], "由 t 生成</i>") {
 		t.Fatalf("续页标签或署名不对：%d 页，%q", len(long), long[len(long)-1])
 	}
 	for _, page := range long {

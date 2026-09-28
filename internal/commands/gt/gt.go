@@ -19,7 +19,7 @@ var leadingToken = regexp.MustCompile(`^\S+\s*`)
 func Register(a *app.App) {
 	help := func(prefix string) string {
 		p := command.Escape(prefix)
-		return "📘 <b>AI 翻译</b>\n\n• <code>" + p + "gt 文本</code> - 翻译为简体中文\n• <code>" + p + "gt en 文本</code> - 翻译为英文\n• 回复消息后使用 <code>" + p + "gt</code> 或 <code>" + p +
+		return "📘 <b>AI 翻译</b>\n\n• <code>" + p + "gt 文本</code> 翻译为简体中文\n• <code>" + p + "gt en 文本</code> 翻译为英文\n• 回复消息后使用 <code>" + p + "gt</code> 或 <code>" + p +
 			"gt en</code>\n\n使用 ai 的当前聊天 API、模型及超时设置，请先用 <code>" + p + "ai config add</code> 和 <code>" + p + "ai model chat</code> 配置。单次最多 5000 字符，长译文自动分段发送。"
 	}
 	a.Registry.Register(&command.Command{Name: "gt", Group: command.GroupTools, Description: "用 AI 翻译文本", Usage: "[en] 文本", Help: help, Timeout: 15 * time.Minute,
@@ -52,7 +52,7 @@ func Register(a *app.App) {
 			if !ai.Available() {
 				return kit.Fail("AI 组件不可用")
 			}
-			if err := inv.Edit(ctx, "🔄 <b>AI 翻译中...</b>"); err != nil {
+			if err := inv.EditText(ctx, kit.Working("正在翻译")); err != nil {
 				return err
 			}
 			translated, err := ai.Translate(ctx, text, target)
@@ -65,14 +65,14 @@ func Register(a *app.App) {
 			preview := kit.TruncateRunes(text, 50)
 			suffix := ""
 			if len([]rune(text)) > 50 {
-				suffix = "..."
+				suffix = "…"
 			}
 			language := "中文"
 			if target == "en" {
 				language = "英文"
 			}
 			pages := command.EscapedPages(translated, command.PageLimit)
-			pages[0] = "🌐 <b>AI 翻译结果</b> (→ " + language + ")\n\n<b>原文:</b>\n<code>" + command.Escape(preview) + suffix + "</code>\n\n<b>译文:</b>\n" + pages[0]
+			pages[0] = "📘 <b>AI 翻译结果</b>（→ " + language + "）\n\n<b>原文</b>\n<code>" + command.Escape(preview) + suffix + "</code>\n\n<b>译文</b>\n" + pages[0]
 			return kit.SendPages(ctx, inv, pages)
 		}})
 }

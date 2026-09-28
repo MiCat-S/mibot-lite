@@ -350,7 +350,7 @@ func statusOf(err error) int {
 // 其中出现的 API Key 换成 ***。429 与 MiBox 一样只提示稍后重试。
 func HTTPFailure(status int, body []byte, secret string) string {
 	if status == 429 {
-		return "请求过于频繁，请稍后重试"
+		return "请求过于频繁，稍后再试"
 	}
 	detail := ErrorDetail(body, secret)
 	if detail == "" {

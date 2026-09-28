@@ -253,7 +253,7 @@ func Register(a *app.App) {
 					return kit.Fail("包名只能用字母、数字和下划线，字母开头")
 				}
 			}
-			if err := inv.EditText(ctx, "⏳ 正在收藏…"); err != nil {
+			if err := inv.EditText(ctx, kit.Working("正在收藏")); err != nil {
 				return err
 			}
 			name, created, err := save(ctx, inv.Client, inv.Prefix, target, sticker)
@@ -315,5 +315,5 @@ func configure(ctx context.Context, inv *command.Invocation, saved *store.Store[
 	if present {
 		note = "，要是这个包不是你建的，收藏时会失败"
 	}
-	return inv.Edit(ctx, "✅ 默认贴纸包设为 "+command.Code(argument)+note)
+	return inv.Edit(ctx, "✅ 默认贴纸包已设为 "+command.Code(argument)+note)
 }

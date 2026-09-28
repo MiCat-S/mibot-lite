@@ -220,6 +220,9 @@ MIBOT_EATGIF_ASSETS=/path/to/eatgif go test ./internal/imaging/ -run RealAnimati
 まとめて置いてあるコマンド：`aban` はグループ管理コマンドすべて、`ids` は `.dc` を含み、`sudo` は `.sure` を含み、
 `eatgif` は `.eat` を含みます。`.t` は `tts` にあり、`.status` などの基本コマンドは `core` にあります。
 
+コマンドがチャットに返す文言（見出し、失敗メッセージ、使い方、用語、句読点）は [STYLE.md](STYLE.md)（中国語）に従います。
+機械的に確認できる部分は `TestCommandTextStyle` がチェックします。
+
 コマンドを追加するには、`internal/commands/xxx/` ディレクトリを作って `Register(a *app.App)` を書き、その中で
 `a.Registry.Register(&command.Command{...})` を呼び、`internal/commands/register.go` の `RegisterAll` に登録します。
 他の人に貸し出せるようにするには、`internal/commands/sudo/sudo.go` のホワイトリストへの追加も必要です。

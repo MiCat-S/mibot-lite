@@ -239,7 +239,7 @@ func help(prefix string) string {
 		"• <code>" + p + "t song 歌名 歌手 文本</code> 做成带封面的 MP3，专辑名是当前角色\n" +
 		"• <code>" + p + "t fm 封面链接</code> 给当前角色设封面\n" +
 		"• <code>" + p + "ts [页码]</code> 看角色列表，<code>" + p + "ts 角色名</code> 切换，" +
-		"<code>" + p + "ts 角色名 模型ID</code> 新增并切换\n" +
+		"<code>" + p + "ts 角色名 模型 ID</code> 新增并切换\n" +
 		"• <code>" + p + "tk API密钥</code> 设 API Key（发出后命令消息会被改掉，密钥不留在聊天里）\n" +
 		"• <code>" + p + "t model [名称]</code> 看或设 fish.audio 的模型，如 s1、s2-pro、s2.1-pro；" +
 		"<code>" + p + "t model default</code> 交给接口决定\n\n" +
@@ -375,14 +375,14 @@ func (s *service) roles(ctx context.Context, inv *command.Invocation) error {
 			lines = append(lines, strconv.Itoa(index+1)+". "+command.Escape(names[index]))
 		}
 		lines = append(lines, "", command.Code(inv.Prefix+"ts 角色名")+" 切换 · "+
-			command.Code(inv.Prefix+"ts 角色名 模型ID")+" 新增 · "+command.Code(inv.Prefix+"ts 2")+" 下一页")
+			command.Code(inv.Prefix+"ts 角色名 模型 ID")+" 新增 · "+command.Code(inv.Prefix+"ts 2")+" 下一页")
 		return inv.Edit(ctx, strings.Join(lines, "\n"))
 	}
 	name, id := inv.Arg(0), inv.Arg(1)
 	if id == "" {
 		known, ok := config.roles()[name]
 		if !ok {
-			return kit.Failf("没有这个角色：%s。新增用 %sts 角色名 模型ID", name, inv.Prefix)
+			return kit.Failf("没有这个角色：%s。新增用 %sts 角色名 模型 ID", name, inv.Prefix)
 		}
 		id = known
 	} else if !voiceIDPattern.MatchString(id) {
@@ -409,7 +409,7 @@ func (s *service) roles(ctx context.Context, inv *command.Invocation) error {
 	if added {
 		return inv.Edit(ctx, "✅ 已新增角色 "+command.Escape(name)+" 并切换过去（"+command.Code(id)+"）")
 	}
-	return inv.Edit(ctx, "✅ 当前角色："+command.Escape(name))
+	return inv.Edit(ctx, "✅ 已切换到角色 "+command.Escape(name))
 }
 
 // key 是 .tk：设 API Key。命令消息立刻改掉，密钥不留在聊天记录里。
@@ -418,7 +418,7 @@ func (s *service) key(ctx context.Context, inv *command.Invocation) error {
 	if value == "" {
 		return kit.Usage(inv.Prefix, "tk API Key（在 https://fish.audio/ 申请）")
 	}
-	if err := inv.EditText(ctx, "⏳ 正在保存…"); err != nil {
+	if err := inv.EditText(ctx, kit.Working("正在保存")); err != nil {
 		return err
 	}
 	self := s.self(inv)
@@ -436,7 +436,7 @@ func (s *service) key(ctx context.Context, inv *command.Invocation) error {
 	}); err != nil {
 		return err
 	}
-	return inv.EditText(ctx, "✅ API Key 已保存")
+	return inv.EditText(ctx, "✅ 已保存 API Key")
 }
 
 func (s *service) setCover(ctx context.Context, inv *command.Invocation, link string) error {
@@ -481,7 +481,7 @@ func (s *service) model(ctx context.Context, inv *command.Invocation, name strin
 		return err
 	}
 	if name == "" {
-		return inv.EditText(ctx, "✅ 模型交给接口决定")
+		return inv.EditText(ctx, "✅ 模型已改为由接口决定")
 	}
-	return inv.Edit(ctx, "✅ 模型设为 "+command.Code(name))
+	return inv.Edit(ctx, "✅ 模型已设为 "+command.Code(name))
 }

@@ -92,7 +92,7 @@ func (s *sumService) configList(ctx context.Context, inv *command.Invocation, db
 	}
 	settings := "\n默认推送：" + command.Code(kit.OrDefault(db.DefaultPushTarget, "me")) +
 		"\n超时：" + strconv.Itoa(int(sumTimeout(db).Seconds())) + " 秒 · 输出上限：" + limit + " · 回复模式：" + kit.OnOffText(db.AIConfig.ReplyMode)
-	return inv.Edit(ctx, "<b>摘要 AI 配置</b>\n"+body+"\n\n提示词："+promptState+"\n链接预览："+kit.OnOffText(db.AIConfig.LinkPreview)+settings)
+	return inv.Edit(ctx, "🧾 <b>摘要 AI 配置</b>\n"+body+"\n\n提示词："+promptState+"\n链接预览："+kit.OnOffText(db.AIConfig.LinkPreview)+settings)
 }
 
 // configAdd 添加一个服务商：名称 BaseURL API_KEY 模型 [类型]。第一个添加的自动成为默认。
@@ -112,7 +112,7 @@ func (s *sumService) configAdd(inv *command.Invocation, name, base string, rest 
 		kind = strings.ToLower(rest[2])
 	}
 	if name == "" || base == "" || key == "" || model == "" {
-		return kit.Fail("用法：sum config add 名称 BaseURL API_KEY 模型 [type]")
+		return kit.Usage(inv.Prefix, "sum config add 名称 BaseURL API Key 模型 [类型]")
 	}
 	if parsed, err := url.Parse(base); err != nil || parsed.Host == "" {
 		return kit.Fail("BaseURL 无效")
@@ -237,7 +237,7 @@ func (s *sumService) configPrompt(ctx context.Context, inv *command.Invocation, 
 		if prompt == "" {
 			prompt = sumDefaultPrompt
 		}
-		return true, inv.Edit(ctx, "<b>当前摘要提示词</b>\n\n"+command.Code(prompt))
+		return true, inv.Edit(ctx, "🧾 <b>当前摘要提示词</b>\n\n"+command.Code(prompt))
 	}
 	prompt := strings.TrimSpace(strings.Join(append([]string{property}, rest...), " "))
 	if property == "reset" {
@@ -253,7 +253,7 @@ func (s *sumService) configPrompt(ctx context.Context, inv *command.Invocation, 
 func (s *sumService) configProvider(inv *command.Invocation, db sumDB, name, property, value string) error {
 	provider, ok := db.AIConfig.Providers[name]
 	if !ok || !slices.Contains([]string{"model", "url", "key", "type"}, property) || value == "" {
-		return kit.Fail("用法：sum config set 名称 model|url|key|type 值")
+		return kit.Usage(inv.Prefix, "sum config set 名称 model|url|key|type 值")
 	}
 	if property == "key" && !inv.Message.Saved {
 		return kit.Fail("涉及 API Key 的配置命令只能在收藏夹使用")

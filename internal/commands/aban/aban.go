@@ -261,7 +261,7 @@ func applyRights(ctx context.Context, client *bot.Client, chat tg.InputPeerClass
 	}
 	group, ok := chat.(*tg.InputPeerChat)
 	if !ok {
-		return kit.Fail("该会话不支持此操作")
+		return kit.Fail("这个对话不支持这个操作")
 	}
 	if !remove {
 		return kit.Fail("基本群不支持禁言与解封")
@@ -465,9 +465,10 @@ func (s *abanService) failTarget(ctx context.Context, inv *command.Invocation, e
 
 func abanHelp(prefix string) string {
 	p := command.Escape(prefix)
-	return "<b>封禁管理</b>\n<code>" + p + "kick</code> 踢出 · <code>" + p + "ban</code> 封禁并清理消息\n<code>" + p + "unban</code> 解封 · <code>" + p + "unmute</code> 解除禁言\n<code>" + p +
-		"mute [目标] [时长]</code> 禁言，时长如 60s / 5m / 1h / 1d；省略为永久\n<code>" + p + "sb [目标]</code> 在所有有管理权的群/频道封禁，并清理当前群消息\n<code>" + p + "unsb [目标]</code> 批量解封\n<code>" + p +
-		"refresh</code> 刷新管理群缓存\n目标：回复消息 / @用户名 / 用户ID，也可以是频道；管理员目标需追加 <code>true</code>。\n用户ID 不要求对方在当前群，会从会话缓存与管理群解析。\n基本群仅支持踢出；ban/sb 在基本群执行移出，不会阻止再次加入。"
+	return "🔨 <b>群组管理</b>\n\n• <code>" + p + "kick</code> 踢出 · <code>" + p + "ban</code> 封禁并清理消息\n• <code>" + p + "unban</code> 解封 · <code>" + p + "unmute</code> 解除禁言\n• <code>" + p +
+		"mute [目标] [时长]</code> 禁言，时长如 60s、5m、1h、1d，省略为永久\n• <code>" + p + "sb [目标]</code> 在所有有管理权的群组和频道封禁，并清理当前群组的消息\n• <code>" + p + "unsb [目标]</code> 批量解封\n• <code>" + p +
+		"refresh</code> 刷新管理群组列表（平时缓存一天）\n\n目标可以是回复的消息、@用户名、用户 ID，也可以是频道；目标是管理员时要在后面加 <code>true</code>。\n" +
+		"用户 ID 不要求对方在当前群组，会从对话缓存和管理群组里找。\n基本群组只能踢出：ban 和 sb 在基本群组里是移出，对方还能再加入。"
 }
 
 // Register 注册封禁管理相关的命令。
@@ -498,7 +499,7 @@ func Register(a *app.App) {
 			Handle: func(ctx context.Context, inv *command.Invocation) error { return service.batch(ctx, inv, false) }},
 		&command.Command{Name: "refresh", Group: command.GroupAdmin, Description: "刷新管理群组列表", Help: abanHelp, Timeout: 5 * time.Minute,
 			Handle: func(ctx context.Context, inv *command.Invocation) error {
-				if err := inv.EditText(ctx, "⏳ 正在刷新管理群缓存…"); err != nil {
+				if err := inv.EditText(ctx, kit.Working("正在刷新管理群组列表")); err != nil {
 					return err
 				}
 				groups, err := service.managedGroups(ctx, inv.Client, true)
@@ -522,7 +523,7 @@ func (s *abanService) basic(ctx context.Context, inv *command.Invocation, action
 	}
 	who, err := s.resolveTarget(ctx, inv, chat)
 	if err != nil {
-		return s.failTarget(ctx, inv, err, "无法解析该用户ID（会话未见过且不在管理群中）。可先回复其一则消息，或确认 ID 正确")
+		return s.failTarget(ctx, inv, err, "找不到这个用户 ID：账号没见过对方，对方也不在管理群组里。可以先回复对方的一条消息，或者确认 ID 没写错")
 	}
 	if !confirmed(inv.Args) && targetIsAdmin(ctx, inv.Client, chat, who.peer) {
 		return s.show(ctx, inv, "⚠️ 目标是管理员，请在命令后加上 "+command.Code("true")+" 确认执行", resultLifetime)
@@ -624,10 +625,10 @@ func (s *abanService) batch(ctx context.Context, inv *command.Invocation, ban bo
 	}
 	who, err := s.resolveTarget(ctx, inv, here)
 	if err != nil {
-		return s.failTarget(ctx, inv, err, "无法解析该用户ID（会话未见过且不在任一管理群中）。可先 "+inv.Prefix+"refresh 后重试，或回复其一则消息")
+		return s.failTarget(ctx, inv, err, "找不到这个用户 ID：账号没见过对方，对方也不在任何一个管理群组里。可以先 "+inv.Prefix+"refresh 再试，或者回复对方的一条消息")
 	}
 	if !s.fresh() {
-		if err := inv.EditText(ctx, "⏳ 正在读取管理群列表（每天一次）…"); err != nil {
+		if err := inv.EditText(ctx, kit.Working("正在读取管理群组列表（每天一次）")); err != nil {
 			return err
 		}
 	}
@@ -652,7 +653,7 @@ func (s *abanService) batch(ctx context.Context, inv *command.Invocation, ban bo
 			return s.show(ctx, inv, "⚠️ 目标在 "+strconv.Itoa(adminIn)+" 个管理群中具有管理员身份，请在命令后加上 "+command.Code("true")+" 确认执行", resultLifetime)
 		}
 	}
-	if err := inv.Edit(ctx, "⚡ 正在 "+strconv.Itoa(len(groups))+" 个频道/群组中"+label+"该用户…"); err != nil {
+	if err := inv.EditText(ctx, kit.Working("正在 "+strconv.Itoa(len(groups))+" 个群组和频道里"+label+"这个用户")); err != nil {
 		return err
 	}
 
@@ -692,21 +693,21 @@ func (s *abanService) batch(ctx context.Context, inv *command.Invocation, ban bo
 		return err
 	}
 
-	text := "✅ 在" + strconv.Itoa(success) + "个频道/群组中" + label + "该用户 " + command.Escape(who.display)
+	text := "✅ 已在 " + strconv.Itoa(success) + " 个群组和频道里" + label + " " + command.Escape(who.display)
 	if failed > 0 {
 		text += "\n⚠️ 失败 " + strconv.Itoa(failed) + " 个（" + strings.Join(topReasons(reasons, 3), "、") + "）"
 	}
 	if skipped > 0 {
-		text += "\nℹ️ 跳过 " + strconv.Itoa(skipped) + " 个基本群（不支持跨群解封）"
+		text += "\n⚠️ 跳过 " + strconv.Itoa(skipped) + " 个基本群组（不支持跨群组解封）"
 	}
 	if ban {
-		mark := "✗"
+		mark := "未清理"
 		if cleaned {
-			mark = "✓已清理"
+			mark = "已清理"
 		}
-		text += "\n🗑️ 当前群组消息: " + mark
+		text += "\n当前群组的消息：" + mark
 	}
-	text += " | ⏱️" + strconv.FormatFloat(time.Since(started).Seconds(), 'f', 1, 64) + "s"
+	text += "\n用时 " + strconv.FormatFloat(time.Since(started).Seconds(), 'f', 1, 64) + " 秒"
 	inv.Log.Info("aban.batch", slog.Bool("ban", ban), slog.Int64("target", who.id), slog.Bool("channel", who.channel),
 		slog.Int("success", success), slog.Int("failed", failed))
 	return s.show(ctx, inv, text, batchLifetime)

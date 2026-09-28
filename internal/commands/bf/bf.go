@@ -38,20 +38,20 @@ func backupCaption(version string, names []string, size int) string {
 		strconv.Itoa(len(names)) + " 个文件，" + command.Escape(kit.FormatBytes(int64(size))) + "：" +
 		strings.Join(quoted, "、") + more + "\n\n" +
 		"⚠️ <b>这个文件就是你的账号</b>：里面有登录会话和各命令的 API 密钥。不要转发给任何人。\n\n" +
-		"<b>在新机器上恢复</b>\n" +
+		"<b>在新主机上恢复</b>\n" +
 		"<code>bash &lt;(curl -fsSL " + installURL + ") --restore 备份文件路径</code>\n" +
-		"恢复前先停掉旧机器上的服务：同一个账号不能在两处同时在线。"
+		"恢复前先停掉旧主机上的服务：同一个账号不能在两处同时在线。"
 }
 
 func backupHelp(prefix string) string {
 	p := command.Escape(prefix)
-	return "📦 <b>配置备份</b>\n\n把这个部署的配置打包，发到本账号的收藏夹。重装系统或换机器时用它恢复，不用重新登录，也不用重新配各命令。\n\n" +
+	return "📦 <b>配置备份</b>\n\n把这个部署的配置打包，发到本账号的收藏夹。重装系统或换主机时用它恢复，不用重新登录，也不用重新配各命令。\n\n" +
 		"• <code>" + p + "bf</code> 打包并发到收藏夹\n\n" +
 		"<b>包含</b>\n登录会话（config.json、gotd-session.json）、.env，以及 data/ 下每个命令的配置。\n\n" +
 		"<b>不包含</b>\neatgif 素材和测速 CLI 这类缓存，用到时会自己重新下载；也不含程序本身。\n\n" +
-		"<b>恢复</b>\n在新机器上把备份文件传上去，然后运行：\n" +
+		"<b>恢复</b>\n在新主机上把备份文件传上去，然后运行：\n" +
 		"<code>bash &lt;(curl -fsSL " + installURL + ") --restore 备份文件路径</code>\n" +
-		"已经装好的机器可以用 <code>mibot-lite --restore 文件 --root 部署目录</code>，" +
+		"已经装好的主机可以用 <code>mibot-lite --restore 文件 --root 部署目录</code>，" +
 		"要覆盖已有账号得加 <code>--force</code>，并且先停掉服务。\n\n" +
 		"⚠️ 无论在哪个对话里执行，备份都只发到收藏夹，不会出现在当前对话。" +
 		"这个文件等同于你的账号，不要转发给别人——要给别人看问题，用 <code>" + p + "log</code>，那个是脱敏的。"
@@ -64,7 +64,7 @@ func Register(a *app.App) {
 		case "help", "h":
 			return inv.Edit(ctx, backupHelp(inv.Prefix))
 		}
-		if err := inv.Edit(ctx, "📦 正在打包配置…"); err != nil {
+		if err := inv.EditText(ctx, kit.Working("正在打包配置")); err != nil {
 			return err
 		}
 		archive, names, err := backup.Create(a.Root, a.Version, time.Now())

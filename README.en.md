@@ -222,6 +222,9 @@ Code layout:
 Commands grouped together: `aban` holds all the group administration commands, `ids` includes `.dc`, `sudo` includes
 `.sure`, `eatgif` includes `.eat`, `.t` lives in `tts`, and basic commands such as `.status` are in `core`.
 
+The text commands send back to the chat (titles, failure messages, usage, wording, punctuation) follows
+[STYLE.md](STYLE.md) (Chinese); `TestCommandTextStyle` checks the parts a machine can check.
+
 To add a command: create an `internal/commands/xxx/` directory with a `Register(a *app.App)` that calls
 `a.Registry.Register(&command.Command{...})`, then hook it into `RegisterAll` in `internal/commands/register.go`. For it
 to be lendable, it also has to be added to the allowlist in `internal/commands/sudo/sudo.go`.

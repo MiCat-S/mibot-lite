@@ -89,7 +89,7 @@ func (g *rateGetter) get(ctx context.Context, target string, timeout time.Durati
 	}
 	g.requests++
 	if g.requests > 64 {
-		return nil, rateFail("本次查询已达到请求上限，请稍后重试")
+		return nil, rateFail("本次查询已达到请求上限，稍后再试")
 	}
 	fetch := g.fetch
 	if fetch == nil {
@@ -101,7 +101,7 @@ func (g *rateGetter) get(ctx context.Context, target string, timeout time.Durati
 	}
 	if !response.OK() {
 		if response.Status == 429 {
-			return nil, rateFail("API请求过于频繁，请等待几分钟后再试")
+			return nil, rateFail("请求太频繁，被汇率服务限流了，过几分钟再试")
 		}
 		return nil, rateFail(fmt.Sprintf("汇率服务 HTTP %d", response.Status))
 	}
@@ -387,10 +387,10 @@ func (s *rateService) fiatRates(ctx context.Context, base string, get *rateGette
 
 func rateHelp(prefix string) string {
 	line := func(args, detail string) string {
-		return "• " + command.Code(prefix+"rate "+args) + " - " + detail + "\n"
+		return "• " + command.Code(prefix+"rate "+args) + " " + detail + "\n"
 	}
-	return "🚀 <b>智能汇率查询助手</b>\n\n📊 <b>使用示例</b>\n" + line("BTC", "比特币美元价") + line("ETH CNY", "以太坊人民币价") +
-		line("CNY TRY", "人民币兑土耳其里拉") + line("BTC CNY 0.5", "0.5个BTC换算") + line("CNY USDT 7000", "7000元换USDT")
+	return "💱 <b>汇率查询</b>\n\n<b>使用示例</b>\n" + line("BTC", "比特币的美元价") + line("ETH CNY", "以太坊的人民币价") +
+		line("CNY TRY", "人民币兑土耳其里拉") + line("BTC CNY 0.5", "0.5 个 BTC 换成人民币") + line("CNY USDT 7000", "7000 元换 USDT")
 }
 
 // enter 占一个查询名额，同时最多 4 个，满了返回 false。用完要 leave。
@@ -486,7 +486,7 @@ func (p *ratePricer) cryptoFiat(crypto, fiat string) (float64, error) {
 		}
 		return positiveRate(price * rate)
 	}
-	return 0, rateFail(fmt.Sprintf("无法获取 %s 对 %s 的价格。最后错误: %s", crypto, fiat, last))
+	return 0, rateFail(fmt.Sprintf("无法获取 %s 对 %s 的价格。最后错误：%s", crypto, fiat, last))
 }
 
 // cryptoCrypto 算两个币之间的比率：先找直接交易对（正反都试），没有就经稳定币中转。
@@ -564,7 +564,7 @@ func renderPriceFailure(err error, source, target rateCurrency, fallback string)
 // renderRate 排版查询结果。1 个币换法币时只写一行价格；其余写换算结果，再按类型补一行汇率说明。
 func renderRate(p *ratePricer, source, target rateCurrency, amount, price, converted float64) string {
 	shanghai, _ := time.LoadLocation("Asia/Shanghai")
-	updated := time.Now().In(shanghai).Format("2006/1/2 15:04:05")
+	updated := time.Now().In(shanghai).Format("2006-01-02 15:04:05")
 	var b strings.Builder
 	b.WriteString("💱 <b>汇率</b>\n\n")
 	switch {
@@ -574,17 +574,17 @@ func renderRate(p *ratePricer, source, target rateCurrency, amount, price, conve
 		b.WriteString(command.Code(fmt.Sprintf("%s %s ≈", formatAmount(amount), source.Symbol)) + "\n" + command.Code(fmt.Sprintf("%s %s", formatAmount(converted), target.Symbol)) + "\n\n")
 		switch {
 		case source.Fiat && target.Fiat:
-			b.WriteString("📊 <b>汇率:</b> " + command.Code(fmt.Sprintf("1 %s = %s %s", source.Symbol, formatAmount(price), target.Symbol)) + "\n")
+			b.WriteString("📊 汇率：" + command.Code(fmt.Sprintf("1 %s = %s %s", source.Symbol, formatAmount(price), target.Symbol)) + "\n")
 		case !source.Fiat && !target.Fiat:
 			first, _ := p.cryptoFiat(source.Symbol, "USD")
 			second, _ := p.cryptoFiat(target.Symbol, "USD")
-			b.WriteString("💎 <b>兑换比率:</b> " + command.Code(fmt.Sprintf("1 %s = %s %s", source.Symbol, formatAmount(price), target.Symbol)) + "\n")
-			b.WriteString("📊 <b>基准价格:</b> " + command.Code(fmt.Sprintf("%s $%s • %s $%s", source.Symbol, formatPrice(first), target.Symbol, formatPrice(second))) + "\n")
+			b.WriteString("💎 兑换比率：" + command.Code(fmt.Sprintf("1 %s = %s %s", source.Symbol, formatAmount(price), target.Symbol)) + "\n")
+			b.WriteString("📊 基准价格：" + command.Code(fmt.Sprintf("%s $%s • %s $%s", source.Symbol, formatPrice(first), target.Symbol, formatPrice(second))) + "\n")
 		default:
 			if source.Fiat {
-				b.WriteString("💎 <b>当前汇率:</b> " + command.Code(fmt.Sprintf("1 %s = %s %s", target.Symbol, formatPrice(1/price), source.Symbol)) + "\n")
+				b.WriteString("💎 当前汇率：" + command.Code(fmt.Sprintf("1 %s = %s %s", target.Symbol, formatPrice(1/price), source.Symbol)) + "\n")
 			} else {
-				b.WriteString("💎 <b>当前汇率:</b> " + command.Code(fmt.Sprintf("1 %s = %s %s", source.Symbol, formatPrice(price), target.Symbol)) + "\n")
+				b.WriteString("💎 当前汇率：" + command.Code(fmt.Sprintf("1 %s = %s %s", source.Symbol, formatPrice(price), target.Symbol)) + "\n")
 			}
 		}
 	}
@@ -592,13 +592,13 @@ func renderRate(p *ratePricer, source, target rateCurrency, amount, price, conve
 	if source.Fiat && target.Fiat {
 		label = "更新时间"
 	}
-	b.WriteString("⏰ <b>" + label + ":</b> " + updated)
+	b.WriteString("⏰ " + label + "：" + updated)
 	return b.String()
 }
 
 func rateHandle(ctx context.Context, inv *command.Invocation, service *rateService) error {
 	if !service.enter() {
-		return inv.Edit(ctx, kit.Feedback("error", "汇率查询繁忙", "请稍后重试"))
+		return inv.Edit(ctx, kit.Feedback("error", "汇率查询繁忙", "稍后再试"))
 	}
 	defer service.leave()
 
@@ -611,7 +611,7 @@ func rateHandle(ctx context.Context, inv *command.Invocation, service *rateServi
 		return inv.Edit(ctx, kit.Feedback("error", "操作失败", rateReason(err)))
 	}
 	query := url.QueryEscape(fmt.Sprintf("%s %s to %s", strconv.FormatFloat(amount, 'f', -1, 64), strings.ToUpper(base), strings.ToUpper(quote)))
-	fallback := "\n\n🔎 <b>谷歌兜底:</b> <a href=\"https://www.google.com/search?q=" + query + "\">点击查看</a>"
+	fallback := "\n\n🔎 谷歌兜底：<a href=\"https://www.google.com/search?q=" + query + "\">点击查看</a>"
 	get := &rateGetter{fetch: service.fetch}
 	if err := inv.Edit(ctx, kit.Feedback("working", "正在查询汇率", "")); err != nil {
 		return err

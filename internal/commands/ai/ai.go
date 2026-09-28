@@ -191,12 +191,35 @@ func (s *aiService) translate(ctx context.Context, text, target string) (string,
 
 func aiHelp(prefix string) string {
 	p := command.Escape(prefix)
-	return "<blockquote expandable><b>🤖 智能 AI 助手</b>\n\n<b>⚙️ API 配置:</b>\n• <code>" + p + "ai config add tag url key [type]</code> - 添加 API 配置\n• <code>" + p + "ai config del tag</code> - 删除 API 配置\n• <code>" + p +
-		"ai config list</code> - 查看配置\n• <code>" + p + "ai config type tag openai-compatible|openai|gemini|anthropic|doubao|moonshot|local-cliproxy</code> - 设置 API 类型\n• <code>" + p + "ai config stream tag on|off</code> - 流式传输\n• <code>" + p +
-		"ai config responses tag on|off</code> - Responses 模式\n\n<b>🧠 模型设置:</b>\n• <code>" + p + "ai model</code> - 查看当前模型\n• <code>" + p + "ai model chat tag model</code> - 设置聊天模型\n• <code>" + p + "ai model search tag model</code> - 设置搜索模型（未设置时沿用聊天模型）\n• <code>" + p +
-		"ai reasoning chat|search auto|none|minimal|low|medium|high|xhigh</code>\n• <code>" + p + "ai service chat|search auto|default|priority|fast|flex</code>\n\n<b>💬 提问:</b>\n• <code>" + p + "ai 问题</code> - 向 AI 提问；回复一条消息时，那条消息作为上下文，其中的图片一并发送\n• <code>" + p +
-		"ai search 问题</code> - 联网搜索并回答\n\n<b>✍️ 输出设置:</b>\n• <code>" + p + "ai prompt</code> / <code>" + p + "ai prompt set 内容</code> / <code>" + p + "ai prompt del</code>\n• <code>" + p + "ai collapse [on|off]</code> - 消息折叠\n• <code>" + p + "ai timeout [秒数]</code>\n• <code>" + p +
-		"ai telegraph [on|off|limit 数量|del 序号|del all]</code>\n\nLite 版不支持 image / video 生成。</blockquote>\n\n<b>密钥配置：</b>涉及 API Key 的命令请在收藏夹中执行。"
+	item := func(args, text string) string {
+		line := "• <code>" + p + "ai" + command.Escape(args) + "</code>"
+		if text != "" {
+			line += " " + text
+		}
+		return line + "\n"
+	}
+	return "🤖 <b>AI 助手</b>\n\n" +
+		item(" 问题", "向 AI 提问；回复一条消息时，那条消息作为上下文，其中的图片一并发送") +
+		item(" search 问题", "联网搜索并回答") +
+		"\n<blockquote expandable><b>API 配置</b>\n" +
+		item(" config add 标签 URL Key [类型]", "添加一个配置") +
+		item(" config del 标签", "删除配置") +
+		item(" config list", "查看配置") +
+		item(" config type 标签 openai-compatible|openai|gemini|anthropic|doubao|moonshot|local-cliproxy", "设置接口类型") +
+		item(" config stream 标签 on|off", "流式传输") +
+		item(" config responses 标签 on|off", "Responses 模式") +
+		"\n<b>模型</b>\n" +
+		item(" model", "查看当前模型") +
+		item(" model chat 标签 模型", "设置聊天模型") +
+		item(" model search 标签 模型", "设置搜索模型（未设置时沿用聊天模型）") +
+		item(" reasoning chat|search auto|none|minimal|low|medium|high|xhigh", "") +
+		item(" service chat|search auto|default|priority|fast|flex", "") +
+		"\n<b>输出</b>\n" +
+		item(" prompt [set 内容|del]", "查看或设置提示词") +
+		item(" collapse [on|off]", "折叠长回答") +
+		item(" timeout [秒数]", "") +
+		item(" telegraph [on|off|limit 数量|del 序号|del all]", "长回答发布到 Telegraph") +
+		"\nLite 版不支持生成图片和视频。</blockquote>\n\n涉及 API Key 的命令请在收藏夹里执行。"
 }
 
 // Register 注册 .ai。
@@ -216,33 +239,29 @@ func orUnset(value string) string {
 	return value
 }
 
-func onText(value bool) string {
-	if value {
-		return "开启"
-	}
-	return "关闭"
-}
-
 // modelStatus 是不带参数的 .ai model 显示的当前选择。
 func modelStatus(cfg aiConfig) string {
 	search := cfg.selection("search")
 	rows := []string{
-		"💬 chat 配置: " + command.Code(orUnset(cfg.CurrentChatTag)),
-		"🧠 chat 模型: " + command.Code(orUnset(cfg.CurrentChatModel)),
-		"💭 chat 思考强度: " + command.Code(cfg.CurrentChatReasoningEffort),
-		"⚡ chat 服务等级: " + command.Code(cfg.CurrentChatServiceTier),
-		"🔎 search 配置: " + command.Code(orUnset(search.Tag)),
-		"📚 search 模型: " + command.Code(orUnset(search.Model)),
-		"💭 search 思考强度: " + command.Code(cfg.CurrentSearchReasoningEffort),
-		"⚡ search 服务等级: " + command.Code(cfg.CurrentSearchServiceTier),
+		"<b>聊天</b>",
+		"配置：" + command.Code(orUnset(cfg.CurrentChatTag)),
+		"模型：" + command.Code(orUnset(cfg.CurrentChatModel)),
+		"思考强度：" + command.Code(cfg.CurrentChatReasoningEffort),
+		"服务等级：" + command.Code(cfg.CurrentChatServiceTier),
+		"",
+		"<b>搜索</b>",
+		"配置：" + command.Code(orUnset(search.Tag)),
+		"模型：" + command.Code(orUnset(search.Model)),
+		"思考强度：" + command.Code(cfg.CurrentSearchReasoningEffort),
+		"服务等级：" + command.Code(cfg.CurrentSearchServiceTier),
 	}
-	return "🤖 <b>当前 AI 配置:</b>\n\n" + strings.Join(rows, "\n")
+	return "🤖 <b>当前 AI 模型</b>\n\n" + strings.Join(rows, "\n")
 }
 
 // telegraphStatus 是不带参数的 .ai telegraph 显示的状态和记录。
 func telegraphStatus(cfg aiConfig) string {
-	status := fmt.Sprintf("📰 <b>Telegraph 状态:</b>\n\n🌐 当前状态: %s\n📊 限制数量: <code>%d</code>\n📈 记录数量: <code>%d/%d</code>",
-		onText(cfg.Telegraph.Enabled), cfg.Telegraph.Limit, len(cfg.Telegraph.List), cfg.Telegraph.Limit)
+	status := fmt.Sprintf("📰 <b>Telegraph 状态</b>\n\n🌐 当前状态：%s\n📊 限制数量：<code>%d</code>\n📈 记录数量：<code>%d/%d</code>",
+		kit.OnOffText(cfg.Telegraph.Enabled), cfg.Telegraph.Limit, len(cfg.Telegraph.List), cfg.Telegraph.Limit)
 	if len(cfg.Telegraph.List) > 0 {
 		var rows []string
 		for index, item := range cfg.Telegraph.List {
@@ -281,7 +300,7 @@ func (s *aiService) handle(ctx context.Context, inv *command.Invocation) error {
 			return kit.Fail("Lite 版不支持 image / video 生成")
 		}
 		if (mode != "chat" && mode != "search") || tag == "" || model == "" {
-			return kit.Fail("用法：ai model chat|search tag model")
+			return kit.Usage(inv.Prefix, "ai model chat|search 标签 模型")
 		}
 		if err := AssertAllowedModel(model); err != nil {
 			return err
@@ -324,7 +343,7 @@ func (s *aiService) handle(ctx context.Context, inv *command.Invocation) error {
 		}
 		mode, value := strings.ToLower(inv.Arg(1)), strings.ToLower(inv.Arg(2))
 		if mode != "chat" && mode != "search" {
-			return kit.Failf("用法：ai %s chat|search value", sub)
+			return kit.Usage(inv.Prefix, "ai "+sub+" chat|search 值")
 		}
 		values := ReasoningValues
 		if sub == "service" {
@@ -355,11 +374,11 @@ func (s *aiService) handle(ctx context.Context, inv *command.Invocation) error {
 		action := strings.ToLower(inv.Arg(1))
 		if action == "" {
 			return s.showStatus(ctx, inv, func(cfg aiConfig) string {
-				return "💭 <b>当前提示词:</b>\n\n📝 内容: " + command.Code(orUnset(cfg.Prompt))
+				return "💭 <b>当前提示词</b>\n\n📝 内容：" + command.Code(orUnset(cfg.Prompt))
 			})
 		}
 		if action != "set" && action != "del" {
-			return kit.Fail("用法：ai prompt set 内容 | ai prompt del")
+			return kit.Usage(inv.Prefix, "ai prompt set 内容|del")
 		}
 		prompt := ""
 		if action == "set" {
@@ -375,7 +394,7 @@ func (s *aiService) handle(ctx context.Context, inv *command.Invocation) error {
 	case "collapse":
 		if inv.Arg(1) == "" {
 			return s.showStatus(ctx, inv, func(cfg aiConfig) string {
-				return "📖 <b>消息折叠状态:</b>\n\n📄 当前状态: " + onText(cfg.Collapse)
+				return "📖 <b>消息折叠状态</b>\n\n📄 当前状态：" + kit.OnOffText(cfg.Collapse)
 			})
 		}
 		value, err := kit.OnOff(inv.Arg(1))
@@ -389,7 +408,7 @@ func (s *aiService) handle(ctx context.Context, inv *command.Invocation) error {
 	case "timeout":
 		if inv.Arg(1) == "" {
 			return s.showStatus(ctx, inv, func(cfg aiConfig) string {
-				return "⏱️ <b>当前超时设置:</b>\n\n⏰ 超时时间: " + command.Code(strconv.Itoa(cfg.Timeout)+" 秒")
+				return "⏱️ <b>当前超时设置</b>\n\n⏰ 超时时间：" + command.Code(strconv.Itoa(cfg.Timeout)+" 秒")
 			})
 		}
 		seconds, err := strconv.Atoi(inv.Arg(1))
@@ -409,7 +428,7 @@ func (s *aiService) handle(ctx context.Context, inv *command.Invocation) error {
 // telegraph 处理 .ai telegraph：不带参数显示状态，on|off|limit|del 修改设置或删除记录。
 func (s *aiService) telegraph(ctx context.Context, inv *command.Invocation) error {
 	action := strings.ToLower(inv.Arg(1))
-	const usage = "用法：ai telegraph on|off|limit 数量|del 序号|all"
+	usage := kit.Usage(inv.Prefix, "ai telegraph on|off|limit 数量|del 序号|del all")
 	switch action {
 	case "":
 		return s.showStatus(ctx, inv, telegraphStatus)
@@ -428,7 +447,7 @@ func (s *aiService) telegraph(ctx context.Context, inv *command.Invocation) erro
 	case "del":
 		target := strings.ToLower(inv.Arg(2))
 		if target == "" {
-			return kit.Fail(usage)
+			return usage
 		}
 		if target == "all" {
 			if err := s.update(func(cfg *aiConfig) error { cfg.Telegraph.List = nil; return nil }); err != nil {
@@ -444,7 +463,7 @@ func (s *aiService) telegraph(ctx context.Context, inv *command.Invocation) erro
 		if err := s.update(func(cfg *aiConfig) error {
 			count = len(cfg.Telegraph.List)
 			if number > count {
-				return kit.Failf("序号超出范围 (1-%d)", count)
+				return kit.Failf("序号超出范围（1–%d）", count)
 			}
 			cfg.Telegraph.List = append(cfg.Telegraph.List[:number-1:number-1], cfg.Telegraph.List[number:]...)
 			return nil
@@ -453,7 +472,7 @@ func (s *aiService) telegraph(ctx context.Context, inv *command.Invocation) erro
 		}
 		return inv.Edit(ctx, kit.Feedback("success", fmt.Sprintf("已删除第 %d 项", number), ""))
 	default:
-		return kit.Fail(usage)
+		return usage
 	}
 	return inv.Edit(ctx, kit.Feedback("success", "AI 输出设置已更新", ""))
 }
@@ -561,7 +580,7 @@ func (s *aiService) ask(ctx context.Context, inv *command.Invocation, search boo
 		return err
 	}
 	body := markdownToHTML(answer, cfg.Collapse) + sourcesHTML(sources)
-	formatted := "Q:\n" + command.Escape(question) + "\n\nA:\n" + body
+	formatted := "问：\n" + command.Escape(question) + "\n\n答：\n" + body
 	if cfg.Telegraph.Enabled && kit.UTF16Len(formatted) > 4050 {
 		link, err := s.publish(ctx, cfg, question, answer, sources)
 		if err != nil {
@@ -606,24 +625,19 @@ func (s *aiService) configure(ctx context.Context, inv *command.Invocation) erro
 			if len(models) > 0 {
 				modelText = " · " + command.Escape(strings.Join(models, " · "))
 			}
-			rows = append(rows, "• "+command.Code(name)+" · "+command.Escape(kind)+modelText+" · stream="+kit.OnOffText(provider.Stream)+" · responses="+kit.OnOffText(provider.Responses))
+			rows = append(rows, "• "+command.Code(name)+" · "+command.Escape(kind)+modelText+" · 流式"+kit.OnOffText(provider.Stream)+" · Responses "+kit.OnOffText(provider.Responses))
 		}
 		if len(rows) == 0 {
-			rows = append(rows, "• 尚未配置 API")
+			rows = append(rows, "• 还没有配置")
 		}
-		or := func(value string) string {
-			if value == "" {
-				return "-"
-			}
-			return value
-		}
+		or := func(value string) string { return kit.OrDefault(value, "未设置") }
 		search := cfg.selection("search")
-		return inv.Edit(ctx, "<b>AI 配置</b>\n"+strings.Join(rows, "\n")+"\n\n聊天: "+command.Code(or(cfg.CurrentChatTag)+" / "+or(cfg.CurrentChatModel))+
-			"\n搜索: "+command.Code(or(search.Tag)+" / "+or(search.Model))+"\n超时: "+command.Code(fmt.Sprintf("%ds · 折叠=%s", cfg.Timeout, kit.OnOffText(cfg.Collapse))))
+		return inv.Edit(ctx, "🤖 <b>AI 配置</b>\n"+strings.Join(rows, "\n")+"\n\n聊天："+command.Code(or(cfg.CurrentChatTag)+" / "+or(cfg.CurrentChatModel))+
+			"\n搜索："+command.Code(or(search.Tag)+" / "+or(search.Model))+"\n超时："+command.Code(fmt.Sprintf("%d 秒", cfg.Timeout))+"\n折叠长回答："+kit.OnOffText(cfg.Collapse))
 	case "add":
 		link, key, kind := inv.Arg(3), inv.Arg(4), strings.ToLower(inv.Arg(5))
 		if tag == "" || link == "" || key == "" {
-			return kit.Fail("用法：ai config add tag url key [type]")
+			return kit.Usage(inv.Prefix, "ai config add 标签 URL Key [类型]")
 		}
 		if !inv.Message.Saved {
 			return kit.Fail("API Key 只能在收藏夹中配置")
@@ -642,7 +656,7 @@ func (s *aiService) configure(ctx context.Context, inv *command.Invocation) erro
 		}
 	case "del":
 		if tag == "" {
-			return kit.Fail("用法：ai config del tag")
+			return kit.Usage(inv.Prefix, "ai config del 标签")
 		}
 		if err := s.update(func(cfg *aiConfig) error {
 			delete(cfg.Configs, tag)
@@ -659,7 +673,7 @@ func (s *aiService) configure(ctx context.Context, inv *command.Invocation) erro
 	case "type", "stream", "responses":
 		value := strings.ToLower(inv.Arg(3))
 		if tag == "" || value == "" {
-			return kit.Failf("用法：ai config %s tag value", action)
+			return kit.Usage(inv.Prefix, "ai config "+action+" 标签 值")
 		}
 		if err := s.update(func(cfg *aiConfig) error {
 			provider, ok := cfg.Configs[tag]

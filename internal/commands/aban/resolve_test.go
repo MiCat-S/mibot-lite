@@ -382,7 +382,7 @@ func TestChannelTargets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !fromReply.channel || fromReply.display != "频道: Spam (@spamchan)" {
+	if !fromReply.channel || fromReply.display != "频道：Spam (@spamchan)" {
 		t.Fatalf("回复频道身份：%+v", fromReply)
 	}
 	samePeer(t, fromReply.peer, &tg.InputPeerChannel{ChannelID: aliasID})
@@ -532,7 +532,7 @@ func TestBatchBanDoesNotRetry(t *testing.T) {
 	}
 	calls := f.fake.log()
 	last := calls[len(calls)-1]
-	if !strings.Contains(last, "✅ 在2个频道/群组中封禁该用户 Spam") || !strings.Contains(last, "失败 2 个（CHAT_ADMIN_REQUIRED×2）") {
+	if !strings.Contains(last, "✅ 已在 2 个群组和频道里封禁 Spam") || !strings.Contains(last, "失败 2 个（CHAT_ADMIN_REQUIRED×2）") {
 		t.Fatalf("结果：%q", last)
 	}
 	if !slices.Equal(f.deletions, []time.Duration{batchLifetime}) {
@@ -549,7 +549,7 @@ func TestUnresolvedIDMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := f.fake.log()
-	if last := calls[len(calls)-1]; !strings.Contains(last, "无法解析该用户ID（会话未见过且不在管理群中）") {
+	if last := calls[len(calls)-1]; !strings.Contains(last, "找不到这个用户 ID：账号没见过对方") {
 		t.Fatalf("提示：%q", last)
 	}
 	if len(f.deletions) != 1 {

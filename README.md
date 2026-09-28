@@ -205,6 +205,9 @@ MIBOT_EATGIF_ASSETS=/path/to/eatgif go test ./internal/imaging/ -run RealAnimati
 成组放在一起的命令：`aban` 是全部群管理命令，`ids` 含 `.dc`，`sudo` 含 `.sure`，`eatgif` 含 `.eat`，
 `.t` 在 `tts`，`.status` 等基础命令在 `core`。
 
+命令回到聊天里的文字（标题、失败提示、用法、用词、标点）按 [STYLE.md](STYLE.md) 写，
+`TestCommandTextStyle` 会检查其中能机器检查的部分。
+
 新增一条命令：建一个 `internal/commands/xxx/` 目录，写一个 `Register(a *app.App)`，在里面调用
 `a.Registry.Register(&command.Command{...})`，再到 `internal/commands/register.go` 的 `RegisterAll`
 里挂上。要让它能借给别人，还得加进 `internal/commands/sudo/sudo.go` 的白名单。

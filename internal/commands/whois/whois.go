@@ -98,9 +98,9 @@ func whoisReport(domain, raw string) []string {
 		if when, err := time.Parse(time.RFC3339, strings.TrimSpace(expiry)); err == nil {
 			days := int(time.Until(when).Hours() / 24)
 			if days < 0 {
-				lines = append(lines, "到期提醒: 已过期")
+				lines = append(lines, "到期提醒：已过期")
 			} else if days < 90 {
-				lines = append(lines, "到期提醒: "+strings.TrimSpace(itoa(days))+" 天后过期")
+				lines = append(lines, "到期提醒："+strings.TrimSpace(itoa(days))+" 天后过期")
 			}
 		}
 	}
@@ -114,7 +114,7 @@ func whoisReport(domain, raw string) []string {
 		}
 	}
 	if len(ordered) > 0 {
-		lines = append(lines, "DNS 服务器:\n"+strings.Join(ordered, "\n"))
+		lines = append(lines, "DNS 服务器：\n"+strings.Join(ordered, "\n"))
 	}
 	var pages []string
 	for _, page := range command.EscapedPages(strings.Join(lines, "\n"), command.PageLimit) {
@@ -210,18 +210,18 @@ func Register(a *app.App) {
 				if len(rows) > 0 {
 					body = strings.Join(rows, "\n")
 				}
-				return inv.Edit(ctx, "<b>WHOIS 查询历史</b>\n\n"+body+"\n\n共 "+itoa(len(current.History))+" 条，缓存 "+itoa(len(current.Cache))+" 个")
+				return inv.Edit(ctx, "🔍 <b>WHOIS 查询历史</b>\n\n"+body+"\n\n共 "+itoa(len(current.History))+" 条，缓存 "+itoa(len(current.Cache))+" 个")
 			}
 			name, ok := normalizeDomain(raw)
 			if !ok {
 				return kit.Fail("请输入有效域名，例如 example.com")
 			}
-			if err := inv.Edit(ctx, "🔍 正在查询 "+command.Code(name)+"…"); err != nil {
+			if err := inv.EditText(ctx, kit.Working("正在查询 "+name)); err != nil {
 				return err
 			}
 			result, err := whoisQuery(ctx, inv.Log, name, data)
 			if err != nil {
-				return inv.EditText(ctx, "WHOIS 查询失败，请稍后重试")
+				return kit.FailWith("WHOIS 查询失败，稍后再试", err)
 			}
 			if result == "" {
 				return inv.EditText(ctx, "未取得 WHOIS 数据")
@@ -242,7 +242,7 @@ func whoisBatch(ctx context.Context, inv *command.Invocation, data *store.Store[
 	if len(inputs) > maxBatch {
 		return inv.EditText(ctx, "批量查询最多支持 "+itoa(maxBatch)+" 个域名")
 	}
-	if err := inv.Edit(ctx, "🔍 正在批量查询 "+itoa(len(inputs))+" 个域名…"); err != nil {
+	if err := inv.EditText(ctx, kit.Working("正在批量查询 "+itoa(len(inputs))+" 个域名")); err != nil {
 		return err
 	}
 	results := make([]string, 0, len(inputs))
@@ -265,7 +265,7 @@ func whoisBatch(ctx context.Context, inv *command.Invocation, data *store.Store[
 		}
 		results = append(results, "✅ "+command.Code(name))
 	}
-	return inv.Edit(ctx, "<b>WHOIS 批量查询</b>\n\n"+strings.Join(results, "\n"))
+	return inv.Edit(ctx, "🔍 <b>WHOIS 批量查询</b>\n\n"+strings.Join(results, "\n"))
 }
 
 func whoisQuery(ctx context.Context, logger *slog.Logger, name string, data *store.Store[whoisData]) (string, error) {
