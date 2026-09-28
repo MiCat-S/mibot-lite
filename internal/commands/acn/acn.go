@@ -593,12 +593,10 @@ func acnHelp(prefix string) string {
 		"acn weather set 北京</code> 设置地点并开启\n• <code>" + p + "acn weather on</code> / <code>off</code>\n天气缓存 30 分钟。"
 }
 
-// Register 注册 .acn 以及每分钟刷新一次的后台任务。
-func Register(a *app.App) {
-	service := &acnService{store: kit.NewStore(a, "acn.json", acnDefaults)}
-	// MiBox 写出的文件可能带着无法识别的时区，也可能缺少 users 表；
-	// 启动时统一规整一次，而不是每次定时触发都做。
-	_ = service.store.Update(func(state *acnState) error {
+// normalizeStored 把存下的配置规整一遍：MiBox 写出的文件可能带着无法识别的时区，
+// 也可能缺少 users 表。随机文本最多留 100 条。
+func (s *acnService) normalizeStored(a *app.App) {
+	err := s.store.Update(func(state *acnState) error {
 		state.SchemaVersion = 1
 		if state.Users == nil {
 			state.Users = map[string]*acnUser{}
@@ -615,6 +613,18 @@ func Register(a *app.App) {
 		}
 		return nil
 	})
+	if err != nil {
+		a.Logger.Warn("acn.normalize_failed", "error", err.Error())
+	}
+}
+
+// Register 注册 .acn 以及每分钟刷新一次的后台任务。
+func Register(a *app.App) {
+	service := &acnService{store: kit.NewStore(a, "acn.json", acnDefaults)}
+	// 启动时统一规整一次，而不是每次定时触发都做；--check 不改文件。
+	if !a.ReadOnly {
+		service.normalizeStored(a)
+	}
 
 	handle := func(ctx context.Context, inv *command.Invocation) error { return acnHandle(ctx, inv, service) }
 	a.Registry.Register(

@@ -209,7 +209,10 @@ func (s *daService) start(ctx context.Context, inv *command.Invocation) bool {
 // Register 注册 .da。
 func Register(a *app.App) {
 	service := &daService{a: a, store: kit.NewStore(a, "da.json", func() daDB { return daDB{Tasks: []daTask{}} }), active: map[string]*daSlot{}}
-	service.pauseInterrupted()
+	// --check 不改文件：这时正在运行的服务可能真有任务在跑。
+	if !a.ReadOnly {
+		service.pauseInterrupted()
+	}
 	a.Registry.Register(&command.Command{Name: "da", Description: "批量删除群组消息", Usage: "true|stop|status", Help: daHelp, Timeout: 2 * time.Minute,
 		Handle: func(ctx context.Context, inv *command.Invocation) error {
 			if !strings.HasPrefix(inv.Message.ChatID, "-") {

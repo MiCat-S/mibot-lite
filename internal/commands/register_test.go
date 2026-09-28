@@ -87,3 +87,61 @@ func TestImportMiBox(t *testing.T) {
 		t.Errorf("第二次不该覆盖：\n%s", log.String())
 	}
 }
+
+// snapshot 记下目录下每个文件的内容和修改时间。
+func snapshot(t *testing.T, root string) map[string]string {
+	t.Helper()
+	files := map[string]string{}
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		files[path] = info.ModTime().String() + "\n" + string(raw)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return files
+}
+
+// --check 是只读的：.update run 在服务运行中用新版本跑它，注册命令时往 data/ 写东西，
+// 就会从正在运行的服务底下改它的文件（da 会把正在跑的任务标成暂停）。
+func TestReadOnlyRegistrationWritesNothing(t *testing.T) {
+	root := t.TempDir()
+	write := func(name, content string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(root, "data"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "data", name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("da.json", `{"tasks":[{"chatId":"-1001","isRunning":true,"errors":[]}],"imported":true}`)
+	write("acn.json", `{"users":{}}`)
+	before := snapshot(t, root)
+
+	a := &app.App{Root: root, ReadOnly: true, Registry: command.New([]string{"."}, slog.New(slog.NewTextHandler(io.Discard, nil)))}
+	RegisterAll(a)
+
+	after := snapshot(t, root)
+	for path, was := range before {
+		if after[path] != was {
+			t.Errorf("只读注册改了 %s", path)
+		}
+	}
+	for path := range after {
+		if _, ok := before[path]; !ok {
+			t.Errorf("只读注册新建了 %s", path)
+		}
+	}
+}

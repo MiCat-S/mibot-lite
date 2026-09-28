@@ -70,6 +70,9 @@ type App struct {
 	BootID   string
 	Logs     *logtail.Ring
 	Level    *slog.LevelVar
+	// ReadOnly 为真时（--check）不提供服务，命令注册时也不能改 data/ 下的文件：
+	// .update run 会在服务运行中用新版本跑 --check，这时 data/ 正被运行中的服务使用。
+	ReadOnly bool
 
 	client *telegram.Client
 	gaps   *updates.Manager
@@ -160,7 +163,7 @@ func Prepare(ctx context.Context, options Options) (*App, error) {
 
 	app := &App{Root: root, Version: options.Version, Logger: logger, Config: cfg, Env: env,
 		Registry: command.New(env.Prefixes(), logger), Started: time.Now(), BootID: strconv.FormatInt(time.Now().UnixNano(), 36),
-		Logs: options.Logs, Level: options.Level,
+		Logs: options.Logs, Level: options.Level, ReadOnly: options.ReadOnly,
 		peers: bot.NewPeerCache(), lock: lock, options: options}
 
 	state, err := tgstate.Open(filepath.Join(root, "updates.json"))
