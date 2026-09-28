@@ -165,7 +165,9 @@ func Run(ctx context.Context, options Options) error {
 	if err := (&gotdsession.Loader{Storage: file}).Save(ctx, data); err != nil {
 		return fmt.Errorf("write %s: %w", SessionFile, err)
 	}
-	_ = os.Chmod(file.Path, 0o600)
+	if err := os.Chmod(file.Path, 0o600); err != nil {
+		fmt.Fprintf(out, "Warning: could not restrict %s to owner-only (0600): %v\n", SessionFile, err)
+	}
 	fmt.Fprintf(out, "Signed in as %s. config.json and %s written to %s\n", who, SessionFile, root)
 	return nil
 }

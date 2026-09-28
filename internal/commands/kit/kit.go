@@ -79,6 +79,14 @@ func SendPages(ctx context.Context, inv *command.Invocation, pages []string) err
 	return nil
 }
 
+// Warn 在 err 不为空时记一条带 error 的警告。用于「失败了也不影响这次命令，但不能悄悄吞掉」
+// 的地方，比如存进度、写缓存。a 或它的日志器为空（测试里）时什么也不做。
+func Warn(a *app.App, event string, err error) {
+	if err != nil && a != nil && a.Logger != nil {
+		a.Logger.Warn(event, "error", err.Error())
+	}
+}
+
 // OnOff 解析 on|off。
 func OnOff(value string) (bool, error) {
 	switch strings.ToLower(value) {

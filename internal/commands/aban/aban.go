@@ -387,10 +387,13 @@ func (s *abanService) managedGroups(ctx context.Context, client *bot.Client, ref
 			offsetPeer = resolved
 		}
 	}
-	_ = s.store.Update(func(cache *abanCache) error {
+	if err := s.store.Update(func(cache *abanCache) error {
 		cache.Groups, cache.UpdatedAt = groups, time.Now().UnixMilli()
 		return nil
-	})
+	}); err != nil {
+		// 这次照样能用；只是下次还得重新扫一遍对话列表。
+		client.Logger().Warn("aban.cache_write_failed", "error", err.Error())
+	}
 	return groups, nil
 }
 

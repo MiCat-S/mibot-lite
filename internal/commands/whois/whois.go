@@ -4,6 +4,7 @@ package whois
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/url"
 	"regexp"
 	"strings"
@@ -178,15 +179,22 @@ func Register(a *app.App) {
 			switch lower {
 			case "clear":
 				var counts [2]int
-				_ = data.Update(func(d *whoisData) error {
+				if err := data.Update(func(d *whoisData) error {
 					counts = [2]int{len(d.History), len(d.Cache)}
 					d.History = nil
 					d.Cache = map[string]whoisItem{}
 					return nil
-				})
+				}); err != nil {
+					inv.Log.Warn("whois.clear_failed", "error", err.Error())
+					return kit.Fail("清除失败，历史和缓存都还在")
+				}
 				return inv.EditText(ctx, "已清除历史 "+itoa(counts[0])+" 条、缓存 "+itoa(counts[1])+" 个域名")
 			case "history":
-				current, _ := data.Read()
+				current, err := data.Read()
+				if err != nil {
+					inv.Log.Warn("whois.history_read_failed", "error", err.Error())
+					return kit.Fail("读不到查询历史")
+				}
 				var rows []string
 				for index, item := range current.History {
 					if index >= 20 {
@@ -211,7 +219,7 @@ func Register(a *app.App) {
 			if err := inv.Edit(ctx, "🔍 正在查询 "+command.Code(name)+"…"); err != nil {
 				return err
 			}
-			result, err := whoisQuery(ctx, name, data)
+			result, err := whoisQuery(ctx, inv.Log, name, data)
 			if err != nil {
 				return inv.EditText(ctx, "WHOIS 查询失败，请稍后重试")
 			}
@@ -247,7 +255,7 @@ func whoisBatch(ctx context.Context, inv *command.Invocation, data *store.Store[
 			results = append(results, "❌ "+command.Escape(input)+"：格式无效")
 			continue
 		}
-		result, err := whoisQuery(ctx, name, data)
+		result, err := whoisQuery(ctx, inv.Log, name, data)
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
@@ -260,7 +268,7 @@ func whoisBatch(ctx context.Context, inv *command.Invocation, data *store.Store[
 	return inv.Edit(ctx, "<b>WHOIS 批量查询</b>\n\n"+strings.Join(results, "\n"))
 }
 
-func whoisQuery(ctx context.Context, name string, data *store.Store[whoisData]) (string, error) {
+func whoisQuery(ctx context.Context, logger *slog.Logger, name string, data *store.Store[whoisData]) (string, error) {
 	current, err := data.Read()
 	if err != nil {
 		return "", err
@@ -280,7 +288,7 @@ func whoisQuery(ctx context.Context, name string, data *store.Store[whoisData]) 
 		return "", nil
 	}
 	item := whoisItem{Domain: name, RawData: result, QueryTime: time.Now().UTC().Format(time.RFC3339)}
-	_ = data.Update(func(d *whoisData) error {
+	err = data.Update(func(d *whoisData) error {
 		history := append([]whoisItem{item}, d.History...)
 		if len(history) > 100 {
 			history = history[:100]
@@ -292,5 +300,9 @@ func whoisQuery(ctx context.Context, name string, data *store.Store[whoisData]) 
 		d.Cache[name] = item
 		return nil
 	})
+	if err != nil && logger != nil {
+		// 结果已经拿到了，只是没记进历史和缓存，不算这次查询失败。
+		logger.Warn("whois.record_failed", "error", err.Error())
+	}
 	return result, nil
 }

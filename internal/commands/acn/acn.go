@@ -537,13 +537,18 @@ func (s *acnService) apply(ctx context.Context, client *bot.Client, userID strin
 		if _, flood := tgerr.AsFloodWait(err); flood {
 			// 在这里被限流，说明这个账号改资料改得太频繁了；
 			// 与其一再触发限流，不如直接停掉。
-			_ = s.store.Update(func(state *acnState) error {
+			saveErr := s.store.Update(func(state *acnState) error {
 				if current := state.Users[userID]; current != nil {
 					current.Enabled = false
 				}
 				return nil
 			})
-			client.Logger().Warn("acn.flood_disabled", slog.String("user", userID))
+			if saveErr != nil {
+				// 停用没存下来：下一分钟还会再改、再被限流。
+				client.Logger().Error("acn.flood_disable_failed", slog.String("user", userID), slog.String("error", saveErr.Error()))
+			} else {
+				client.Logger().Warn("acn.flood_disabled", slog.String("user", userID))
+			}
 		}
 		return false, err
 	}

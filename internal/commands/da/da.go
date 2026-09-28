@@ -57,10 +57,12 @@ type daSlot struct {
 	mu     sync.Mutex
 }
 
-func (s *daService) save(task *daTask) error {
+// save 存下任务进度。存不进去不中断删除（进度只是给 status 和重启后恢复用的），但要记日志：
+// 以前这些错误全被丢掉，重启后任务从哪里继续、删了多少都可能是旧的，而没人知道为什么。
+func (s *daService) save(task *daTask) {
 	task.LastUpdate = time.Now().UnixMilli()
 	copied := *task
-	return s.store.Update(func(db *daDB) error {
+	err := s.store.Update(func(db *daDB) error {
 		for index := range db.Tasks {
 			if db.Tasks[index].ChatID == copied.ChatID {
 				db.Tasks[index] = copied
@@ -70,6 +72,14 @@ func (s *daService) save(task *daTask) error {
 		db.Tasks = append(db.Tasks, copied)
 		return nil
 	})
+	s.warn("da.save_failed", err)
+}
+
+// warn 在 err 不为空时记一条带 error 的警告。
+func (s *daService) warn(event string, err error) {
+	if err != nil && s.a != nil && s.a.Logger != nil {
+		s.a.Logger.Warn(event, "error", err.Error())
+	}
 }
 
 func (s *daService) progress(ctx context.Context, client *bot.Client, task *daTask, status string) {
@@ -93,7 +103,7 @@ func (s *daService) progress(ctx context.Context, client *bot.Client, task *daTa
 	if task.SavedMessageID > 0 {
 		err := client.EditMessage(ctx, &tg.InputPeerSelf{}, task.SavedMessageID, text, false)
 		if err == nil {
-			_ = s.save(task)
+			s.save(task)
 			return
 		}
 		if ctx.Err() != nil {
@@ -105,13 +115,13 @@ func (s *daService) progress(ctx context.Context, client *bot.Client, task *daTa
 		return
 	}
 	task.SavedMessageID = id
-	_ = s.save(task)
+	s.save(task)
 }
 
 // pauseInterrupted 在启动时处理上次没跑完的任务：一律改成暂停，
 // 要等有人明确发 .da true 才继续，不会因为进程重启就自己又删起来。
 func (s *daService) pauseInterrupted() {
-	_ = s.store.Update(func(db *daDB) error {
+	err := s.store.Update(func(db *daDB) error {
 		for index := range db.Tasks {
 			task := &db.Tasks[index]
 			if task.IsRunning {
@@ -126,6 +136,7 @@ func (s *daService) pauseInterrupted() {
 		}
 		return nil
 	})
+	s.warn("da.pause_interrupted_failed", err)
 }
 
 // current 找到这个群的任务：正在跑的取运行中的副本，否则从存档里读。
@@ -142,7 +153,8 @@ func (s *daService) current(id string, slot *daSlot) *daTask {
 			return &copied
 		}
 	}
-	db, _ := s.store.Read()
+	db, err := s.store.Read()
+	s.warn("da.read_failed", err)
 	var task *daTask
 	for index := range db.Tasks {
 		if db.Tasks[index].ChatID == id {
@@ -167,7 +179,7 @@ func (s *daService) report(ctx context.Context, inv *command.Invocation, sub str
 	}
 	if sub == "stop" && slot == nil {
 		task.IsRunning, task.IsPaused = false, true
-		_ = s.save(task)
+		s.save(task)
 	}
 	status := "状态查询"
 	if sub == "stop" {
@@ -243,7 +255,7 @@ type daRun struct {
 	api    *tg.Client
 	peer   tg.InputPeerClass
 	task   *daTask
-	save   func(*daTask) error
+	save   func(*daTask)
 	logger *slog.Logger
 }
 
@@ -270,7 +282,7 @@ func (s *daService) finish(ctx context.Context, client *bot.Client, task *daTask
 	task.IsRunning = false
 	task.IsPaused = ctx.Err() != nil
 	task.SleepUntil = nil
-	_ = s.save(task)
+	s.save(task)
 	status := "执行失败"
 	switch {
 	case ctx.Err() != nil:
@@ -282,7 +294,7 @@ func (s *daService) finish(ctx context.Context, client *bot.Client, task *daTask
 	}
 	s.progress(context.WithoutCancel(ctx), client, task, status)
 	if completed && len(task.Errors) == 0 {
-		_ = s.store.Update(func(db *daDB) error {
+		err := s.store.Update(func(db *daDB) error {
 			var kept []daTask
 			for _, item := range db.Tasks {
 				if item.ChatID != id {
@@ -292,6 +304,7 @@ func (s *daService) finish(ctx context.Context, client *bot.Client, task *daTask
 			db.Tasks = kept
 			return nil
 		})
+		s.warn("da.remove_finished_failed", err)
 	}
 }
 
@@ -308,7 +321,7 @@ func (s *daService) run(ctx context.Context, client *bot.Client, slot *daSlot, i
 	slot.mu.Lock()
 	slot.task = task
 	slot.mu.Unlock()
-	_ = s.save(task)
+	s.save(task)
 
 	completed := false
 	defer func() { s.finish(ctx, client, task, id, completed) }()
@@ -390,13 +403,13 @@ func (r *daRun) deleteIDs(ids []int) {
 		err := r.client.Delete(r.ctx, r.peer, ids)
 		if err == nil {
 			r.task.DeletedMessages += len(ids)
-			_ = r.save(r.task)
+			r.save(r.task)
 			return
 		}
 		if wait, ok := tgerr.AsFloodWait(err); ok {
 			until := time.Now().Add(wait).UnixMilli()
 			r.task.SleepUntil = &until
-			_ = r.save(r.task)
+			r.save(r.task)
 			if kit.Sleep(r.ctx, wait) != nil {
 				return
 			}
@@ -416,7 +429,7 @@ func (r *daRun) deleteIDs(ids []int) {
 				_ = kit.Sleep(r.ctx, 50*time.Millisecond)
 			}
 		}
-		_ = r.save(r.task)
+		r.save(r.task)
 		return
 	}
 }

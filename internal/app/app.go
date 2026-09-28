@@ -170,6 +170,7 @@ func Prepare(ctx context.Context, options Options) (*App, error) {
 	if err != nil {
 		logger.Warn("updates.state_unavailable", slog.String("error", err.Error()))
 	} else {
+		state.OnFlushError = func(err error) { logger.Warn("updates.state_flush_failed", slog.String("error", err.Error())) }
 		app.state = state
 		app.peers.SetDurable(state)
 	}
@@ -467,7 +468,9 @@ func (a *App) DispatchMessage(ctx context.Context, message *tg.Message) bool {
 // Close 释放锁并把状态刷写到磁盘。
 func (a *App) Close() error {
 	if a.state != nil {
-		_ = a.state.Close()
+		if err := a.state.Close(); err != nil && a.Logger != nil {
+			a.Logger.Warn("updates.state_flush_failed", slog.String("error", err.Error()))
+		}
 	}
 	if a.lock != nil {
 		return a.lock.Close()

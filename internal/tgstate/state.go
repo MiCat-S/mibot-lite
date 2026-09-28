@@ -40,6 +40,9 @@ type State struct {
 	doc   document
 	dirty bool
 	timer *time.Timer
+	// OnFlushError 在后台写盘失败时调用（Open 之后、开始使用之前设置）。写不进去的话，
+	// 重启后会从旧的 pts 补抓，或者丢掉 access hash，这不能悄悄发生。
+	OnFlushError func(error)
 }
 
 // Open 加载文件；文件不存在就从空状态开始。
@@ -90,7 +93,9 @@ func (s *State) markDirty() {
 		s.timer = time.AfterFunc(time.Second, func() {
 			s.mu.Lock()
 			defer s.mu.Unlock()
-			_ = s.flushLocked()
+			if err := s.flushLocked(); err != nil && s.OnFlushError != nil {
+				s.OnFlushError(err)
+			}
 		})
 	} else {
 		s.timer.Reset(time.Second)

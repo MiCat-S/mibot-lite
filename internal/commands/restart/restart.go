@@ -16,6 +16,7 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/app"
 	"github.com/MiCat-S/mibot-lite/internal/bot"
 	"github.com/MiCat-S/mibot-lite/internal/command"
+	"github.com/MiCat-S/mibot-lite/internal/commands/kit"
 	"github.com/MiCat-S/mibot-lite/internal/store"
 )
 
@@ -99,7 +100,7 @@ func (r *restarter) command(ctx context.Context, inv *command.Invocation, kind, 
 	}
 	if err := r.trigger(ctx); err != nil {
 		release()
-		_ = r.store.Update(func(doc *receiptDocument) error { doc.Pending = nil; return nil })
+		kit.Warn(r.a, "restart.receipt_clear_failed", r.store.Update(func(doc *receiptDocument) error { doc.Pending = nil; return nil }))
 		status := r.status(ctx)
 		return inv.Edit(ctx, command.Escape(failure)+"\n状态：\n"+status+"\n"+command.Escape(ownerHint())+
 			"\n\n可执行 "+command.Code("systemctl status "+r.service+" --no-pager")+" 查看详情。")
@@ -148,12 +149,12 @@ func (r *restarter) notifyReady(ctx context.Context, client *bot.Client) {
 	}
 	note := *doc.Pending
 	clear := func() {
-		_ = r.store.Update(func(doc *receiptDocument) error {
+		kit.Warn(r.a, "restart.receipt_clear_failed", r.store.Update(func(doc *receiptDocument) error {
 			if doc.Pending != nil && doc.Pending.BootID == note.BootID && doc.Pending.RequestedAt == note.RequestedAt {
 				doc.Pending = nil
 			}
 			return nil
-		})
+		}))
 	}
 	age := time.Now().UnixMilli() - note.RequestedAt
 	if !chatIDPattern.MatchString(note.ChatID) || note.MessageID <= 0 || age < 0 || age > 10*60*1000 {

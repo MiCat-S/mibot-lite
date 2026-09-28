@@ -312,12 +312,12 @@ func (s *aiService) publish(ctx context.Context, cfg aiConfig, question, answer 
 		return "", kit.Fail("Telegraph 返回无效链接")
 	}
 	item := aiTelegraphItem{URL: link, Title: title, CreatedAt: time.Now().UTC().Format(time.RFC3339)}
-	_ = s.update(func(cfg *aiConfig) error {
+	kit.Warn(s.a, "ai.telegraph_record_failed", s.update(func(cfg *aiConfig) error {
 		cfg.Telegraph.List = append(cfg.Telegraph.List, item)
 		if len(cfg.Telegraph.List) > cfg.Telegraph.Limit {
 			cfg.Telegraph.List = cfg.Telegraph.List[len(cfg.Telegraph.List)-cfg.Telegraph.Limit:]
 		}
 		return nil
-	})
+	}))
 	return link, nil
 }

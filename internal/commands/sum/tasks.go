@@ -368,11 +368,12 @@ func (s *sumService) add(ctx context.Context, inv *command.Invocation) error {
 		return err
 	}
 	if err := s.register(task); err != nil {
-		_ = s.update(func(db *sumDB) error {
+		// 定时注册失败，把刚存下的任务撤掉；撤不掉的话配置里会留一个不会运行的任务。
+		kit.Warn(s.a, "sum.rollback_task_failed", s.update(func(db *sumDB) error {
 			db.Tasks = slicesDeleteTask(db.Tasks, task.ID)
 			db.Seq = previous
 			return nil
-		})
+		}))
 		return err
 	}
 	lines := []string{"✅ 已创建摘要任务 " + command.Code(task.ID), "群组：" + command.Escape(kit.OrDefault(display, chatID)), "间隔：" + command.Code(interval)}
@@ -456,7 +457,7 @@ func (s *sumService) fire(id string) {
 	defer cancel()
 	err = s.push(ctx, client, *task)
 	target := pushTarget(db, *task)
-	_ = s.update(func(db *sumDB) error {
+	kit.Warn(s.a, "sum.record_run_failed", s.update(func(db *sumDB) error {
 		for index := range db.Tasks {
 			if db.Tasks[index].ID != id {
 				continue
@@ -469,7 +470,7 @@ func (s *sumService) fire(id string) {
 			}
 		}
 		return nil
-	})
+	}))
 	if err != nil {
 		s.a.Logger.Error("sum.scheduled_failed", "task", id, "error", err.Error())
 	}
