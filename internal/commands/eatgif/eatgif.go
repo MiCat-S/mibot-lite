@@ -267,85 +267,111 @@ func Register(a *app.App) {
 	registerEat(a)
 	service := &eatgifService{a: a}
 	a.Registry.Register(&command.Command{Name: "eatgif", Group: command.GroupMedia, Description: "用双方头像合成动画贴纸", Usage: "[名称|list|clear]", Help: service.help, Timeout: 5 * time.Minute,
-		Handle: func(ctx context.Context, inv *command.Invocation) error {
-			sub := strings.ToLower(inv.Arg(0))
-			if sub == "clear" {
-				if err := os.RemoveAll(filepath.Join(a.DataDir(), "eatgif")); err != nil {
-					return err
-				}
-				service.mu.Lock()
-				service.catalog, service.catalogAt = nil, time.Time{}
-				service.mu.Unlock()
-				return inv.EditText(ctx, "缓存已清理并将在下次请求时刷新")
-			}
-			catalog, err := service.getCatalog(ctx)
-			if err != nil {
-				return kit.FailWith("无法读取素材列表", err)
-			}
-			if sub == "" || sub == "list" || sub == "ls" {
-				names := make([]string, 0, len(catalog))
-				for name := range catalog {
-					names = append(names, name)
-				}
-				sort.Strings(names)
-				lines := []string{"🎬 <b>头像动画贴纸</b>", command.Code(inv.Prefix+"eatgif 名称") + "（需回复目标）", ""}
-				for _, name := range names {
-					lines = append(lines, "• "+command.Code(name)+" - "+command.Escape(catalog[name].Desc))
-				}
-				return inv.EditPages(ctx, command.HTMLPages(strings.Join(lines, "\n"), command.PageLimit))
-			}
-			selected, ok := catalog[sub]
-			if !ok {
-				return kit.Failf("找不到 %s，发 %seatgif list 看全部动画", sub, inv.Prefix)
-			}
-			reply, err := kit.Reply(ctx, inv)
-			if err != nil {
-				return err
-			}
-			if reply == nil {
-				return kit.Fail("请回复一条消息后再生成，用户或频道发的都可以")
-			}
+		Handle: service.handle})
+}
 
-			// 一次只跑一个：每次运行都要解码几十帧、再 fork 一个 ffmpeg，
-			// 而这个程序的宗旨就是保持轻量。
-			service.mu.Lock()
-			if service.running {
-				service.mu.Unlock()
-				return kit.Fail("已有一个动图正在生成，请稍候")
-			}
-			service.running = true
-			service.mu.Unlock()
-			defer func() { service.mu.Lock(); service.running = false; service.mu.Unlock() }()
+func (s *eatgifService) handle(ctx context.Context, inv *command.Invocation) error {
+	sub := strings.ToLower(inv.Arg(0))
+	if sub == "clear" {
+		return s.clear(ctx, inv)
+	}
+	catalog, err := s.getCatalog(ctx)
+	if err != nil {
+		return kit.FailWith("无法读取素材列表", err)
+	}
+	if sub == "" || sub == "list" || sub == "ls" {
+		return s.list(ctx, inv, catalog)
+	}
+	selected, ok := catalog[sub]
+	if !ok {
+		return kit.Failf("找不到 %s，发 %seatgif list 看全部动画", sub, inv.Prefix)
+	}
+	reply, err := kit.Reply(ctx, inv)
+	if err != nil {
+		return err
+	}
+	if reply == nil {
+		return kit.Fail("请回复一条消息后再生成，用户或频道发的都可以")
+	}
+	// 一次只跑一个：每次运行都要解码几十帧、再 fork 一个 ffmpeg，
+	// 而这个程序的宗旨就是保持轻量。
+	if !s.start() {
+		return kit.Fail("已有一个动图正在生成，请稍候")
+	}
+	defer s.finish()
+	return s.generate(ctx, inv, selected, reply)
+}
 
-			if err := inv.EditText(ctx, kit.Working("正在生成「"+selected.Desc+"」")); err != nil {
-				return err
-			}
-			var spec eatgifSpec
-			if err := service.assetJSON(ctx, selected.URL, &spec); err != nil {
-				return kit.FailWith("无法读取动画定义", err)
-			}
-			if spec.Width < 1 || spec.Height < 1 || spec.Width > 512 || spec.Height > 512 || len(spec.Frames) < 1 || len(spec.Frames) > eatgifMaxFrames {
-				return kit.Fail("动画定义无效")
-			}
+// clear 删掉素材缓存，下次用时重新下载。
+func (s *eatgifService) clear(ctx context.Context, inv *command.Invocation) error {
+	if err := os.RemoveAll(filepath.Join(s.a.DataDir(), "eatgif")); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.catalog, s.catalogAt = nil, time.Time{}
+	s.mu.Unlock()
+	return inv.EditText(ctx, "缓存已清理并将在下次请求时刷新")
+}
 
-			faces, err := service.faces(ctx, inv, reply)
-			if err != nil {
-				return err
-			}
+// list 按名称列出全部动画。
+func (s *eatgifService) list(ctx context.Context, inv *command.Invocation, catalog map[string]eatgifEntry) error {
+	names := make([]string, 0, len(catalog))
+	for name := range catalog {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	lines := []string{"🎬 <b>头像动画贴纸</b>", command.Code(inv.Prefix+"eatgif 名称") + "（需回复目标）", ""}
+	for _, name := range names {
+		lines = append(lines, "• "+command.Code(name)+" - "+command.Escape(catalog[name].Desc))
+	}
+	return inv.EditPages(ctx, command.HTMLPages(strings.Join(lines, "\n"), command.PageLimit))
+}
 
-			webm, err := service.render(ctx, spec, faces)
-			if err != nil {
-				return err
-			}
-			peer, err := inv.Client.InputPeer(inv.Message.Peer)
-			if err != nil {
-				return err
-			}
-			if err := inv.Client.SendDocument(ctx, peer, webm, media.StickerDocument("sticker", webm, "✨", inv.Message.ReplyToID)); err != nil {
-				return err
-			}
-			return inv.Client.DeleteMessage(ctx, inv.Message)
-		}})
+// start 占住生成的名额，已经有一个在跑就返回 false；成功的要用 finish 放开。
+func (s *eatgifService) start() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.running {
+		return false
+	}
+	s.running = true
+	return true
+}
+
+func (s *eatgifService) finish() {
+	s.mu.Lock()
+	s.running = false
+	s.mu.Unlock()
+}
+
+// generate 读动画定义、取双方头像、合成并发出贴纸，最后删掉命令消息。
+func (s *eatgifService) generate(ctx context.Context, inv *command.Invocation, selected eatgifEntry, reply *bot.Message) error {
+	if err := inv.EditText(ctx, kit.Working("正在生成「"+selected.Desc+"」")); err != nil {
+		return err
+	}
+	var spec eatgifSpec
+	if err := s.assetJSON(ctx, selected.URL, &spec); err != nil {
+		return kit.FailWith("无法读取动画定义", err)
+	}
+	if spec.Width < 1 || spec.Height < 1 || spec.Width > 512 || spec.Height > 512 || len(spec.Frames) < 1 || len(spec.Frames) > eatgifMaxFrames {
+		return kit.Fail("动画定义无效")
+	}
+	faces, err := s.faces(ctx, inv, reply)
+	if err != nil {
+		return err
+	}
+	webm, err := s.render(ctx, spec, faces)
+	if err != nil {
+		return err
+	}
+	peer, err := inv.Client.InputPeer(inv.Message.Peer)
+	if err != nil {
+		return err
+	}
+	if err := inv.Client.SendDocument(ctx, peer, webm, media.StickerDocument("sticker", webm, "✨", inv.Message.ReplyToID)); err != nil {
+		return err
+	}
+	return inv.Client.DeleteMessage(ctx, inv.Message)
 }
 
 // render 在临时目录里逐帧贴上头像、写成 PNG，再交给 ffmpeg 编码成视频贴纸。
