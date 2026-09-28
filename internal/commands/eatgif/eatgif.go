@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"image"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -23,6 +24,7 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/bot"
 	"github.com/MiCat-S/mibot-lite/internal/command"
 	"github.com/MiCat-S/mibot-lite/internal/commands/kit"
+	"github.com/MiCat-S/mibot-lite/internal/fsutil"
 	"github.com/MiCat-S/mibot-lite/internal/httpx"
 	"github.com/MiCat-S/mibot-lite/internal/imaging"
 	"github.com/MiCat-S/mibot-lite/internal/media"
@@ -124,7 +126,7 @@ func fetchCached(ctx context.Context, a *app.App, directory, key, url string, li
 	if data, ok := readCache(cache, limit); ok {
 		return data, nil
 	}
-	return download(ctx, cache, url, limit)
+	return download(ctx, a.Logger, cache, url, limit)
 }
 
 // fetchFresh 和 fetchCached 一样缓存，但磁盘副本超过 maxAge 就重新下载。用于会更新的
@@ -136,7 +138,7 @@ func fetchFresh(ctx context.Context, a *app.App, directory, key, url string, lim
 			return data, nil
 		}
 	}
-	data, err := download(ctx, cache, url, limit)
+	data, err := download(ctx, a.Logger, cache, url, limit)
 	if err == nil {
 		return data, nil
 	}
@@ -146,8 +148,8 @@ func fetchFresh(ctx context.Context, a *app.App, directory, key, url string, lim
 	return nil, err
 }
 
-// download 下载 url 并写进缓存文件 cache。
-func download(ctx context.Context, cache, url string, limit int64) ([]byte, error) {
+// download 下载 url 并写进缓存文件 cache。缓存写不进去不影响这一次使用，只记日志。
+func download(ctx context.Context, logger *slog.Logger, cache, url string, limit int64) ([]byte, error) {
 	response, err := httpx.Do(ctx, httpx.Request{URL: url, Timeout: 30 * time.Second, MaxBytes: limit})
 	if err != nil {
 		return nil, err
@@ -155,13 +157,10 @@ func download(ctx context.Context, cache, url string, limit int64) ([]byte, erro
 	if !response.OK() {
 		return nil, &httpx.StatusError{Status: response.Status}
 	}
-	if err := os.MkdirAll(filepath.Dir(cache), 0o700); err != nil {
-		return nil, err
-	}
-	// 以原子方式落盘：同时执行的两条命令绝不能读到写了一半的素材。
-	temporary := cache + ".tmp"
-	if err := os.WriteFile(temporary, response.Body, 0o600); err == nil {
-		_ = os.Rename(temporary, cache)
+	// .eat 和 .eat2 可能同时下载同一个素材：用随机命名的临时文件再改名，
+	// 两边不会互相截断，读的一方也不会读到写了一半的文件。
+	if err := fsutil.WriteFileAtomic(cache, response.Body, 0o600); err != nil && logger != nil {
+		logger.Warn("eatgif.cache_write_failed", "file", filepath.Base(cache), "error", err.Error())
 	}
 	return response.Body, nil
 }
