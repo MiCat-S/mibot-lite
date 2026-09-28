@@ -340,7 +340,7 @@ func (s *sumService) add(ctx context.Context, inv *command.Invocation) error {
 	if err != nil {
 		return err
 	}
-	if options.provider != "" && !providerKnown(db, options.provider) {
+	if options.provider != "" && !s.providerKnown(db, options.provider) {
 		return kit.Fail("未找到 AI 配置：" + options.provider)
 	}
 	chatID, display, err := s.resolveChat(ctx, inv, target)
@@ -659,7 +659,7 @@ func (s *sumService) edit(ctx context.Context, inv *command.Invocation) error {
 		}
 		mutate = func(task *sumTask) { task.UseSpoiler = enabled }
 	case "provider":
-		if value != "" && !providerKnown(db, value) {
+		if value != "" && !s.providerKnown(db, value) {
 			return kit.Fail("未找到 AI 配置：" + value)
 		}
 		message = "已设置任务 " + id + " 的 AI 配置为 " + value

@@ -78,8 +78,8 @@ func (s *sumService) configList(ctx context.Context, inv *command.Invocation, db
 	if body == "" {
 		body = "• 尚未配置 AI"
 	}
-	if ai.Available() && (len(names) == 0 || db.AIConfig.AIMigrated) {
-		tag, model := ai.ChatSelection()
+	if s.models != nil && (len(names) == 0 || db.AIConfig.AIMigrated) {
+		tag, model := s.models.ChatSelection()
 		body += "\n• ai 聊天模型：" + command.Code(kit.OrDash(tag)+" / "+kit.OrDash(model))
 	}
 	promptState := "自定义"

@@ -390,6 +390,8 @@ type sumBackend struct {
 	own   *sumProvider
 	aiTag string
 	name  string
+	// models 是 ai 的统一配置，own 为空时用它。
+	models *ai.Service
 }
 
 // sumResolveBackend 决定用哪个模型。requested 是任务或 --provider 指定的名称，
@@ -424,15 +426,17 @@ func sumResolveBackend(db sumDB, requested string, aiAvailable bool, aiHas func(
 }
 
 func (s *sumService) backend(db sumDB, requested string) (sumBackend, error) {
-	return sumResolveBackend(db, requested, ai.Available(), ai.HasProvider)
+	backend, err := sumResolveBackend(db, requested, s.models != nil, s.models.HasProvider)
+	backend.models = s.models
+	return backend, err
 }
 
 // providerKnown 判断名称是 sum 自己的服务商或 ai 的标签。
-func providerKnown(db sumDB, name string) bool {
+func (s *sumService) providerKnown(db sumDB, name string) bool {
 	if _, ok := db.AIConfig.Providers[name]; ok {
 		return true
 	}
-	return ai.Available() && ai.HasProvider(name)
+	return s.models.HasProvider(name)
 }
 
 func (b sumBackend) call(ctx context.Context, db sumDB, messages, prompt string) (string, error) {
@@ -447,11 +451,12 @@ func (b sumBackend) call(ctx context.Context, db sumDB, messages, prompt string)
 		}
 		return sumCallAI(ctx, *b.own, messages, prompt, reasoning, tier, timeout)
 	}
-	return ai.Chat(ctx, ai.ChatRequest{Tag: b.aiTag, Text: messages, SystemPrompt: prompt, MaxOutputTokens: 2000, FallbackToChat: true, MinTimeout: timeout})
+	return b.models.Chat(ctx, ai.ChatRequest{Tag: b.aiTag, Text: messages, SystemPrompt: prompt, MaxOutputTokens: 2000, FallbackToChat: true, MinTimeout: timeout})
 }
 
 type sumService struct {
 	a       *app.App
+	models  *ai.Service
 	store   *store.Store[sumDB]
 	cron    *cron.Cron
 	mu      sync.Mutex
@@ -668,8 +673,8 @@ func sumHelp(prefix string) string {
 }
 
 // Register 注册 .sum 及其定时任务。
-func Register(a *app.App) {
-	service := &sumService{a: a, store: kit.NewStore(a, "sum.json", sumDefaults), cron: cron.New(cron.WithParser(sumCronParser)),
+func Register(a *app.App, models *ai.Service) {
+	service := &sumService{a: a, models: models, store: kit.NewStore(a, "sum.json", sumDefaults), cron: cron.New(cron.WithParser(sumCronParser)),
 		entries: map[string]cron.EntryID{}, running: map[string]bool{}}
 	a.Registry.AddJob(func(ctx context.Context, client *bot.Client) {
 		service.mu.Lock()

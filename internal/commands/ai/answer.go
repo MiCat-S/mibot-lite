@@ -241,7 +241,7 @@ func searchText(ctx context.Context, cfg aiConfig, text string, options chatOpti
 	return output, sources, sel.Tag, nil
 }
 
-func (s *aiService) telegraphPost(ctx context.Context, cfg aiConfig, method string, body any) (map[string]any, error) {
+func (s *Service) telegraphPost(ctx context.Context, cfg aiConfig, method string, body any) (map[string]any, error) {
 	response, err := httpx.PostJSON(ctx, "https://api.telegra.ph/"+method, nil, body, time.Duration(cfg.Timeout)*time.Second, 1<<20)
 	if err != nil {
 		return nil, kit.Fail("Telegraph 请求失败：" + httpx.Reason(err))
@@ -279,7 +279,7 @@ func telegraphMarkdown(question, answer string, sources []aiSource) string {
 	return markdown
 }
 
-func (s *aiService) publish(ctx context.Context, cfg aiConfig, question, answer string, sources []aiSource) (string, error) {
+func (s *Service) publish(ctx context.Context, cfg aiConfig, question, answer string, sources []aiSource) (string, error) {
 	token := cfg.TelegraphToken
 	if token == "" {
 		account, err := s.telegraphPost(ctx, cfg, "createAccount", map[string]any{"short_name": "MiBotAI", "author_name": "MiBot"})

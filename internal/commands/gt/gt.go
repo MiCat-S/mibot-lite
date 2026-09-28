@@ -13,8 +13,8 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/commands/kit"
 )
 
-// Register 注册 .gt：借 ai 命令当前的对话模型来翻译。
-func Register(a *app.App) {
+// Register 注册 .gt：借 ai 命令当前的对话模型来翻译。models 为 nil 时 .gt 报错说没有配置。
+func Register(a *app.App, models *ai.Service) {
 	help := func(prefix string) string {
 		p := command.Escape(prefix)
 		return "📘 <b>AI 翻译</b>\n\n• <code>" + p + "gt 文本</code> 翻译为简体中文\n• <code>" + p + "gt en 文本</code> 翻译为英文\n• 回复消息后使用 <code>" + p + "gt</code> 或 <code>" + p +
@@ -47,13 +47,10 @@ func Register(a *app.App) {
 			if kit.UTF16Len(text) > 5000 {
 				return kit.Fail("文本过长，请保持在 5000 字以内")
 			}
-			if !ai.Available() {
-				return kit.Fail("AI 组件不可用")
-			}
 			if err := inv.EditText(ctx, kit.Working("正在翻译")); err != nil {
 				return err
 			}
-			translated, err := ai.Translate(ctx, text, target)
+			translated, err := models.Translate(ctx, text, target)
 			if err != nil {
 				if ctx.Err() != nil {
 					return ctx.Err()

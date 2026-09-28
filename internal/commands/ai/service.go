@@ -26,11 +26,11 @@ type ChatRequest struct {
 }
 
 // HasProvider 判断 ai 配置里有没有这个服务商标签。
-func HasProvider(tag string) bool {
-	if shared == nil || tag == "" {
+func (s *Service) HasProvider(tag string) bool {
+	if s == nil || tag == "" {
 		return false
 	}
-	cfg, err := shared.read()
+	cfg, err := s.read()
 	if err != nil {
 		return false
 	}
@@ -39,11 +39,11 @@ func HasProvider(tag string) bool {
 }
 
 // ChatSelection 返回 ai 当前的聊天服务商标签和模型。
-func ChatSelection() (tag, model string) {
-	if shared == nil {
+func (s *Service) ChatSelection() (tag, model string) {
+	if s == nil {
 		return "", ""
 	}
-	cfg, err := shared.read()
+	cfg, err := s.read()
 	if err != nil {
 		return "", ""
 	}
@@ -67,12 +67,12 @@ func chatModelFor(cfg aiConfig, tag string) (string, error) {
 	return model, AssertAllowedModel(model)
 }
 
-// Chat 用 ai 的统一配置生成文字。调用前先用 Available 确认。
-func Chat(ctx context.Context, request ChatRequest) (string, error) {
-	if shared == nil {
+// Chat 用 ai 的统一配置生成文字。
+func (s *Service) Chat(ctx context.Context, request ChatRequest) (string, error) {
+	if s == nil {
 		return "", kit.Fail("请先配置 ai 聊天模型")
 	}
-	cfg, err := shared.read()
+	cfg, err := s.read()
 	if err != nil {
 		return "", err
 	}

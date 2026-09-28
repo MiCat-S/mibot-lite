@@ -36,8 +36,8 @@ type release struct {
 	} `json:"assets"`
 }
 
-// Register 注册 .update。
-func Register(a *app.App) {
+// Register 注册 .update。装好新版本或回滚之后，用 restarter 重启服务。
+func Register(a *app.App, restarter *restart.Restarter) {
 	repo := a.Env.Get("MIBOT_UPDATE_REPO", "MiCat-S/mibot-lite")
 	a.Registry.Register(&command.Command{Name: "update", Group: command.GroupSystem, Description: "检查并更新程序", Usage: "[check|run|rollback]", Timeout: 10 * time.Minute,
 		Help: func(prefix string) string {
@@ -89,13 +89,13 @@ func Register(a *app.App) {
 				}
 				return inv.Edit(ctx, text)
 			case "run", "apply":
-				return runUpdate(ctx, a, inv, repo, binary)
+				return runUpdate(ctx, a, inv, restarter, repo, binary)
 			case "rollback":
 				previous := binary + ".previous"
 				if info, err := os.Stat(previous); err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
 					return kit.Fail("没有可回滚的上一版本")
 				}
-				if !restart.Available() {
+				if restarter == nil {
 					return kit.Fail("重启组件不可用")
 				}
 				// 当前版本先挪到 .rollback，上一版本换进来之后，再把它改名成新的 .previous：
@@ -108,7 +108,7 @@ func Register(a *app.App) {
 				if err := os.Rename(aside, previous); err != nil {
 					inv.Log.Warn("update.keep_previous_failed", "error", err.Error(), "left_at", aside)
 				}
-				return restart.Now(ctx, inv, "rollback", "⬆️ <b>程序更新</b>\n⏳ 已换回上一版本，正在重启…", "回滚后重启失败。")
+				return restarter.Now(ctx, inv, "rollback", "⬆️ <b>程序更新</b>\n⏳ 已换回上一版本，正在重启…", "回滚后重启失败。")
 			}
 			return kit.Usage(inv.Prefix, "update [check|run|rollback]")
 		}})
@@ -148,8 +148,8 @@ func newer(current, latest string) bool {
 // busy 让更新和回滚同一时间只有一个在跑。
 var busy sync.Mutex
 
-func runUpdate(ctx context.Context, a *app.App, inv *command.Invocation, repo, binary string) error {
-	if !restart.Available() {
+func runUpdate(ctx context.Context, a *app.App, inv *command.Invocation, restarter *restart.Restarter, repo, binary string) error {
+	if restarter == nil {
 		return kit.Fail("重启组件不可用")
 	}
 	progress := func(text string) error { return inv.Edit(ctx, "⬆️ <b>程序更新</b>\n⏳ "+text) }
@@ -232,7 +232,7 @@ func runUpdate(ctx context.Context, a *app.App, inv *command.Invocation, repo, b
 		os.Remove(candidate)
 		return err
 	}
-	return restart.Now(ctx, inv, "update", "⬆️ <b>程序更新</b>\n⏳ 已安装 "+command.Code(latest.TagName)+"，正在重启…", "更新后重启失败，可手动重启服务。")
+	return restarter.Now(ctx, inv, "update", "⬆️ <b>程序更新</b>\n⏳ 已安装 "+command.Code(latest.TagName)+"，正在重启…", "更新后重启失败，可手动重启服务。")
 }
 
 // executablePath 是正在运行的程序文件的真实路径（解开符号链接）。

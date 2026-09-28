@@ -33,8 +33,8 @@ type receiptDocument struct {
 	Pending *receipt `json:"pending"`
 }
 
-// restarter 向 systemd 提交重启，并留下回执。
-type restarter struct {
+// Restarter 向 systemd 提交重启，并留下回执。.update 装好新版本后也靠它重启。
+type Restarter struct {
 	a       *app.App
 	service string
 	store   *store.Store[receiptDocument]
@@ -42,16 +42,9 @@ type restarter struct {
 	pending bool
 }
 
-// service 是 Register 建好的重启器，.update 装好新版本后也靠它重启。
-var service *restarter
-
-// Available 表示重启器已经就绪。
-func Available() bool { return service != nil }
-
 // Now 提交重启并把命令消息改成 progress；kind 写进回执，重启回来后据此报告。
-// 调用前先用 Available 确认。
-func Now(ctx context.Context, inv *command.Invocation, kind, progress, failure string) error {
-	return service.command(ctx, inv, kind, progress, failure)
+func (r *Restarter) Now(ctx context.Context, inv *command.Invocation, kind, progress, failure string) error {
+	return r.command(ctx, inv, kind, progress, failure)
 }
 
 func systemctl() string {
@@ -61,11 +54,10 @@ func systemctl() string {
 	return "systemctl"
 }
 
-// Register 注册 .restart 和处理回执的钩子。
-func Register(a *app.App) {
-	r := &restarter{a: a, service: a.Env.Get("MIBOT_SERVICE", "mibot-lite.service"),
+// Register 注册 .restart 和处理回执的钩子，返回的 Restarter 交给 .update。
+func Register(a *app.App) *Restarter {
+	r := &Restarter{a: a, service: a.Env.Get("MIBOT_SERVICE", "mibot-lite.service"),
 		store: store.New(filepath.Join(a.Root, "restart-receipt.json"), func() receiptDocument { return receiptDocument{} })}
-	service = r
 	a.Registry.Register(&command.Command{Name: "restart", Group: command.GroupSystem, Description: "重启 systemd 服务", Help: restartHelp, Handle: func(ctx context.Context, inv *command.Invocation) error {
 		// 重启不收参数；带了参数多半是打错了，别真的重启。只带 help 的由派发器显示说明。
 		if len(inv.Args) > 0 {
@@ -74,9 +66,10 @@ func Register(a *app.App) {
 		return r.command(ctx, inv, "restart", "🔄 <b>重启服务</b>\n⏳ 正在提交重启请求…", "服务重启命令执行失败。")
 	}})
 	a.Registry.AddJob(r.notifyReady)
+	return r
 }
 
-func (r *restarter) command(ctx context.Context, inv *command.Invocation, kind, progress, failure string) error {
+func (r *Restarter) command(ctx context.Context, inv *command.Invocation, kind, progress, failure string) error {
 	r.mu.Lock()
 	if r.pending {
 		r.mu.Unlock()
@@ -105,13 +98,13 @@ func (r *restarter) command(ctx context.Context, inv *command.Invocation, kind, 
 	return nil
 }
 
-func (r *restarter) trigger(ctx context.Context) error {
+func (r *Restarter) trigger(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	return exec.CommandContext(ctx, systemctl(), "--no-block", "restart", r.service).Run()
 }
 
-func (r *restarter) status(ctx context.Context) string {
+func (r *Restarter) status(ctx context.Context) string {
 	rows := []string{}
 	for _, field := range []string{"LoadState", "ActiveState", "SubState", "FragmentPath"} {
 		ctx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
@@ -139,7 +132,7 @@ func ownerHint() string {
 }
 
 // notifyReady 回应发起重启的那条消息，只回应一次。
-func (r *restarter) notifyReady(ctx context.Context, client *bot.Client) {
+func (r *Restarter) notifyReady(ctx context.Context, client *bot.Client) {
 	doc, err := r.store.Read()
 	if err != nil || doc.Pending == nil || doc.Pending.BootID == r.a.BootID {
 		return

@@ -150,16 +150,14 @@ func TestSearchFallsBackToChat(t *testing.T) {
 	}
 }
 
-func withShared(t *testing.T, cfg aiConfig) {
+func serviceWith(t *testing.T, cfg aiConfig) *Service {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "ai.json")
-	service := &aiService{store: store.New(path, aiDefaults)}
+	service := &Service{store: store.New(path, aiDefaults)}
 	if err := service.store.Update(func(value *aiConfig) error { *value = cfg; return nil }); err != nil {
 		t.Fatal(err)
 	}
-	previous := shared
-	shared = service
-	t.Cleanup(func() { shared = previous })
+	return service
 }
 
 // TestChatFallsBackToChatCompletions 检查 .sum 借 ai 调用时：用指定标签记下的 chat 模型，
@@ -187,9 +185,9 @@ func TestChatFallsBackToChatCompletions(t *testing.T) {
 	cfg.Configs["main"] = aiProvider{URL: server.URL + "/v1", Key: "k"}
 	cfg.Configs["sum-a"] = aiProvider{URL: server.URL + "/v1", Key: "k2", Responses: true, Models: map[string]string{"chat": "gpt-x"}}
 	cfg.CurrentChatTag, cfg.CurrentChatModel = "main", "chat-model"
-	withShared(t, cfg)
+	service := serviceWith(t, cfg)
 
-	text, err := Chat(context.Background(), ChatRequest{Tag: "sum-a", Text: "消息", SystemPrompt: "总结", MaxOutputTokens: 2000, FallbackToChat: true})
+	text, err := service.Chat(context.Background(), ChatRequest{Tag: "sum-a", Text: "消息", SystemPrompt: "总结", MaxOutputTokens: 2000, FallbackToChat: true})
 	if err != nil || text != "摘要" {
 		t.Fatalf("got %q %v", text, err)
 	}
@@ -199,17 +197,17 @@ func TestChatFallsBackToChatCompletions(t *testing.T) {
 	if bodies[1]["model"] != "gpt-x" || bodies[1]["max_tokens"] != float64(2000) {
 		t.Fatalf("回退请求的模型或上限不对：%v", bodies[1])
 	}
-	if !HasProvider("sum-a") || HasProvider("missing") {
+	if !service.HasProvider("sum-a") || service.HasProvider("missing") {
 		t.Fatal("HasProvider 结果不对")
 	}
 
 	paths = nil
-	text, err = Chat(context.Background(), ChatRequest{Text: "消息"})
+	text, err = service.Chat(context.Background(), ChatRequest{Text: "消息"})
 	if err != nil || text != "摘要" || len(paths) != 1 || bodies[len(bodies)-1]["model"] != "chat-model" {
 		t.Fatalf("不指定标签时应使用当前聊天模型：%q %v %v", text, err, paths)
 	}
 
-	_, err = Chat(context.Background(), ChatRequest{Tag: "sum-a", Text: "消息"})
+	_, err = service.Chat(context.Background(), ChatRequest{Tag: "sum-a", Text: "消息"})
 	if message, _ := kit.IsUserError(err); message != "AI 接口返回 HTTP 404：no such endpoint" || statusOf(err) != 404 {
 		t.Fatalf("不回退时应带上接口的错误说明：%q", message)
 	}
