@@ -189,31 +189,6 @@ func TestFakeAuthorIsCopied(t *testing.T) {
 	}
 }
 
-func TestStickerDocument(t *testing.T) {
-	webm := stickerDocument([]byte{0x1a, 0x45, 0xdf, 0xa3, 0, 0}, "webm", 7)
-	if webm.MimeType != "video/webm" || webm.ReplyTo != 7 {
-		t.Fatalf("webm 参数 %+v", webm)
-	}
-	var video *tg.DocumentAttributeVideo
-	sticker := false
-	for _, attribute := range webm.Attributes {
-		switch value := attribute.(type) {
-		case *tg.DocumentAttributeVideo:
-			video = value
-		case *tg.DocumentAttributeSticker:
-			sticker = true
-		}
-	}
-	// 读不出文件头时按 512x512 填，而不是 teleproto 的 1x1。
-	if !sticker || video == nil || video.W != 512 || video.H != 512 || video.SupportsStreaming {
-		t.Errorf("webm 贴纸应带贴纸属性和视频属性，实际 %+v", webm.Attributes)
-	}
-	webp := stickerDocument([]byte("not a webp"), "webp", 0)
-	if size, ok := webp.Attributes[1].(*tg.DocumentAttributeImageSize); !ok || size.W != 512 || size.H != 768 {
-		t.Errorf("webp 贴纸的尺寸属性 %+v", webp.Attributes)
-	}
-}
-
 func TestPhotoFits(t *testing.T) {
 	encode := func(width, height int) []byte {
 		var buffer bytes.Buffer

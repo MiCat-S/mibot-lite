@@ -167,14 +167,14 @@ func TestStickerOf(t *testing.T) {
 	}
 }
 
-func TestValidShortName(t *testing.T) {
+func TestValidPackName(t *testing.T) {
 	for _, good := range []string{"a", "Cat_static_1", "x9"} {
-		if !validShortName(good) {
+		if !ValidPackName(good) {
 			t.Errorf("%q 应该合法", good)
 		}
 	}
 	for _, bad := range []string{"", "1abc", "_a", "a-b", "a b", "猫", strings.Repeat("a", 65)} {
-		if validShortName(bad) {
+		if ValidPackName(bad) {
 			t.Errorf("%q 应该不合法", bad)
 		}
 	}

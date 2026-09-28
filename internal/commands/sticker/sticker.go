@@ -51,8 +51,12 @@ type found struct {
 	kind     kind
 }
 
-// validShortName 按贴纸包短名的规则检查：字母开头，只有字母、数字和下划线。
-func validShortName(name string) bool {
+// PackNameRule 是贴纸包名不合规时给用户看的说明，和 ValidPackName 查的是同一套规则。
+const PackNameRule = "贴纸包名只能用字母、数字和下划线，字母开头，最长 64 个字符"
+
+// ValidPackName 按 Telegram 对贴纸包短名的规则检查：字母开头，只有字母、数字和下划线，
+// 最长 64 个字符。.sticker 和 .yvlu 设贴纸包都用它。
+func ValidPackName(name string) bool {
 	if name == "" || len(name) > 64 {
 		return false
 	}
@@ -118,8 +122,8 @@ func ownUsername(self *tg.User) string {
 	return ""
 }
 
-// friendly 把贴纸相关的接口错误翻成看得懂的话。
-func friendly(err error) error {
+// Explain 把贴纸相关的接口错误翻成看得懂的话；认不出的原样返回。
+func Explain(err error) error {
 	for code, text := range map[string]string{
 		"STICKERS_TOO_MUCH":             "贴纸包已满",
 		"STICKERPACK_STICKERS_TOO_MUCH": "贴纸包已满",
@@ -128,7 +132,7 @@ func friendly(err error) error {
 		"STICKERSET_INVALID":            "贴纸包名无效、已被别人占用，或者不是你建的",
 		"SHORTNAME_OCCUPY_FAILED":       "贴纸包名已被占用",
 		"STICKER_EMOJI_INVALID":         "这张贴纸的 emoji 无效",
-		"PACK_SHORT_NAME_INVALID":       "贴纸包名无效（字母开头，只能有字母、数字和下划线）",
+		"PACK_SHORT_NAME_INVALID":       PackNameRule,
 		"PACK_SHORT_NAME_OCCUPIED":      "贴纸包名已被占用",
 	} {
 		if tgerr.Is(err, code) {
@@ -159,9 +163,9 @@ func exists(ctx context.Context, api *tg.Client, name string) (bool, error) {
 	return false, err
 }
 
-// add 把贴纸加进名为 name 的包，包不存在就用 title 新建。返回是否新建了。
-func add(ctx context.Context, api *tg.Client, name, title string, sticker *found) (bool, error) {
-	item := tg.InputStickerSetItem{Document: sticker.document, Emoji: sticker.emoji}
+// AddToPack 把 item 加进名为 name 的贴纸包，包不存在就用 title 新建。返回是否新建了。
+// 错误原样返回，调用方要靠它判断包满没满（见 full）；给用户看之前用 Explain 翻一下。
+func AddToPack(ctx context.Context, api *tg.Client, name, title string, item tg.InputStickerSetItem) (bool, error) {
 	present, err := exists(ctx, api, name)
 	if err != nil {
 		return false, err
@@ -180,25 +184,26 @@ func add(ctx context.Context, api *tg.Client, name, title string, sticker *found
 // 都满了或者不存在就新建下一个。
 func save(ctx context.Context, client *bot.Client, prefix, target string, sticker *found) (string, bool, error) {
 	api := client.API()
+	item := tg.InputStickerSetItem{Document: sticker.document, Emoji: sticker.emoji}
 	username := ownUsername(client.Self())
 	title := "@" + username + " 的收藏（" + sticker.kind.label + "）"
 	if target != "" {
 		if username == "" {
 			title = target
 		}
-		created, err := add(ctx, api, target, title, sticker)
-		return target, created, friendly(err)
+		created, err := AddToPack(ctx, api, target, title, item)
+		return target, created, Explain(err)
 	}
 	if username == "" {
 		return "", false, kit.Fail("账号没有用户名，没法自动给贴纸包起名。先用 " + prefix + "sticker 包名 设一个默认包")
 	}
 	for index := 1; index <= autoPacks; index++ {
 		name := username + sticker.kind.suffix + "_" + strconv.Itoa(index)
-		created, err := add(ctx, api, name, title, sticker)
+		created, err := AddToPack(ctx, api, name, title, item)
 		if full(err) {
 			continue
 		}
-		return name, created, friendly(err)
+		return name, created, Explain(err)
 	}
 	return "", false, kit.Failf("自动命名的 %d 个贴纸包都满了，用 %ssticker to 包名 存到别的包", autoPacks, prefix)
 }
@@ -212,7 +217,7 @@ func help(prefix string) string {
 		"• <code>" + p + "sticker 包名</code> 设默认包，包不存在的话第一次存时新建\n" +
 		"• <code>" + p + "sticker cancel</code> 取消默认包\n" +
 		"• 不回复发 <code>" + p + "sticker</code> 看当前设置\n\n" +
-		"包名只能用字母、数字和下划线，字母开头。贴纸没带 emoji 时随机配一个。"
+		"包名只能用字母、数字和下划线，字母开头，最长 64 个字符。贴纸没带 emoji 时随机配一个。"
 }
 
 func packLink(name string) string {
@@ -249,8 +254,8 @@ func Register(a *app.App) {
 			target := current.DefaultPack
 			if sub == "to" {
 				target = inv.Arg(1)
-				if !validShortName(target) {
-					return kit.Fail("包名只能用字母、数字和下划线，字母开头")
+				if !ValidPackName(target) {
+					return kit.Fail(PackNameRule)
 				}
 			}
 			if err := inv.EditText(ctx, kit.Working("正在收藏")); err != nil {
@@ -301,8 +306,8 @@ func configure(ctx context.Context, inv *command.Invocation, saved *store.Store[
 		return inv.EditText(ctx, "✅ 已取消默认贴纸包")
 	case strings.EqualFold(argument, "to"):
 		return kit.Fail("要回复一个贴纸再用 to")
-	case !validShortName(argument):
-		return kit.Fail("包名只能用字母、数字和下划线，字母开头")
+	case !ValidPackName(argument):
+		return kit.Fail(PackNameRule)
 	}
 	present, err := exists(ctx, inv.Client.API(), argument)
 	if err != nil {

@@ -366,16 +366,6 @@ func (s *eatService) help(prefix string) string {
 	return text + strings.Join(lines, "\n") + "\n\n素材来自 TeleBox 插件仓库，首次使用时下载并缓存，需要主机装有 ffmpeg。"
 }
 
-// stickerOptions 是把一张 WebP 当贴纸发出去的参数：不属于任何贴纸包，alt 用款式名。
-func stickerOptions(alt string, webp []byte, replyTo int) bot.MediaOptions {
-	width, height, _ := imaging.WebPSize(webp)
-	return bot.MediaOptions{Name: "sticker.webp", MimeType: "image/webp", ReplyTo: replyTo,
-		Attributes: []tg.DocumentAttributeClass{
-			&tg.DocumentAttributeSticker{Alt: alt, Stickerset: &tg.InputStickerSetEmpty{}},
-			&tg.DocumentAttributeImageSize{W: width, H: height},
-		}}
-}
-
 // registerEat 注册 .eat 和 .eat2。
 func registerEat(a *app.App) {
 	service := &eatService{a: a, settings: kit.NewStore(a, "eat.json", func() eatSettings { return eatSettings{} })}
@@ -424,7 +414,7 @@ func registerEat(a *app.App) {
 			if err != nil {
 				return err
 			}
-			if err := inv.Client.SendDocument(ctx, peer, result, stickerOptions(entry.Name, result, inv.Message.ReplyToID)); err != nil {
+			if err := inv.Client.SendDocument(ctx, peer, result, media.StickerDocument("sticker", result, entry.Name, inv.Message.ReplyToID)); err != nil {
 				return err
 			}
 			return inv.Client.DeleteMessage(ctx, inv.Message)

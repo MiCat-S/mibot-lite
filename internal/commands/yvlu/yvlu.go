@@ -9,7 +9,6 @@ import (
 	"image"
 	"image/color"
 	"os"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,6 +23,7 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/bot"
 	"github.com/MiCat-S/mibot-lite/internal/command"
 	"github.com/MiCat-S/mibot-lite/internal/commands/kit"
+	"github.com/MiCat-S/mibot-lite/internal/commands/sticker"
 	"github.com/MiCat-S/mibot-lite/internal/httpx"
 	"github.com/MiCat-S/mibot-lite/internal/imaging"
 	"github.com/MiCat-S/mibot-lite/internal/media"
@@ -58,15 +58,13 @@ type yvluOptions struct {
 	FakeAuthor *quoteFrom
 }
 
-var stickerSetName = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
-
 func yvluHelp(prefix string) string {
 	p := command.Escape(prefix)
 	return "📝 <b>生成文字语录贴纸</b>\n\n• <code>" + p + "yvlu [消息数]</code> 回复消息生成语录，最多 5 条\n• <code>" + p +
 		"yvlu r [消息数]</code> 包含被引用的内容\n• <code>" + p + "yvlu f 文本</code> 伪造文本（<code>fr</code> 同时包含回复）\n• <code>" + p +
 		"yvlu u 用户 ID|@用户名 [消息数]</code> 伪造发送者（<code>ur</code> 同时包含回复）\n• <code>" + p +
 		"yvlu webp|image|png|stories [消息数]</code> 指定输出格式\n• <code>" + p + "yvlu s</code> 保存回复的贴纸或图片到贴纸包\n• <code>" + p +
-		"yvlu config</code> 查看配置\n• <code>" + p + "yvlu config sticker 名称</code> 设置贴纸包\n\n图片由远程 quote 服务渲染，需要网络可达。"
+		"yvlu config</code> 查看配置\n• <code>" + p + "yvlu config sticker 贴纸包名</code> 设置贴纸包\n\n图片由远程 quote 服务渲染，需要网络可达。"
 }
 
 // parseYvlu 解析参数。参数按位置排列，还有点不规整，
@@ -447,7 +445,7 @@ func (s *yvluService) handle(ctx context.Context, inv *command.Invocation) error
 // send 按格式发出渲染结果：WebP 和 WebM 当贴纸发，PNG（image、stories）当照片发。
 func send(ctx context.Context, inv *command.Invocation, peer tg.InputPeerClass, data []byte, extension string, replyTo int) error {
 	if extension != "png" {
-		return inv.Client.SendDocument(ctx, peer, data, stickerDocument(data, extension, replyTo))
+		return inv.Client.SendDocument(ctx, peer, data, media.StickerDocument("quote", data, "📝", replyTo))
 	}
 	// 原插件把 quote.png 交给 teleproto，它按扩展名认作图片，以照片发出。照片有尺寸和
 	// 大小限制；超出限制的，或者被 Telegram 拒收的，退回按文件发，结果至少还能送到。
@@ -459,28 +457,6 @@ func send(ctx context.Context, inv *command.Invocation, peer tg.InputPeerClass, 
 		inv.Log.Info("yvlu.photo_rejected", "error", err.Error())
 	}
 	return inv.Client.SendDocument(ctx, peer, data, bot.MediaOptions{Name: "quote.png", MimeType: "image/png", ReplyTo: replyTo})
-}
-
-// stickerDocument 是把 WebP 或 WebM 当贴纸发出去的参数，不属于任何贴纸包。
-func stickerDocument(data []byte, extension string, replyTo int) bot.MediaOptions {
-	attributes := []tg.DocumentAttributeClass{&tg.DocumentAttributeSticker{Alt: "📝", Stickerset: &tg.InputStickerSetEmpty{}}}
-	switch extension {
-	case "webp":
-		width, height, err := imaging.WebPSize(data)
-		if err != nil {
-			width, height = 512, 768
-		}
-		attributes = append(attributes, &tg.DocumentAttributeImageSize{W: width, H: height})
-	case "webm":
-		// 原插件把 .webm 文件交给 teleproto，它会自动加上视频属性；Telegram 自己的客户端
-		// 发视频贴纸也带这一项。宽高和时长从文件头读，读不到时按贴纸的常见尺寸填。
-		width, height, duration, err := media.WebMInfo(data)
-		if err != nil {
-			width, height, duration = 512, 512, 0
-		}
-		attributes = append(attributes, &tg.DocumentAttributeVideo{W: width, H: height, Duration: duration})
-	}
-	return bot.MediaOptions{Name: "quote." + extension, MimeType: mimeOf(extension), ReplyTo: replyTo, Attributes: attributes}
 }
 
 // photoFits 判断图片能不能当照片发。Telegram 的要求：不超过 10 MB，宽高之和不超过
@@ -506,16 +482,6 @@ func photoRejected(err error) bool {
 	return rpc.Code == 400 || rpc.IsType("CHAT_SEND_PHOTOS_FORBIDDEN")
 }
 
-func mimeOf(extension string) string {
-	switch extension {
-	case "png":
-		return "image/png"
-	case "webm":
-		return "video/webm"
-	}
-	return "image/webp"
-}
-
 func (s *yvluService) config(ctx context.Context, inv *command.Invocation) error {
 	action := strings.ToLower(inv.Arg(1))
 	if action == "" {
@@ -524,24 +490,21 @@ func (s *yvluService) config(ctx context.Context, inv *command.Invocation) error
 			return err
 		}
 		name := current.StickerSet
-		text := "📝 <b>语录配置</b>\n贴纸包名称：" + command.Code(kit.OrDefault(name, "未设置"))
+		text := "📝 <b>语录配置</b>\n贴纸包名：" + command.Code(kit.OrDefault(name, "未设置"))
 		if name != "" {
 			text += "\n贴纸包链接：t.me/addstickers/" + command.Escape(name)
 		}
-		return inv.Edit(ctx, text+"\n"+command.Code(inv.Prefix+"yvlu config sticker 贴纸包名称"))
+		return inv.Edit(ctx, text+"\n"+command.Code(inv.Prefix+"yvlu config sticker 贴纸包名"))
 	}
 	if action != "sticker" && action != "stickerset" && action != "set" {
-		return kit.Failf("未知的配置项：%s。可用配置命令：%syvlu config sticker 贴纸包名称", inv.Arg(1), inv.Prefix)
+		return kit.Failf("未知的配置项：%s。可用配置命令：%syvlu config sticker 贴纸包名", inv.Arg(1), inv.Prefix)
 	}
 	name := strings.Join(inv.Args[2:], "_")
 	if name == "" {
-		return kit.Usage(inv.Prefix, "yvlu config sticker 贴纸包名称")
+		return kit.Usage(inv.Prefix, "yvlu config sticker 贴纸包名")
 	}
-	if !stickerSetName.MatchString(name) {
-		return kit.Fail("贴纸包名称只能包含字母、数字和下划线")
-	}
-	if len(name) > 64 {
-		return kit.Fail("贴纸包名称长度应在 1-64 个字符之间")
+	if !sticker.ValidPackName(name) {
+		return kit.Fail(sticker.PackNameRule)
 	}
 	if err := s.store.Update(func(config *yvluConfig) error { config.StickerSet = name; return nil }); err != nil {
 		return err
@@ -557,7 +520,7 @@ func (s *yvluService) saveSticker(ctx context.Context, inv *command.Invocation) 
 		return err
 	}
 	if strings.TrimSpace(config.StickerSet) == "" {
-		return kit.Failf("未配置贴纸包，请使用 %syvlu config sticker 贴纸包名称", inv.Prefix)
+		return kit.Failf("未配置贴纸包，请使用 %syvlu config sticker 贴纸包名", inv.Prefix)
 	}
 	reply, err := kit.Reply(ctx, inv)
 	if err != nil {
@@ -566,16 +529,6 @@ func (s *yvluService) saveSticker(ctx context.Context, inv *command.Invocation) 
 	if reply == nil || reply.Raw == nil {
 		return kit.Fail("请回复一张贴纸或图片")
 	}
-	api := inv.Client.API()
-	set := &tg.InputStickerSetShortName{ShortName: config.StickerSet}
-	exists := true
-	if _, err := api.MessagesGetStickerSet(ctx, &tg.MessagesGetStickerSetRequest{Stickerset: set}); err != nil {
-		if !tgerr.Is(err, "STICKERSET_INVALID") {
-			return err
-		}
-		exists = false
-	}
-
 	var document *tg.InputDocument
 	if existing, ok := bot.DocumentOf(reply.Raw); ok && isStickerDocument(reply.Raw) {
 		// 现成的贴纸按引用添加：重新上传会丢掉它的 emoji 和所属贴纸包，
@@ -602,23 +555,12 @@ func (s *yvluService) saveSticker(ctx context.Context, inv *command.Invocation) 
 	}
 
 	item := tg.InputStickerSetItem{Document: document, Emoji: "📝"}
-	if exists {
-		if _, err := api.StickersAddStickerToSet(ctx, &tg.StickersAddStickerToSetRequest{Stickerset: set, Sticker: item}); err != nil {
-			return err
-		}
-	} else {
-		self, ok := bot.InputUser(&tg.InputPeerSelf{})
-		if !ok {
-			return kit.Fail("无法获取当前用户信息")
-		}
-		if _, err := api.StickersCreateStickerSet(ctx, &tg.StickersCreateStickerSetRequest{
-			UserID: self, Title: config.StickerSet, ShortName: config.StickerSet, Stickers: []tg.InputStickerSetItem{item},
-		}); err != nil {
-			return err
-		}
+	created, err := sticker.AddToPack(ctx, inv.Client.API(), config.StickerSet, config.StickerSet, item)
+	if err != nil {
+		return sticker.Explain(err)
 	}
 	title := "贴纸已添加"
-	if !exists {
+	if created {
 		title = "贴纸包已创建"
 	}
 	return inv.Edit(ctx, kit.Feedback("success", title, "贴纸包：t.me/addstickers/"+config.StickerSet))

@@ -340,7 +340,6 @@ func Register(a *app.App) {
 			defer os.RemoveAll(directory)
 
 			frames := make([]media.Frame, 0, len(spec.Frames))
-			var total time.Duration
 			for index, entry := range spec.Frames {
 				if err := ctx.Err(); err != nil {
 					return err
@@ -381,7 +380,6 @@ func Register(a *app.App) {
 					delay = kit.Clamp(*entry.Delay, 20, 5000)
 				}
 				frames = append(frames, media.Frame{Path: path, Delay: time.Duration(delay) * time.Millisecond})
-				total += time.Duration(delay) * time.Millisecond
 			}
 
 			webm, err := media.StickerWebM(ctx, directory, frames, spec.Width, spec.Height)
@@ -392,15 +390,7 @@ func Register(a *app.App) {
 			if err != nil {
 				return err
 			}
-			options := bot.MediaOptions{Name: "sticker.webm", MimeType: "video/webm", ReplyTo: inv.Message.ReplyToID,
-				Attributes: []tg.DocumentAttributeClass{
-					&tg.DocumentAttributeSticker{Alt: "✨", Stickerset: &tg.InputStickerSetEmpty{}},
-					&tg.DocumentAttributeImageSize{W: spec.Width, H: spec.Height},
-					// 原插件经 teleproto 按 .webm 文件发送，它会自动加上视频属性；
-					// Telegram 自己的客户端发视频贴纸也带这一项，宽高和时长都是实际值。
-					&tg.DocumentAttributeVideo{W: spec.Width, H: spec.Height, Duration: total.Seconds()},
-				}}
-			if err := inv.Client.SendDocument(ctx, peer, webm, options); err != nil {
+			if err := inv.Client.SendDocument(ctx, peer, webm, media.StickerDocument("sticker", webm, "✨", inv.Message.ReplyToID)); err != nil {
 				return err
 			}
 			return inv.Client.DeleteMessage(ctx, inv.Message)
