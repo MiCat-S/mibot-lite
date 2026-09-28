@@ -38,11 +38,10 @@ import (
 //   - 跨群的：sb、unsb（在账号管理的所有群里封禁），借用应该只作用于当前这个群。
 //   - 会暴露主机信息的：sysinfo（显示主机名）。
 var delegable = map[string][]string{
-	"ping": nil, "help": nil, "h": nil, "version": nil, "ver": nil, "status": nil, "memory": nil,
+	"ping": nil, "help": nil, "version": nil, "status": nil, "memory": nil,
 	"calc": nil, "rate": nil, "gt": nil, "ip": nil, "bin": nil, "ids": nil, "dc": nil,
 	"re":        nil,
 	"speedtest": nil,
-	"st":        nil,
 	"tr":        {"set"},
 	"yvlu":      {"config", "s"},
 	"whois":     {"clear", "history"},
@@ -61,7 +60,6 @@ var delegableUse = map[string]func(first string) bool{
 	"sum": func(first string) bool { return first == "" || isNumber(first) },
 	// .speedtest、.speedtest 服务器编号、.speedtest list：测一次速、看服务器列表；help、config 只看说明。
 	"speedtest": speedtestUse,
-	"st":        speedtestUse,
 }
 
 func speedtestUse(first string) bool {
@@ -77,7 +75,8 @@ func isNumber(value string) bool {
 	return err == nil
 }
 
-// delegationAllowed 判断一条命令能不能借出去。按别名展开后的真实命令判断。
+// delegationAllowed 判断一条命令能不能借出去。按别名展开后的真实命令判断；
+// 路由里的命令已经是正式名字（.st 是 speedtest），表里只写正式名字。
 func delegationAllowed(route command.Route) bool {
 	ownerOnly, ok := delegable[route.Command]
 	if !ok {
@@ -93,7 +92,7 @@ func delegationAllowed(route command.Route) bool {
 	return first == "" || !slices.Contains(ownerOnly, first)
 }
 
-// Delegable 按字母顺序列出能借出去的命令，包括简写。
+// Delegable 按字母顺序列出能借出去的命令（正式名字）。
 func Delegable() []string {
 	names := make([]string, 0, len(delegable))
 	for name := range delegable {
@@ -103,15 +102,25 @@ func Delegable() []string {
 	return names
 }
 
+// Lending 说明一条命令（正式名字）能借出去多少："all" 整条都能借，"partly" 只借得出一部分用法，
+// "none" 只限本人。README 表格里的「可借」一栏由测试拿它核对。
+func Lending(name string) string {
+	ownerOnly, ok := delegable[name]
+	switch {
+	case !ok:
+		return "none"
+	case delegableUse[name] != nil || len(ownerOnly) > 0:
+		return "partly"
+	}
+	return "all"
+}
+
 // delegableList 按字母顺序列出能借出去的命令，写进帮助里，和上面的表保持一致。
 func delegableList(prefix string) string {
-	names := make([]string, 0, len(delegable))
-	for name := range delegable {
-		if name != "h" && name != "ver" && name != "st" {
-			names = append(names, prefix+name)
-		}
+	names := Delegable()
+	for index, name := range names {
+		names[index] = prefix + name
 	}
-	sort.Strings(names)
 	return strings.Join(names, " ")
 }
 
@@ -577,14 +586,14 @@ func Register(a *app.App) {
 	})
 
 	a.Registry.Register(
-		&command.Command{Name: "sudo", Description: "让名单里的人用你的账号执行命令", Usage: "[add|del|ls|chat]", Help: sudoHelp,
+		&command.Command{Name: "sudo", Group: command.GroupAccount, Description: "把命令借给名单里的人", Usage: "[add|del|ls|chat]", Help: sudoHelp,
 			Handle: func(ctx context.Context, inv *command.Invocation) error {
 				if handled, err := manageLists(ctx, inv, sudoList, "sudo"); handled {
 					return err
 				}
 				return inv.Edit(ctx, sudoHelp(inv.Prefix))
 			}},
-		&command.Command{Name: "sure", Description: "让名单里的人触发指定的消息或命令", Usage: "[add|del|ls|chat|msg]", Help: sureHelp,
+		&command.Command{Name: "sure", Group: command.GroupAccount, Description: "让名单里的人触发指定消息", Usage: "[add|del|ls|chat|msg]", Help: sureHelp,
 			Handle: func(ctx context.Context, inv *command.Invocation) error {
 				if strings.EqualFold(inv.Arg(0), "msg") {
 					return manageRules(ctx, inv, sureList)

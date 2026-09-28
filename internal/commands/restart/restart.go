@@ -69,7 +69,7 @@ func Register(a *app.App) {
 	r := &restarter{a: a, service: a.Env.Get("MIBOT_SERVICE", "mibot-lite.service"),
 		store: store.New(filepath.Join(a.Root, "restart-receipt.json"), func() receiptDocument { return receiptDocument{} })}
 	service = r
-	a.Registry.Register(&command.Command{Name: "restart", Description: "重启 systemd 服务", Handle: func(ctx context.Context, inv *command.Invocation) error {
+	a.Registry.Register(&command.Command{Name: "restart", Group: command.GroupSystem, Description: "重启 systemd 服务", Handle: func(ctx context.Context, inv *command.Invocation) error {
 		// 重启不收参数；带了参数（.restart help 之类）多半是想看说明，别真的重启。
 		if len(inv.Args) > 0 {
 			return kit.Usage(inv.Prefix, "restart（不带参数）重启服务，重启完成后这条消息会改成「重启成功」")

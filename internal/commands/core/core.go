@@ -21,7 +21,7 @@ import (
 func Register(a *app.App) {
 	registry := a.Registry
 	registry.Register(
-		&command.Command{Name: "ping", Description: "测试 Telegram 或某个网站的延迟", Usage: "[域名]", Help: pingHelp, Handle: func(ctx context.Context, inv *command.Invocation) error {
+		&command.Command{Name: "ping", Group: command.GroupSystem, Description: "测试网络延迟", Usage: "[域名|IP]", Help: pingHelp, Handle: func(ctx context.Context, inv *command.Invocation) error {
 			switch target := inv.Arg(0); {
 			case target == "help" || target == "h":
 				return inv.Edit(ctx, pingHelp(inv.Prefix))
@@ -38,19 +38,16 @@ func Register(a *app.App) {
 			}
 			return inv.EditText(ctx, fmt.Sprintf("Pong!\nTelegram API: %d ms\n消息编辑: %d ms", elapsed.Milliseconds(), time.Since(editing).Milliseconds()))
 		}},
-		&command.Command{Name: "version", Description: "查看版本信息", Handle: func(ctx context.Context, inv *command.Invocation) error {
+		&command.Command{Name: "version", Aliases: []string{"ver"}, Group: command.GroupSystem, Description: "查看版本信息", Handle: func(ctx context.Context, inv *command.Invocation) error {
 			return inv.Edit(ctx, versionText(a))
 		}},
-		&command.Command{Name: "ver", Description: "version 的简写", Hidden: true, Handle: func(ctx context.Context, inv *command.Invocation) error {
-			return inv.Edit(ctx, versionText(a))
-		}},
-		&command.Command{Name: "memory", Description: "查看内存状态", Handle: func(ctx context.Context, inv *command.Invocation) error {
+		&command.Command{Name: "memory", Group: command.GroupSystem, Description: "查看进程内存占用", Handle: func(ctx context.Context, inv *command.Invocation) error {
 			return inv.Edit(ctx, memoryReport())
 		}},
-		&command.Command{Name: "status", Description: "查看运行状态卡片", Help: statusHelp, Handle: func(ctx context.Context, inv *command.Invocation) error {
+		&command.Command{Name: "status", Group: command.GroupSystem, Description: "查看运行状态卡片", Help: statusHelp, Handle: func(ctx context.Context, inv *command.Invocation) error {
 			return status(ctx, a, registry, inv)
 		}},
-		&command.Command{Name: "sysinfo", Description: "查看详细系统信息", Handle: func(ctx context.Context, inv *command.Invocation) error {
+		&command.Command{Name: "sysinfo", Group: command.GroupSystem, Description: "查看详细系统信息", Handle: func(ctx context.Context, inv *command.Invocation) error {
 			machine := sysinfo.ReadHost()
 			process := sysinfo.Read()
 			lines := []string{
@@ -72,13 +69,7 @@ func Register(a *app.App) {
 			}
 			return inv.Edit(ctx, strings.Join(lines, "\n"))
 		}},
-		&command.Command{Name: "help", Description: "查看命令列表或单条命令说明", Usage: "[命令]", Handle: func(ctx context.Context, inv *command.Invocation) error {
-			if name := inv.Arg(0); name != "" {
-				return inv.Edit(ctx, renderCommandHelp(registry, inv.Prefix, name))
-			}
-			return inv.Edit(ctx, renderHelpList(registry, inv.Prefix))
-		}},
-		&command.Command{Name: "h", Description: "help 的简写", Hidden: true, Handle: func(ctx context.Context, inv *command.Invocation) error {
+		&command.Command{Name: "help", Aliases: []string{"h"}, Group: command.GroupSystem, Description: "查看命令列表或说明", Usage: "[命令]", Handle: func(ctx context.Context, inv *command.Invocation) error {
 			if name := inv.Arg(0); name != "" {
 				return inv.Edit(ctx, renderCommandHelp(registry, inv.Prefix, name))
 			}
@@ -118,27 +109,43 @@ func formatUptime(seconds float64) string {
 	return fmt.Sprintf("%d天 %d小时 %d分钟", total/86400, (total/3600)%24, (total/60)%60)
 }
 
+// renderHelpList 按分组列出命令，每行「.名字（.简写） — 说明」，和 README 的表格同一套分组。
+// 参数不放在列表里：几十条命令各带一串用法就成了一堵墙，.help 命令 才看用法。
 func renderHelpList(registry *command.Registry, prefix string) string {
-	lines := []string{"<b>命令列表</b>", ""}
+	byGroup := map[string][]*command.Command{}
 	for _, cmd := range registry.Commands() {
-		usage := prefix + cmd.Name
-		if cmd.Usage != "" {
-			usage += " " + cmd.Usage
+		byGroup[cmd.Group] = append(byGroup[cmd.Group], cmd)
+	}
+	lines := []string{"📖 <b>命令列表</b>"}
+	for _, group := range command.Groups {
+		if len(byGroup[group]) == 0 {
+			continue
 		}
-		lines = append(lines, command.Code(usage)+" — "+command.Escape(cmd.Description))
+		lines = append(lines, "", "<b>"+command.Escape(group)+"</b>")
+		for _, cmd := range byGroup[group] {
+			line := command.Code(prefix + cmd.Name)
+			if len(cmd.Aliases) > 0 {
+				short := make([]string, len(cmd.Aliases))
+				for index, alias := range cmd.Aliases {
+					short[index] = command.Code(prefix + alias)
+				}
+				line += "（" + strings.Join(short, " ") + "）"
+			}
+			lines = append(lines, line+" — "+command.Escape(cmd.Description))
+		}
 	}
 	quoted := make([]string, 0, len(registry.Prefixes()))
 	for _, value := range registry.Prefixes() {
 		quoted = append(quoted, command.Code(value))
 	}
-	lines = append(lines, "", "前缀: "+strings.Join(quoted, " "), "用 "+command.Code(prefix+"help 命令")+" 查看单条说明。")
+	lines = append(lines, "", "前缀："+strings.Join(quoted, " "), "用 "+command.Code(prefix+"help 命令")+" 查看用法和说明")
 	return strings.Join(lines, "\n")
 }
 
 func renderCommandHelp(registry *command.Registry, prefix, name string) string {
 	cmd, ok := lookupForHelp(registry, name)
 	if !ok {
-		return "未知命令: " + command.Code(name)
+		return "❌ 没有这个命令：" + command.Code(name) + "，" + command.Code(prefix+"help") + " 看全部命令"
 	}
 	return cmd.HelpText(prefix)
 }

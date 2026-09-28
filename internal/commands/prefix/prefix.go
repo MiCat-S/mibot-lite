@@ -135,7 +135,7 @@ func Register(a *app.App) {
 			command.Code(next[0]+"help"))
 	}
 	a.Registry.Register(&command.Command{
-		Name: "prefix", Description: "查看或修改命令前缀", Usage: "[set|add|del 前缀…]",
+		Name: "prefix", Group: command.GroupSystem, Description: "查看或修改命令前缀", Usage: "[set|add|del 前缀…]",
 		Help: prefixHelp, Handle: handle,
 	})
 }

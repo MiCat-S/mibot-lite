@@ -97,7 +97,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 | `.eatgif 名称` | 双方头像合成动画贴纸 | 部分 |
 | `.eat` `.eat2` | 用头像或图片生成表情包 | 部分 |
 | `.sticker` | 把贴纸存进自己的贴纸包 | |
-| `.t 文本` | 文字转语音（`.ts` 选角色，`.tk` 设 API Key） | |
+| `.t 文本` `.ts` `.tk` | 文字转语音（`.ts` 选角色，`.tk` 设 API Key） | |
 | `.re [消息数] [次数]` | 复读回复的消息 | ✓ |
 | `.save 链接` | 保存或转发消息，禁止转发的也行 | |
 | `.dme 数量` | 删除自己的消息 | |

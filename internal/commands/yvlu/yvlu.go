@@ -386,8 +386,8 @@ func (s *yvluService) cacheAvatar(key string, photo *quotePhot) {
 // Register 注册 .yvlu。
 func Register(a *app.App) {
 	service := &yvluService{a: a, store: kit.NewStore(a, "yvlu.json", func() yvluConfig { return yvluConfig{} })}
-	a.Registry.Register(&command.Command{Name: "yvlu", Description: "生成文字语录贴纸、图片与故事，管理贴纸包",
-		Usage: "[消息数|r|f 文本|u 用户|webp|image|stories|s|config]", Help: yvluHelp, Timeout: 5 * time.Minute,
+	a.Registry.Register(&command.Command{Name: "yvlu", Group: command.GroupMedia, Description: "把消息做成语录贴纸",
+		Usage: "[消息数]", Help: yvluHelp, Timeout: 5 * time.Minute,
 		Handle: func(ctx context.Context, inv *command.Invocation) error {
 			return kit.FailWith("语录生成失败", service.handle(ctx, inv))
 		}})

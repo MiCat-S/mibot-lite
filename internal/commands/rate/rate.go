@@ -636,6 +636,6 @@ func rateHandle(ctx context.Context, inv *command.Invocation, service *rateServi
 // Register 注册 .rate。
 func Register(a *app.App) {
 	service := newRateService()
-	a.Registry.Register(&command.Command{Name: "rate", Description: "智能汇率查询与数量换算", Usage: "货币 [目标货币] [数量]", Help: rateHelp, Timeout: 2 * time.Minute,
+	a.Registry.Register(&command.Command{Name: "rate", Group: command.GroupTools, Description: "查询汇率并换算金额", Usage: "货币 [目标货币] [数量]", Help: rateHelp, Timeout: 2 * time.Minute,
 		Handle: func(ctx context.Context, inv *command.Invocation) error { return rateHandle(ctx, inv, service) }})
 }

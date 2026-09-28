@@ -1114,9 +1114,7 @@ func Register(a *app.App) {
 	tester := &speedtester{dataDir: a.DataDir(), egress: lookupEgress,
 		settings: kit.NewStore(a, "speedtest.json", func() speedtestDocument { return speedtestDocument{} })}
 	a.Registry.Register(
-		&command.Command{Name: "speedtest", Description: "测量服务器网络速度", Usage: "[list|set ID|clear|ID|diagnose|fix|update]",
-			Help: tester.help, Timeout: 5 * time.Minute, Handle: tester.handle},
-		&command.Command{Name: "st", Description: "speedtest 的简写", Hidden: true,
+		&command.Command{Name: "speedtest", Aliases: []string{"st"}, Group: command.GroupTools, Description: "测量主机网络速度", Usage: "[ID|list|set ID|clear|config|diagnose|fix|update]",
 			Help: tester.help, Timeout: 5 * time.Minute, Handle: tester.handle},
 	)
 }

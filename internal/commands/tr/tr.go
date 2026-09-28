@@ -185,7 +185,7 @@ func translateHelp(prefix string) string {
 func Register(a *app.App) {
 	settings := kit.NewStore(a, "translate.json", translateDefaults)
 	a.Registry.Register(&command.Command{
-		Name: "tr", Description: "谷歌翻译，无需配置", Usage: "[语言] 文本",
+		Name: "tr", Group: command.GroupTools, Description: "用谷歌翻译文本", Usage: "[语言] 文本|set 语言",
 		Help: translateHelp, Timeout: 2 * time.Minute,
 		Handle: func(ctx context.Context, inv *command.Invocation) error {
 			return kit.FailWith("翻译失败", runTranslate(ctx, inv, settings))

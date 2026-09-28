@@ -5,6 +5,7 @@ import (
 	"context"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/MiCat-S/mibot-lite/internal/app"
 	"github.com/MiCat-S/mibot-lite/internal/command"
@@ -21,7 +22,7 @@ func Register(a *app.App) {
 		return "📘 <b>AI 翻译</b>\n\n• <code>" + p + "gt 文本</code> - 翻译为简体中文\n• <code>" + p + "gt en 文本</code> - 翻译为英文\n• 回复消息后使用 <code>" + p + "gt</code> 或 <code>" + p +
 			"gt en</code>\n\n使用 ai 的当前聊天 API、模型及超时设置，请先用 <code>" + p + "ai config add</code> 和 <code>" + p + "ai model chat</code> 配置。单次最多 5000 字符，长译文自动分段发送。"
 	}
-	a.Registry.Register(&command.Command{Name: "gt", Description: "AI 翻译", Usage: "[en] 文本", Help: help, Timeout: 15 * 60 * 1e9,
+	a.Registry.Register(&command.Command{Name: "gt", Group: command.GroupTools, Description: "用 AI 翻译文本", Usage: "[en] 文本", Help: help, Timeout: 15 * time.Minute,
 		Handle: func(ctx context.Context, inv *command.Invocation) error {
 			text := leadingToken.ReplaceAllString(inv.Text, "")
 			first := strings.ToLower(regexp.MustCompile(`^\S+`).FindString(text))

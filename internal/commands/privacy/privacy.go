@@ -50,7 +50,7 @@ func Register(a *app.App) {
 		_ = bot.SetIPPolicy(next)
 		return inv.EditText(ctx, "✅ IP 显示已更新："+describe(next))
 	}
-	a.Registry.Register(&command.Command{Name: "privacy", Description: "设置输出里 IP 地址的打码方式", Usage: "[ip mask 2 4|ip hide]", Help: help,
+	a.Registry.Register(&command.Command{Name: "privacy", Group: command.GroupSystem, Description: "设置 IP 地址打码方式", Usage: "[ip mask 2 4|ip hide]", Help: help,
 		Handle: func(ctx context.Context, inv *command.Invocation) error {
 			scope, action := inv.Arg(0), strings.ToLower(inv.Arg(1))
 			switch {

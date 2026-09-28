@@ -66,31 +66,64 @@ func (inv *Invocation) Reply(ctx context.Context, html string) error {
 
 // Command 是一个已注册的命令。
 type Command struct {
-	Name        string
+	Name string
+	// Aliases 是这条命令的其他名字（简写 st、全称 autochangename 之类），和 Name 一样能调用。
+	// 列表里只显示在 Name 那一行，借用规则、日志都按 Name 算。
+	Aliases []string
+	// Group 是 .help 列表和 README 表格里的分组，取值是 Groups 里的一个。
+	Group string
+	// Description 是列表里的一句话说明：动宾短语，不带从句和句号。
 	Description string
-	// Usage 是命令列表里显示的参数摘要。
+	// Usage 是参数的形状，如 "[目标] [时长]"：[] 里可以省略，a|b 是几选一。
+	// 子命令多的只写最常用的形状，其余由 Help 说明。
 	Usage string
-	// Help 生成 `.help name` 显示的详细帮助。为 nil 时改用 Description。
+	// Help 生成 `.help name` 显示的详细帮助。为 nil 时改用用法加 Description。
 	Help func(prefix string) string
 	// Handle 执行命令。返回的错误会写进日志，并报告到聊天里。
 	Handle func(ctx context.Context, inv *Invocation) error
-	// Timeout 是处理函数的时限。0 表示用默认值（5 分钟）；
-	// 负数表示完全不设时限。
+	// Timeout 是处理函数的时限。0 表示用默认值（5 分钟），NoTimeout 表示完全不设时限。
 	Timeout time.Duration
-	// Hidden 让命令不出现在列表里（用于别名）。
-	Hidden bool
 }
 
+// NoTimeout 放在 Command.Timeout 里表示不设时限。
+const NoTimeout time.Duration = -1
+
+// .help 列表和 README 表格里的分组，Groups 是显示顺序。
+const (
+	GroupSystem  = "运行与维护"
+	GroupTools   = "查询与工具"
+	GroupAI      = "AI"
+	GroupMedia   = "消息与贴纸"
+	GroupAdmin   = "群组管理"
+	GroupAccount = "账号"
+)
+
+// Groups 是分组的显示顺序。
+var Groups = []string{GroupSystem, GroupTools, GroupAI, GroupMedia, GroupAdmin, GroupAccount}
+
 // HelpText 是这条命令的详细帮助：有 Help 用 Help，否则用用法加说明。
+// 有别名时补一行「简写」，命令自己的帮助已经提到了就不重复。
 func (c *Command) HelpText(prefix string) string {
+	var text string
 	if c.Help != nil {
-		return c.Help(prefix)
+		text = c.Help(prefix)
+	} else {
+		usage := prefix + c.Name
+		if c.Usage != "" {
+			usage += " " + c.Usage
+		}
+		text = Code(usage) + "\n" + Escape(c.Description)
 	}
-	usage := prefix + c.Name
-	if c.Usage != "" {
-		usage += " " + c.Usage
+	var missing []string
+	for _, alias := range c.Aliases {
+		if !strings.Contains(text, Escape(prefix+alias)+"<") && !strings.Contains(text, Escape(prefix+alias)+" ") {
+			missing = append(missing, Code(prefix+alias))
+		}
 	}
-	return "<b>" + Escape(usage) + "</b>\n\n" + Escape(c.Description)
+	if len(missing) > 0 {
+		text += "\n\n简写：" + strings.Join(missing, " ")
+	}
+	return text
 }
 
 // wantsHelp 判断参数是不是只有一个 --help。
@@ -101,7 +134,8 @@ type Job func(ctx context.Context, client *bot.Client)
 
 // Registry 保存命令和前缀。
 type Registry struct {
-	mu       sync.RWMutex
+	mu sync.RWMutex
+	// commands 按名字找命令，Name 和每个 Aliases 各占一项，指向同一个 *Command。
 	commands map[string]*Command
 	// aliases 把使用者自己起的名字映射到它代表的命令行，参数也包括在内。
 	// 由 .alias 修改。
@@ -133,18 +167,23 @@ func New(prefixes []string, logger *slog.Logger) *Registry {
 // 重启常常就是为了掐断卡住的命令，不能让它们拖着不退，也不该等它们跑完。
 func (r *Registry) Abort() { r.abort() }
 
-// Register 添加命令；名字重复属于编程错误。
+// Register 添加命令，连同它的别名；名字（包括别名）重复属于编程错误。
 func (r *Registry) Register(commands ...*Command) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, command := range commands {
-		if command == nil || !commandName.MatchString(command.Name) {
-			panic(fmt.Sprintf("invalid command %q", command.Name))
+		if command == nil {
+			panic("nil command")
 		}
-		if _, exists := r.commands[command.Name]; exists {
-			panic("duplicate command " + command.Name)
+		for _, name := range append([]string{command.Name}, command.Aliases...) {
+			if !commandName.MatchString(name) {
+				panic(fmt.Sprintf("invalid command name %q", name))
+			}
+			if _, exists := r.commands[name]; exists {
+				panic("duplicate command " + name)
+			}
+			r.commands[name] = command
 		}
-		r.commands[command.Name] = command
 	}
 }
 
@@ -162,13 +201,13 @@ func (r *Registry) Jobs() []Job {
 	return append([]Job(nil), r.jobs...)
 }
 
-// Commands 列出可见的命令，按名字排序。
+// Commands 列出所有命令（每条一次，不含别名），按名字排序。
 func (r *Registry) Commands() []*Command {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	list := make([]*Command, 0, len(r.commands))
-	for _, command := range r.commands {
-		if !command.Hidden {
+	for name, command := range r.commands {
+		if name == command.Name {
 			list = append(list, command)
 		}
 	}
@@ -176,7 +215,7 @@ func (r *Registry) Commands() []*Command {
 	return list
 }
 
-// Lookup 按名字查找命令。
+// Lookup 按名字或别名查找命令。
 func (r *Registry) Lookup(name string) (*Command, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -278,13 +317,24 @@ func (r *Registry) Parse(text string) (Route, bool) {
 			return Route{}, false
 		}
 		args := append(append([]string{}, expanded[1:]...), parts[length:]...)
-		return Route{Prefix: prefix, Command: expanded[0], Args: args,
+		return Route{Prefix: prefix, Command: r.canonical(expanded[0]), Args: args,
 			Text: prefix + strings.Join(expanded, " ") + afterTokens(body, length)}, true
 	}
 	if !commandName.MatchString(parts[0]) {
 		return Route{}, false
 	}
-	return Route{Prefix: prefix, Command: parts[0], Args: append([]string{}, parts[1:]...), Text: text}, true
+	return Route{Prefix: prefix, Command: r.canonical(parts[0]), Args: append([]string{}, parts[1:]...), Text: text}, true
+}
+
+// canonical 把命令的别名换成它的正式名字，不认得的名字原样返回。
+// 路由里只出现正式名字，借用规则、日志就不用再各自认一遍别名。
+func (r *Registry) canonical(name string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if command, ok := r.commands[name]; ok {
+		return command.Name
+	}
+	return name
 }
 
 // afterTokens 去掉 s 开头 n 个以空白分隔的词，剩下的部分原样返回，
@@ -318,6 +368,16 @@ func isSpace(r rune) bool {
 	return r >= 0x2000 && r <= 0x200a
 }
 
+// resolve 把消息文本解析成路由并找到命令。
+func (r *Registry) resolve(text string) (Route, *Command, bool) {
+	route, ok := r.Parse(text)
+	if !ok {
+		return Route{}, nil, false
+	}
+	command, ok := r.Lookup(route.Command)
+	return route, command, ok
+}
+
 // Dispatch 把一条消息交给注册表，返回是否匹配到命令；
 // 处理函数异步运行。
 func (r *Registry) Dispatch(ctx context.Context, client *bot.Client, message *bot.Message) bool {
@@ -325,11 +385,7 @@ func (r *Registry) Dispatch(ctx context.Context, client *bot.Client, message *bo
 		r.logger.Info("dispatch.relayed_again", slog.String("chat", message.ChatID), slog.Int("message", message.ID))
 		return false
 	}
-	route, ok := r.Parse(message.Text)
-	if !ok {
-		return false
-	}
-	command, ok := r.Lookup(route.Command)
+	route, command, ok := r.resolve(message.Text)
 	if !ok {
 		return false
 	}
@@ -340,12 +396,8 @@ func (r *Registry) Dispatch(ctx context.Context, client *bot.Client, message *bo
 // DispatchFor 执行一条账号替别人代发的命令。allowed 决定这条命令能不能借出去，
 // 不许就不执行；trigger 是对方原来的那条消息。
 func (r *Registry) DispatchFor(ctx context.Context, client *bot.Client, message, trigger *bot.Message, allowed func(Route) bool) bool {
-	route, ok := r.Parse(message.Text)
+	route, command, ok := r.resolve(message.Text)
 	if !ok || !allowed(route) {
-		return false
-	}
-	command, ok := r.Lookup(route.Command)
-	if !ok {
 		return false
 	}
 	r.markRelayed(message)
@@ -406,7 +458,7 @@ func (r *Registry) run(ctx context.Context, client *bot.Client, message, trigger
 		}
 		runCtx, cancel := live, context.CancelFunc(func() {})
 		switch {
-		case command.Timeout < 0:
+		case command.Timeout == NoTimeout:
 		case command.Timeout == 0:
 			runCtx, cancel = context.WithTimeout(live, 5*time.Minute)
 		default:

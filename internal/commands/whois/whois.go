@@ -158,7 +158,7 @@ func Register(a *app.App) {
 			command.Code(prefix+"whois history") + " 查看历史\n• " + command.Code(prefix+"whois clear") + " 清除历史\n查询结果缓存 24 小时。"
 	}
 	// 批量查询最多 10 个域名，每个最长 15 秒，所以总超时要放宽到能跑完一整批。
-	a.Registry.Register(&command.Command{Name: "whois", Description: "查询域名注册信息", Usage: "域名|batch 域名…|history|clear", Help: help, Timeout: 3 * time.Minute,
+	a.Registry.Register(&command.Command{Name: "whois", Group: command.GroupTools, Description: "查询域名注册信息", Usage: "[域名|batch 域名…|history|clear]", Help: help, Timeout: 3 * time.Minute,
 		Handle: func(ctx context.Context, inv *command.Invocation) error {
 			raw := inv.Arg(0)
 			lower := strings.ToLower(raw)

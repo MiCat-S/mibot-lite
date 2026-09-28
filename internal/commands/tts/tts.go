@@ -262,10 +262,10 @@ func Register(a *app.App) {
 		return document{Users: map[string]userConfig{}, Roles: map[string]string{}}
 	})}
 	a.Registry.Register(
-		&command.Command{Name: "t", Description: "文字转语音", Usage: "文本 | song 歌名 歌手 文本 | fm 链接 | model", Help: help,
+		&command.Command{Name: "t", Group: command.GroupMedia, Description: "把文字转成语音", Usage: "文本", Help: help,
 			Timeout: 3 * time.Minute, Handle: s.speak},
-		&command.Command{Name: "ts", Description: "t 的角色管理", Usage: "[页码|角色名 [模型ID]]", Help: help, Handle: s.roles},
-		&command.Command{Name: "tk", Description: "设置 t 的 API Key", Usage: "API密钥", Help: help, Handle: s.key},
+		&command.Command{Name: "ts", Group: command.GroupMedia, Description: "管理语音合成的角色", Usage: "[页码|角色名 [模型 ID]]", Help: help, Handle: s.roles},
+		&command.Command{Name: "tk", Group: command.GroupMedia, Description: "设置语音合成的 API Key", Usage: "API Key", Help: help, Handle: s.key},
 	)
 }
 

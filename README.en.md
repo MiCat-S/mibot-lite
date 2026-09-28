@@ -104,7 +104,7 @@ owner; blank means owner only.
 | `.eatgif <name>` | Animated sticker made from both people's avatars | partly |
 | `.eat` `.eat2` | Meme sticker made from an avatar or a picture | partly |
 | `.sticker` | Save a sticker into your own sticker pack | |
-| `.t <text>` | Text to speech (`.ts` picks a voice, `.tk` sets the API key) | |
+| `.t <text>` `.ts` `.tk` | Text to speech (`.ts` picks a voice, `.tk` sets the API key) | |
 | `.re [messages] [times]` | Repeat the replied-to message | ✓ |
 | `.save <link>` | Save or forward messages, even where forwarding is restricted | |
 | `.dme <count>` | Delete your own messages | |

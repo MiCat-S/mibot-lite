@@ -203,7 +203,7 @@ func aiHelp(prefix string) string {
 func Register(a *app.App) {
 	service := &aiService{a: a, store: kit.NewStore(a, "ai.json", aiDefaults)}
 	shared = service
-	a.Registry.Register(&command.Command{Name: "ai", Description: "AI 对话、搜索与配置", Usage: "[search] 问题 | config | model | ...", Help: aiHelp, Timeout: 15 * time.Minute,
+	a.Registry.Register(&command.Command{Name: "ai", Group: command.GroupAI, Description: "与 AI 对话或联网搜索", Usage: "[search] 问题", Help: aiHelp, Timeout: 15 * time.Minute,
 		Handle: func(ctx context.Context, inv *command.Invocation) error {
 			return kit.FailWith("AI 操作失败", service.handle(ctx, inv))
 		}})

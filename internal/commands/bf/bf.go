@@ -84,7 +84,7 @@ func Register(a *app.App) {
 		return inv.Edit(ctx, "✅ 备份已发到收藏夹（"+strconv.Itoa(len(names))+" 个文件）")
 	}
 	a.Registry.Register(&command.Command{
-		Name: "bf", Description: "备份配置到收藏夹，重装后可恢复",
+		Name: "bf", Group: command.GroupSystem, Description: "备份配置到收藏夹",
 		Help: backupHelp, Timeout: 2 * time.Minute, Handle: handle,
 	})
 }

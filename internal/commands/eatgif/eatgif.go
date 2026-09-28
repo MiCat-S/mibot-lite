@@ -276,7 +276,7 @@ func (s *eatgifService) help(prefix string) string {
 func Register(a *app.App) {
 	registerEat(a)
 	service := &eatgifService{a: a}
-	a.Registry.Register(&command.Command{Name: "eatgif", Description: "将双方头像合成为动画贴纸", Usage: "名称", Help: service.help, Timeout: 5 * time.Minute,
+	a.Registry.Register(&command.Command{Name: "eatgif", Group: command.GroupMedia, Description: "用双方头像合成动画贴纸", Usage: "[名称|list|clear]", Help: service.help, Timeout: 5 * time.Minute,
 		Handle: func(ctx context.Context, inv *command.Invocation) error {
 			sub := strings.ToLower(inv.Arg(0))
 			if sub == "clear" {

@@ -225,7 +225,7 @@ func Register(a *app.App) {
 	if !a.ReadOnly {
 		service.pauseInterrupted()
 	}
-	a.Registry.Register(&command.Command{Name: "da", Description: "批量删除群组消息", Usage: "true|stop|status", Help: daHelp, Timeout: 2 * time.Minute,
+	a.Registry.Register(&command.Command{Name: "da", Group: command.GroupMedia, Description: "批量删除群组消息", Usage: "true|stop|status", Help: daHelp, Timeout: 2 * time.Minute,
 		Handle: func(ctx context.Context, inv *command.Invocation) error {
 			if !strings.HasPrefix(inv.Message.ChatID, "-") {
 				return kit.Fail("只能在群组里用")

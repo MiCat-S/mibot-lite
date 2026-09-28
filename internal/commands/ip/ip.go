@@ -150,7 +150,7 @@ func Register(a *app.App) {
 		}
 		return inv.Edit(ctx, renderIP(result))
 	}
-	a.Registry.Register(&command.Command{Name: "ip", Description: "查 IP 或域名的位置与运营商", Usage: "[IP|域名]", Help: ipHelp, Handle: ipHandle})
+	a.Registry.Register(&command.Command{Name: "ip", Group: command.GroupTools, Description: "查 IP 或域名的位置与运营商", Usage: "[IP|域名]", Help: ipHelp, Handle: ipHandle})
 }
 
 // ipFailure 把 ip-api 的英文失败原因换成中文，认不出的只说查不到。

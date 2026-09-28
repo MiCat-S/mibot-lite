@@ -26,7 +26,7 @@ func Register(a *app.App) {
 			"re 3</code> - 转发被回复的消息和它之后的 2 条，已删除的消息不算数\n• <code>" + p + "re 3 2</code> - 将这 3 条消息重复转发 2 次\n\n" +
 			"消息数最多 20，复读次数最多 10。对话禁止转发时，改为把内容重新发一遍。"
 	}
-	a.Registry.Register(&command.Command{Name: "re", Description: "回复消息后重复转发，可指定数量和次数", Usage: "[消息数] [复读次数]", Help: help,
+	a.Registry.Register(&command.Command{Name: "re", Group: command.GroupMedia, Description: "重复转发回复的消息", Usage: "[消息数] [次数]", Help: help,
 		// 禁止转发的对话里要把媒体下载再上传，最多 20 条乘 10 次，默认的 5 分钟不够。
 		Timeout: 30 * time.Minute,
 		Handle: func(ctx context.Context, inv *command.Invocation) error {

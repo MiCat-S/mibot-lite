@@ -427,7 +427,7 @@ func Register(a *app.App) {
 		return inv.Edit(ctx, "📍 <b>"+command.Escape(info.name)+"</b>\n所在数据中心："+command.Escape(dcLabel(info.dc)))
 	}
 	a.Registry.Register(
-		&command.Command{Name: "ids", Description: "查用户或对话的资料", Usage: "[@用户名|ID]", Help: idsHelp, Handle: ids},
-		&command.Command{Name: "dc", Description: "查用户或对话所在的数据中心", Usage: "[@用户名|ID]", Help: dcHelp, Handle: dc},
+		&command.Command{Name: "ids", Group: command.GroupTools, Description: "查用户或对话的资料", Usage: "[@用户名|ID]", Help: idsHelp, Handle: ids},
+		&command.Command{Name: "dc", Group: command.GroupTools, Description: "查所在的数据中心", Usage: "[@用户名|ID]", Help: dcHelp, Handle: dc},
 	)
 }

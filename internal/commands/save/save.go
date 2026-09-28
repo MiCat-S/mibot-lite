@@ -1147,7 +1147,7 @@ func saveHandle(ctx context.Context, inv *command.Invocation, settings *store.St
 func Register(a *app.App) {
 	settings := kit.NewStore(a, "save.json", func() saveDocument { return saveDocument{} })
 	a.Registry.Register(&command.Command{
-		Name: "save", Description: "保存或转发消息，突破禁止转发", Usage: "[链接…|链接1|链接2] [目标]",
+		Name: "save", Group: command.GroupMedia, Description: "保存或转发消息", Usage: "[链接…] [目标]",
 		Help: saveHelp, Timeout: time.Hour,
 		Handle: func(ctx context.Context, inv *command.Invocation) error {
 			return saveHandle(ctx, inv, settings, a.Root)

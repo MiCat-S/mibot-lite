@@ -159,7 +159,7 @@ func Register(a *app.App) {
 		return inv.Edit(ctx, text)
 	}
 	a.Registry.Register(&command.Command{
-		Name: "alias", Description: "给命令起别名", Usage: "[set 别名 原命令|del 别名]",
+		Name: "alias", Group: command.GroupSystem, Description: "给命令起别名", Usage: "[set 别名 原命令|del 别名]",
 		Help: aliasHelp, Handle: handle,
 	})
 }

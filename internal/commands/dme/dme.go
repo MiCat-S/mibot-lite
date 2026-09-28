@@ -55,7 +55,7 @@ func Register(a *app.App) {
 	cfgStore := kit.NewStore(a, "dme.json", dmeDefaults)
 	var mu sync.Mutex
 	active := map[string]bool{}
-	a.Registry.Register(&command.Command{Name: "dme", Description: "删除自己的消息，支持防撤回模式", Usage: "[-f] 数量", Help: dmeHelp, Timeout: -1,
+	a.Registry.Register(&command.Command{Name: "dme", Group: command.GroupMedia, Description: "删除自己最近的消息", Usage: "[-f] 条数", Help: dmeHelp, Timeout: command.NoTimeout,
 		Handle: func(ctx context.Context, inv *command.Invocation) error {
 			sub := strings.ToLower(inv.Arg(0))
 			if sub == "" || sub == "help" || sub == "h" {

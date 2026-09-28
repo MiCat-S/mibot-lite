@@ -160,7 +160,7 @@ func Register(a *app.App) {
 		return inv.Client.DeleteMessage(ctx, inv.Message)
 	}
 	a.Registry.Register(&command.Command{
-		Name: "log", Description: "导出运行日志（已脱敏）", Usage: "[行数|error|关键词|debug on]",
+		Name: "log", Group: command.GroupSystem, Description: "导出脱敏后的运行日志", Usage: "[行数|error|warn|关键词|debug on|off]",
 		Help: logHelp, Handle: handle,
 	})
 }

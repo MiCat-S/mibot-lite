@@ -64,19 +64,45 @@ func TestLongestPrefixWins(t *testing.T) {
 	}
 }
 
+// 别名和正式名字一样能调用，但列表里只出现一次，路由里也只出现正式名字：
+// 借用规则、日志都按正式名字算，不用各自再认一遍别名。
 func TestRegisterAndLookup(t *testing.T) {
 	r := registry()
-	r.Register(&Command{Name: "ping", Description: "p"}, &Command{Name: "ver", Description: "v", Hidden: true})
+	r.Register(&Command{Name: "ping", Description: "p"}, &Command{Name: "version", Aliases: []string{"ver"}, Description: "v"})
 	if _, ok := r.Lookup("ping"); !ok {
 		t.Error("ping should be registered")
 	}
-	if _, ok := r.Lookup("ver"); !ok {
-		t.Error("a hidden command is still routable")
+	if command, ok := r.Lookup("ver"); !ok || command.Name != "version" {
+		t.Error("an alias must find its command")
 	}
 	list := r.Commands()
-	if len(list) != 1 || list[0].Name != "ping" {
-		t.Fatalf("visible commands %v", list)
+	if len(list) != 2 || list[0].Name != "ping" || list[1].Name != "version" {
+		t.Fatalf("commands %v", list)
 	}
+	if route, ok := r.Parse(".ver --short"); !ok || route.Command != "version" || route.Args[0] != "--short" {
+		t.Errorf("an alias must route to the command's own name: %+v", route)
+	}
+	// 用户的单词别名盖不住内置的别名，和盖不住命令名一样。
+	r.SetAliases(map[string]string{"ver": "ping"})
+	if route, _ := r.Parse(".ver"); route.Command != "version" {
+		t.Errorf("a user alias shadowed a built-in one: %+v", route)
+	}
+	// 用户别名展开成内置别名时，路由里也是正式名字。
+	r.SetAliases(map[string]string{"版本": "ver"})
+	if route, _ := r.Parse(".版本"); route.Command != "version" {
+		t.Errorf("an expanded alias kept the short name: %+v", route)
+	}
+}
+
+// 别名和别的命令重名是编程错误。
+func TestRegisterRejectsAliasClash(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Error("an alias clashing with a command must panic")
+		}
+	}()
+	r := registry()
+	r.Register(&Command{Name: "status"}, &Command{Name: "speedtest", Aliases: []string{"status"}})
 }
 
 func TestRegisterRejectsDuplicates(t *testing.T) {
@@ -218,11 +244,20 @@ func TestWantsHelpAndHelpText(t *testing.T) {
 		t.Error("只有单独一个 --help 才拦下来")
 	}
 	plain := &Command{Name: "restart", Usage: "[x]", Description: "重启 <服务>"}
-	if got := plain.HelpText("."); got != "<b>.restart [x]</b>\n\n重启 &lt;服务&gt;" {
+	if got := plain.HelpText("."); got != "<code>.restart [x]</code>\n重启 &lt;服务&gt;" {
 		t.Errorf("没有 Help 时的帮助：%q", got)
 	}
 	custom := &Command{Name: "a", Help: func(prefix string) string { return prefix + "自定义" }}
 	if got := custom.HelpText("!"); got != "!自定义" {
 		t.Errorf("有 Help 时应该用它：%q", got)
+	}
+	// 别名：帮助里没提到就补一行「简写」，提到了就不重复。
+	aliased := &Command{Name: "version", Aliases: []string{"ver"}, Description: "查看版本信息"}
+	if got := aliased.HelpText("."); !strings.HasSuffix(got, "简写：<code>.ver</code>") {
+		t.Errorf("别名没写进帮助：%q", got)
+	}
+	mentioned := &Command{Name: "speedtest", Aliases: []string{"st"}, Help: func(p string) string { return "<code>" + p + "st</code> 同上" }}
+	if got := mentioned.HelpText("."); strings.Contains(got, "简写") {
+		t.Errorf("帮助已经提到简写，不该重复：%q", got)
 	}
 }

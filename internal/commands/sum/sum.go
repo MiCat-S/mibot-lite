@@ -689,7 +689,7 @@ func Register(a *app.App) {
 		<-ctx.Done()
 		service.cron.Stop()
 	})
-	a.Registry.Register(&command.Command{Name: "sum", Description: "群消息即时与定时摘要", Usage: "[数量] | add | list | run | edit | config ...", Help: sumHelp, Timeout: 10 * time.Minute,
+	a.Registry.Register(&command.Command{Name: "sum", Group: command.GroupAI, Description: "生成群组消息摘要", Usage: "[数量]", Help: sumHelp, Timeout: 10 * time.Minute,
 		Handle: func(ctx context.Context, inv *command.Invocation) error {
 			return kit.FailWith("摘要失败", service.handle(ctx, inv))
 		}})

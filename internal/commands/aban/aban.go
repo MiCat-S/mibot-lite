@@ -474,22 +474,29 @@ func abanHelp(prefix string) string {
 func Register(a *app.App) {
 	service := &abanService{store: kit.NewStore(a, "aban.json", func() abanCache { return abanCache{} })}
 	basic := func(action string) *command.Command {
+		// names 是失败提示里的动作（「封禁失败」），descriptions 是命令列表里的说明。
 		names := map[string]string{"kick": "踢出", "ban": "封禁", "unban": "解封", "mute": "禁言", "unmute": "解除禁言"}
-		return &command.Command{Name: action, Description: names[action], Usage: "[目标]", Help: abanHelp, Timeout: 2 * time.Minute,
+		descriptions := map[string]string{"kick": "把用户踢出当前群组", "ban": "在当前群组封禁用户", "unban": "在当前群组解封用户",
+			"mute": "在当前群组禁言用户", "unmute": "在当前群组解除禁言"}
+		usage := "[目标]"
+		if action == "mute" {
+			usage = "[目标] [时长]"
+		}
+		return &command.Command{Name: action, Group: command.GroupAdmin, Description: descriptions[action], Usage: usage, Help: abanHelp, Timeout: 2 * time.Minute,
 			Handle: func(ctx context.Context, inv *command.Invocation) error {
 				return service.basic(ctx, inv, action, names[action])
 			}}
 	}
 	a.Registry.Register(
-		&command.Command{Name: "aban", Description: "封禁管理帮助", Help: abanHelp, Handle: func(ctx context.Context, inv *command.Invocation) error {
+		&command.Command{Name: "aban", Group: command.GroupAdmin, Description: "查看群管理命令说明", Help: abanHelp, Handle: func(ctx context.Context, inv *command.Invocation) error {
 			return service.show(ctx, inv, abanHelp(inv.Prefix), resultLifetime)
 		}},
 		basic("kick"), basic("ban"), basic("unban"), basic("mute"), basic("unmute"),
-		&command.Command{Name: "sb", Description: "在所有管理群中封禁", Usage: "[目标]", Help: abanHelp, Timeout: 15 * time.Minute,
+		&command.Command{Name: "sb", Group: command.GroupAdmin, Description: "在所有管理的群组封禁", Usage: "[目标]", Help: abanHelp, Timeout: 15 * time.Minute,
 			Handle: func(ctx context.Context, inv *command.Invocation) error { return service.batch(ctx, inv, true) }},
-		&command.Command{Name: "unsb", Description: "在所有管理群中解封", Usage: "[目标]", Help: abanHelp, Timeout: 15 * time.Minute,
+		&command.Command{Name: "unsb", Group: command.GroupAdmin, Description: "在所有管理的群组解封", Usage: "[目标]", Help: abanHelp, Timeout: 15 * time.Minute,
 			Handle: func(ctx context.Context, inv *command.Invocation) error { return service.batch(ctx, inv, false) }},
-		&command.Command{Name: "refresh", Description: "刷新管理群缓存", Help: abanHelp, Timeout: 5 * time.Minute,
+		&command.Command{Name: "refresh", Group: command.GroupAdmin, Description: "刷新管理群组列表", Help: abanHelp, Timeout: 5 * time.Minute,
 			Handle: func(ctx context.Context, inv *command.Invocation) error {
 				if err := inv.EditText(ctx, "⏳ 正在刷新管理群缓存…"); err != nil {
 					return err

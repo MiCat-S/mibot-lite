@@ -39,7 +39,7 @@ type release struct {
 // Register 注册 .update。
 func Register(a *app.App) {
 	repo := a.Env.Get("MIBOT_UPDATE_REPO", "MiCat-S/mibot-lite")
-	a.Registry.Register(&command.Command{Name: "update", Description: "检查并更新程序", Usage: "[check|run|rollback]", Timeout: 10 * time.Minute,
+	a.Registry.Register(&command.Command{Name: "update", Group: command.GroupSystem, Description: "检查并更新程序", Usage: "[check|run|rollback]", Timeout: 10 * time.Minute,
 		Help: func(prefix string) string {
 			return "<b>程序更新</b>\n" + command.Code(prefix+"update") + " 当前版本与回滚状态\n" + command.Code(prefix+"update check") + " 读取 GitHub Releases 检查新版本\n" +
 				command.Code(prefix+"update run") + " 下载、校验、试跑、替换并重启\n" + command.Code(prefix+"update rollback") + " 换回上一版本并重启\n发布仓库由 " + command.Code("MIBOT_UPDATE_REPO") + " 指定。"

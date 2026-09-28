@@ -157,5 +157,5 @@ func Register(a *app.App) {
 		}
 		return inv.Edit(ctx, renderBIN(bin, result))
 	}
-	a.Registry.Register(&command.Command{Name: "bin", Description: "查卡头对应的发卡行", Usage: "卡号前6-8位", Help: binHelp, Handle: binHandle})
+	a.Registry.Register(&command.Command{Name: "bin", Group: command.GroupTools, Description: "查卡头对应的发卡行", Usage: "卡号前 6–8 位", Help: binHelp, Handle: binHandle})
 }

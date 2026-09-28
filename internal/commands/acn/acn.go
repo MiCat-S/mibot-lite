@@ -632,8 +632,7 @@ func Register(a *app.App) {
 
 	handle := func(ctx context.Context, inv *command.Invocation) error { return acnHandle(ctx, inv, service) }
 	a.Registry.Register(
-		&command.Command{Name: "acn", Description: "管理动态昵称", Usage: "save|on|off|mode|tz|text|show|time|weather|update|reset|status", Help: acnHelp, Handle: handle},
-		&command.Command{Name: "autochangename", Description: "acn 的全称", Hidden: true, Help: acnHelp, Handle: handle},
+		&command.Command{Name: "acn", Aliases: []string{"autochangename"}, Group: command.GroupAccount, Description: "按时间或天气自动改昵称", Usage: "[子命令]", Help: acnHelp, Handle: handle},
 	)
 
 	a.Registry.AddJob(func(ctx context.Context, client *bot.Client) {

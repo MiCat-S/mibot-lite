@@ -431,8 +431,8 @@ func registerEat(a *app.App) {
 		}
 	}
 	a.Registry.Register(
-		&command.Command{Name: "eat", Description: "用头像生成表情包", Usage: "[名称]", Help: service.help, Timeout: 2 * time.Minute, Handle: handle(false)},
-		&command.Command{Name: "eat2", Description: "用图片生成表情包", Usage: "[名称]", Help: service.help, Timeout: 2 * time.Minute, Handle: handle(true)},
+		&command.Command{Name: "eat", Group: command.GroupMedia, Description: "用头像生成表情贴纸", Usage: "[名称|set 链接]", Help: service.help, Timeout: 2 * time.Minute, Handle: handle(false)},
+		&command.Command{Name: "eat2", Group: command.GroupMedia, Description: "用图片生成表情贴纸", Usage: "[名称|set 链接]", Help: service.help, Timeout: 2 * time.Minute, Handle: handle(true)},
 	)
 }
 
