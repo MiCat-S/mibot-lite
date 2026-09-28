@@ -142,29 +142,15 @@ func dataURL(image aiImage) string {
 	return "data:" + image.MimeType + ";base64," + base64.StdEncoding.EncodeToString(image.Data)
 }
 
-// buildChatRequest 按服务商类型组装对话请求。图片按各家的多模态格式放进用户消息：
-// Gemini 用 inlineData，Anthropic 用 base64 source，Responses 用 input_image，
-// Chat Completions 用 image_url，后两者都是 data URL。
+// buildChatRequest 按服务商类型组装对话请求：先检查输入，再定接口地址和认证方式，
+// 最后按请求体的形状（见 chatBodies）组装请求体。
 func buildChatRequest(cfg aiConfig, sel aiSelection, text, systemPrompt string, options chatOptions) (*aiRequest, error) {
 	provider, ok := cfg.Configs[sel.Tag]
 	if sel.Tag == "" || sel.Model == "" || !ok {
 		return nil, kit.Fail("请先用 ai config add 添加 API，并用 ai model chat 选择模型")
 	}
-	if err := AssertAllowedModel(sel.Model); err != nil {
+	if err := checkChatInput(sel.Model, options); err != nil {
 		return nil, err
-	}
-	if len(options.images) > aiMaxImages {
-		return nil, kit.Fail("图片输入无效")
-	}
-	total := 0
-	for _, image := range options.images {
-		total += len(image.Data)
-		if !aiImageMime.MatchString(image.MimeType) {
-			return nil, kit.Fail("图片输入无效")
-		}
-	}
-	if total > aiMaxImageBytes {
-		return nil, kit.Fail("图片输入过大")
 	}
 	address := providerURL(provider)
 	parsed, err := url.Parse(address)
@@ -182,6 +168,47 @@ func buildChatRequest(cfg aiConfig, sel aiSelection, text, systemPrompt string, 
 	case "anthropic":
 		format = formatAnthropic
 	}
+	target, headers := chatAuth(kind, format, provider.Key, chatTarget(kind, format, provider.Responses, address, parsed, sel.Model))
+	shape := format
+	if format == formatOpenAI {
+		shape = shapeChat
+		if provider.Responses {
+			shape = shapeResponses
+		}
+	}
+	body := chatBodies[shape](chatInput{sel: sel, stream: provider.Stream, text: text, trimmed: strings.TrimSpace(text),
+		system: strings.TrimSpace(systemPrompt), options: options})
+	if format == formatOpenAI && sel.Tier != "" && sel.Tier != "auto" {
+		body["service_tier"] = sel.Tier
+	}
+	return &aiRequest{URL: target, Headers: headers, Body: body, Timeout: time.Duration(cfg.Timeout) * time.Second,
+		Format: format, Responses: format == formatOpenAI && provider.Responses, Provider: provider}, nil
+}
+
+// checkChatInput 检查模型是否允许使用，以及图片的张数、类型和总大小。
+func checkChatInput(model string, options chatOptions) error {
+	if err := AssertAllowedModel(model); err != nil {
+		return err
+	}
+	if len(options.images) > aiMaxImages {
+		return kit.Fail("图片输入无效")
+	}
+	total := 0
+	for _, image := range options.images {
+		total += len(image.Data)
+		if !aiImageMime.MatchString(image.MimeType) {
+			return kit.Fail("图片输入无效")
+		}
+	}
+	if total > aiMaxImageBytes {
+		return kit.Fail("图片输入过大")
+	}
+	return nil
+}
+
+// chatTarget 是对话请求的接口地址。doubao 的 chat 接口在 api/v3 下，local-cliproxy
+// 的地址要先规整；Responses 接口一律挂在规整后的 /v1 下。
+func chatTarget(kind, format string, responses bool, address string, parsed *url.URL, model string) string {
 	base := address
 	switch kind {
 	case "doubao":
@@ -193,21 +220,22 @@ func buildChatRequest(cfg aiConfig, sel aiSelection, text, systemPrompt string, 
 	if kind == "doubao" {
 		chatEndpoint = "api/v3/chat/completions"
 	}
-	var target string
 	switch {
 	case format == formatGemini:
-		target = aiEndpoint(base, "models/"+sel.Model+":generateContent")
+		return aiEndpoint(base, "models/"+model+":generateContent")
 	case format == formatAnthropic:
-		target = aiEndpoint(normalizeOpenAIBaseURL(base), "messages")
-	case provider.Responses:
-		if kind == "doubao" {
-			target = aiEndpoint(normalizeOpenAIBaseURL(aiEndpoint(base, chatEndpoint)), "responses")
-		} else {
-			target = aiEndpoint(normalizeOpenAIBaseURL(base), "responses")
-		}
-	default:
-		target = aiEndpoint(base, chatEndpoint)
+		return aiEndpoint(normalizeOpenAIBaseURL(base), "messages")
+	case responses && kind == "doubao":
+		return aiEndpoint(normalizeOpenAIBaseURL(aiEndpoint(base, chatEndpoint)), "responses")
+	case responses:
+		return aiEndpoint(normalizeOpenAIBaseURL(base), "responses")
 	}
+	return aiEndpoint(base, chatEndpoint)
+}
+
+// chatAuth 按服务商的认证方式放 Key：Gemini 和 local-cliproxy 放在查询参数 key 里
+// （地址里已经带了就不覆盖），Anthropic 放在 x-api-key，其余用 Bearer。返回改过的地址和请求头。
+func chatAuth(kind, format, key, target string) (string, map[string]string) {
 	headers := map[string]string{"Content-Type": "application/json"}
 	if format == formatOpenAI {
 		headers["User-Agent"] = CodexUserAgent
@@ -217,113 +245,141 @@ func buildChatRequest(cfg aiConfig, sel aiSelection, text, systemPrompt string, 
 		authenticated, _ := url.Parse(target)
 		query := authenticated.Query()
 		if !query.Has("key") {
-			query.Set("key", provider.Key)
+			query.Set("key", key)
 		}
 		authenticated.RawQuery = query.Encode()
 		target = authenticated.String()
 	case format == formatAnthropic:
-		headers["x-api-key"] = provider.Key
+		headers["x-api-key"] = key
 		headers["anthropic-version"] = "2023-06-01"
 	default:
-		headers["Authorization"] = "Bearer " + provider.Key
+		headers["Authorization"] = "Bearer " + key
 	}
-	system := strings.TrimSpace(systemPrompt)
-	trimmed := strings.TrimSpace(text)
+	return target, headers
+}
+
+// OpenAI 兼容接口的两种请求体形状，和 formatGemini、formatAnthropic 一起做 chatBodies 的键。
+const (
+	shapeChat      = "chat"
+	shapeResponses = "responses"
+)
+
+// chatInput 是组装请求体要用的东西。text 是原文，trimmed 是去掉首尾空白后的：
+// 用 trimmed 判断有没有文字，请求体里放哪一个沿用各家原来的写法。system 已经去掉首尾空白。
+type chatInput struct {
+	sel           aiSelection
+	stream        bool
+	text, trimmed string
+	system        string
+	options       chatOptions
+}
+
+// chatBodies 按请求体的形状组装。图片按各家的多模态格式放进用户消息：Gemini 用 inlineData，
+// Anthropic 用 base64 source，Responses 用 input_image，Chat Completions 用 image_url，
+// 后两者都是 data URL。
+var chatBodies = map[string]func(chatInput) map[string]any{
+	formatGemini:    geminiBody,
+	formatAnthropic: anthropicBody,
+	shapeResponses:  responsesBody,
+	shapeChat:       chatCompletionsBody,
+}
+
+func geminiBody(in chatInput) map[string]any {
 	body := map[string]any{}
-	switch format {
-	case formatGemini:
-		parts := []any{}
-		if trimmed != "" {
-			parts = append(parts, map[string]any{"text": text})
-		}
-		for _, image := range options.images {
-			parts = append(parts, map[string]any{"inlineData": map[string]any{"data": base64.StdEncoding.EncodeToString(image.Data), "mimeType": image.MimeType}})
-		}
-		body["contents"] = []any{map[string]any{"role": "user", "parts": parts}}
-		if system != "" {
-			body["systemInstruction"] = map[string]any{"role": "system", "parts": []any{map[string]any{"text": system}}}
-		}
-		if options.maxOutputTokens > 0 {
-			body["generationConfig"] = map[string]any{"maxOutputTokens": options.maxOutputTokens}
-		}
-	case formatAnthropic:
-		content := []any{}
-		if trimmed != "" {
-			content = append(content, map[string]any{"type": "text", "text": text})
-		}
-		for _, image := range options.images {
-			content = append(content, map[string]any{"type": "image", "source": map[string]any{"type": "base64", "media_type": image.MimeType, "data": base64.StdEncoding.EncodeToString(image.Data)}})
-		}
-		maxTokens := options.maxOutputTokens
-		if maxTokens <= 0 {
-			maxTokens = 4096
-		}
-		body["model"], body["max_tokens"] = sel.Model, maxTokens
-		body["messages"] = []any{map[string]any{"role": "user", "content": content}}
-		if system != "" {
-			body["system"] = system
-		}
-	default:
-		if provider.Responses {
-			switch {
-			case len(options.images) > 0:
-				content := []any{}
-				if trimmed != "" {
-					content = append(content, map[string]any{"type": "input_text", "text": trimmed})
-				}
-				for _, image := range options.images {
-					content = append(content, map[string]any{"type": "input_image", "image_url": dataURL(image)})
-				}
-				body["input"] = []any{map[string]any{"role": "user", "content": content}}
-			case trimmed != "":
-				body["input"] = []any{map[string]any{"role": "user", "content": []any{map[string]any{"type": "input_text", "text": trimmed}}}}
-			default:
-				body["input"] = text
-			}
-			body["model"], body["stream"] = sel.Model, provider.Stream
-			if system != "" {
-				body["instructions"] = system
-			}
-			if sel.Reasoning != "" && sel.Reasoning != "auto" {
-				body["reasoning"] = map[string]any{"effort": sel.Reasoning}
-			}
-			if options.maxOutputTokens > 0 {
-				body["max_output_tokens"] = options.maxOutputTokens
-			}
-		} else {
-			messages := []any{}
-			if system != "" {
-				messages = append(messages, map[string]any{"role": "system", "content": system})
-			}
-			var content any = trimmed
-			if trimmed == "" {
-				content = text
-			}
-			if len(options.images) > 0 {
-				parts := []any{}
-				if trimmed != "" {
-					parts = append(parts, map[string]any{"type": "text", "text": text})
-				}
-				for _, image := range options.images {
-					parts = append(parts, map[string]any{"type": "image_url", "image_url": map[string]any{"url": dataURL(image)}})
-				}
-				content = parts
-			}
-			messages = append(messages, map[string]any{"role": "user", "content": content})
-			body["model"], body["messages"], body["stream"] = sel.Model, messages, provider.Stream
-			if sel.Reasoning != "" && sel.Reasoning != "auto" {
-				body["reasoning_effort"] = sel.Reasoning
-			}
-			if options.maxOutputTokens > 0 {
-				body["max_tokens"] = options.maxOutputTokens
-			}
-		}
-		if sel.Tier != "" && sel.Tier != "auto" {
-			body["service_tier"] = sel.Tier
-		}
+	parts := []any{}
+	if in.trimmed != "" {
+		parts = append(parts, map[string]any{"text": in.text})
 	}
-	return &aiRequest{URL: target, Headers: headers, Body: body, Timeout: time.Duration(cfg.Timeout) * time.Second,
-		Format: format, Responses: format == formatOpenAI && provider.Responses, Provider: provider}, nil
+	for _, image := range in.options.images {
+		parts = append(parts, map[string]any{"inlineData": map[string]any{"data": base64.StdEncoding.EncodeToString(image.Data), "mimeType": image.MimeType}})
+	}
+	body["contents"] = []any{map[string]any{"role": "user", "parts": parts}}
+	if in.system != "" {
+		body["systemInstruction"] = map[string]any{"role": "system", "parts": []any{map[string]any{"text": in.system}}}
+	}
+	if in.options.maxOutputTokens > 0 {
+		body["generationConfig"] = map[string]any{"maxOutputTokens": in.options.maxOutputTokens}
+	}
+	return body
+}
+
+func anthropicBody(in chatInput) map[string]any {
+	content := []any{}
+	if in.trimmed != "" {
+		content = append(content, map[string]any{"type": "text", "text": in.text})
+	}
+	for _, image := range in.options.images {
+		content = append(content, map[string]any{"type": "image", "source": map[string]any{"type": "base64", "media_type": image.MimeType, "data": base64.StdEncoding.EncodeToString(image.Data)}})
+	}
+	maxTokens := in.options.maxOutputTokens
+	if maxTokens <= 0 {
+		maxTokens = 4096
+	}
+	body := map[string]any{"model": in.sel.Model, "max_tokens": maxTokens,
+		"messages": []any{map[string]any{"role": "user", "content": content}}}
+	if in.system != "" {
+		body["system"] = in.system
+	}
+	return body
+}
+
+func responsesBody(in chatInput) map[string]any {
+	body := map[string]any{"model": in.sel.Model, "stream": in.stream}
+	switch {
+	case len(in.options.images) > 0:
+		content := []any{}
+		if in.trimmed != "" {
+			content = append(content, map[string]any{"type": "input_text", "text": in.trimmed})
+		}
+		for _, image := range in.options.images {
+			content = append(content, map[string]any{"type": "input_image", "image_url": dataURL(image)})
+		}
+		body["input"] = []any{map[string]any{"role": "user", "content": content}}
+	case in.trimmed != "":
+		body["input"] = []any{map[string]any{"role": "user", "content": []any{map[string]any{"type": "input_text", "text": in.trimmed}}}}
+	default:
+		body["input"] = in.text
+	}
+	if in.system != "" {
+		body["instructions"] = in.system
+	}
+	if in.sel.Reasoning != "" && in.sel.Reasoning != "auto" {
+		body["reasoning"] = map[string]any{"effort": in.sel.Reasoning}
+	}
+	if in.options.maxOutputTokens > 0 {
+		body["max_output_tokens"] = in.options.maxOutputTokens
+	}
+	return body
+}
+
+func chatCompletionsBody(in chatInput) map[string]any {
+	messages := []any{}
+	if in.system != "" {
+		messages = append(messages, map[string]any{"role": "system", "content": in.system})
+	}
+	var content any = in.trimmed
+	if in.trimmed == "" {
+		content = in.text
+	}
+	if len(in.options.images) > 0 {
+		parts := []any{}
+		if in.trimmed != "" {
+			parts = append(parts, map[string]any{"type": "text", "text": in.text})
+		}
+		for _, image := range in.options.images {
+			parts = append(parts, map[string]any{"type": "image_url", "image_url": map[string]any{"url": dataURL(image)}})
+		}
+		content = parts
+	}
+	messages = append(messages, map[string]any{"role": "user", "content": content})
+	body := map[string]any{"model": in.sel.Model, "messages": messages, "stream": in.stream}
+	if in.sel.Reasoning != "" && in.sel.Reasoning != "auto" {
+		body["reasoning_effort"] = in.sel.Reasoning
+	}
+	if in.options.maxOutputTokens > 0 {
+		body["max_tokens"] = in.options.maxOutputTokens
+	}
+	return body
 }
 
 // httpStatusError 是服务商返回非 2xx 时的错误：Error 是给用户看的说明，
