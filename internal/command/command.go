@@ -48,6 +48,12 @@ func (inv *Invocation) Rest(index int) string {
 	return strings.TrimSpace(strings.Join(inv.Args[index:], " "))
 }
 
+// RawAfter 返回命令名后面、再跳过 n 个词之后的原文，空白和换行照原样保留（包括开头的空白）。
+// 要读原样正文的命令（翻译、提问、伪造语录、多行添加）用它，不要把 Args 拼回去：那样换行就丢了。
+func (inv *Invocation) RawAfter(n int) string {
+	return afterTokens(strings.TrimPrefix(inv.Text, inv.Prefix), 1+n)
+}
+
 // Edit 把命令消息改成 HTML 内容。
 func (inv *Invocation) Edit(ctx context.Context, html string) error {
 	return inv.Client.Edit(ctx, inv.Message, html)

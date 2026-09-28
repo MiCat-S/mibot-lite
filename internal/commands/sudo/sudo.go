@@ -433,17 +433,9 @@ func sureHelp(prefix string) string {
 // manageRules 处理 .sure msg 的子命令。
 func manageRules(ctx context.Context, inv *command.Invocation, saved *store.Store[delegateDocument]) error {
 	action := strings.ToLower(inv.Arg(1))
-	// 规则原文可以有空格，按原样取：命令之后跳过 "msg add" 这两个词。
+	// 规则原文可以有空格，按原样取第一行：命令之后再跳过 skip 个词（"msg add" 是两个）。
 	raw := func(skip int) string {
-		fields := strings.Fields(strings.SplitN(inv.Text, "\n", 2)[0])
-		if len(fields) <= skip {
-			return ""
-		}
-		line := strings.SplitN(inv.Text, "\n", 2)[0]
-		for _, field := range fields[:skip] {
-			line = strings.TrimLeft(line, " \t")
-			line = strings.TrimPrefix(line, field)
-		}
+		line, _, _ := strings.Cut(inv.RawAfter(skip), "\n")
 		return strings.TrimSpace(line)
 	}
 	switch action {
@@ -465,7 +457,7 @@ func manageRules(ctx context.Context, inv *command.Invocation, saved *store.Stor
 		}
 		return inv.Edit(ctx, strings.Join(lines, "\n"))
 	case "add":
-		text := raw(3)
+		text := raw(2)
 		if text == "" {
 			return kit.Usage(inv.Prefix, "sure msg add 消息原文")
 		}
@@ -484,7 +476,7 @@ func manageRules(ctx context.Context, inv *command.Invocation, saved *store.Stor
 		if err != nil {
 			return kit.Failf("请给出规则编号，%ssure msg ls 可以看", inv.Prefix)
 		}
-		target := raw(4)
+		target := raw(3)
 		found := false
 		if err := saved.Update(func(document *delegateDocument) error {
 			for index := range document.Messages {

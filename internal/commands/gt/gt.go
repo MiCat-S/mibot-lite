@@ -3,17 +3,15 @@ package gt
 
 import (
 	"context"
-	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/MiCat-S/mibot-lite/internal/app"
 	"github.com/MiCat-S/mibot-lite/internal/command"
 	"github.com/MiCat-S/mibot-lite/internal/commands/ai"
 	"github.com/MiCat-S/mibot-lite/internal/commands/kit"
 )
-
-var leadingToken = regexp.MustCompile(`^\S+\s*`)
 
 // Register 注册 .gt：借 ai 命令当前的对话模型来翻译。
 func Register(a *app.App) {
@@ -24,15 +22,15 @@ func Register(a *app.App) {
 	}
 	a.Registry.Register(&command.Command{Name: "gt", Group: command.GroupTools, Description: "用 AI 翻译文本", Usage: "[en] 文本", Help: help, Timeout: 15 * time.Minute,
 		Handle: func(ctx context.Context, inv *command.Invocation) error {
-			text := leadingToken.ReplaceAllString(inv.Text, "")
-			first := strings.ToLower(regexp.MustCompile(`^\S+`).FindString(text))
+			text := strings.TrimLeftFunc(inv.RawAfter(0), unicode.IsSpace)
+			first := strings.ToLower(inv.Arg(0))
 			if first == "help" || first == "h" {
 				return inv.Edit(ctx, help(inv.Prefix))
 			}
 			target := "zh-CN"
 			if first == "en" {
 				target = "en"
-				text = leadingToken.ReplaceAllString(text, "")
+				text = strings.TrimLeftFunc(inv.RawAfter(1), unicode.IsSpace)
 			}
 			if strings.TrimSpace(text) == "" {
 				reply, err := inv.Client.GetReply(ctx, inv.Message)

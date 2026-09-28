@@ -477,24 +477,6 @@ func (s *aiService) telegraph(ctx context.Context, inv *command.Invocation) erro
 	return inv.Edit(ctx, kit.Feedback("success", "AI 输出设置已更新", ""))
 }
 
-// questionText 取命令后面的原始文本（保留换行）；skip 是命令名之后还要跳过的词数。
-func questionText(inv *command.Invocation, skip int) string {
-	body := strings.TrimPrefix(inv.Text, inv.Prefix)
-	for count := 0; count <= skip; count++ {
-		body = strings.TrimLeftFunc(body, isSpace)
-		end := strings.IndexFunc(body, isSpace)
-		if end < 0 {
-			return ""
-		}
-		body = body[end:]
-	}
-	return strings.TrimSpace(body)
-}
-
-func isSpace(r rune) bool {
-	return r == ' ' || r == '\t' || r == '\n' || r == '\r' || r == '\u00a0' || r == '\u3000'
-}
-
 // composeQuestion 组合发给模型的文字：回复的消息作为上下文放在前面，自己输入的
 // 作为问题；两者相同（只回复没输入）时不重复带上下文。与 MiBox 的格式一致。
 func composeQuestion(own, replied string) (question, userText string) {
@@ -518,7 +500,7 @@ func (s *aiService) ask(ctx context.Context, inv *command.Invocation, search boo
 	if search {
 		skip = 1
 	}
-	own := questionText(inv, skip)
+	own := strings.TrimSpace(inv.RawAfter(skip))
 	reply, err := inv.Client.GetReply(ctx, inv.Message)
 	if err != nil {
 		// 自己输入了问题时，读不到回复的消息只是少了上下文，不算失败。

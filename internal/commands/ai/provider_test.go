@@ -247,13 +247,13 @@ func TestConvertMiBox(t *testing.T) {
 // TestQuestionTextAndAnchor 检查问题取自原始文本（保留换行），以及回答回复哪条消息。
 func TestQuestionTextAndAnchor(t *testing.T) {
 	inv := &command.Invocation{Prefix: ".", Text: ".ai  search 第一行\n第二行 "}
-	if got := questionText(inv, 1); got != "第一行\n第二行" {
+	if got := strings.TrimSpace(inv.RawAfter(1)); got != "第一行\n第二行" {
 		t.Errorf("got %q", got)
 	}
-	if got := questionText(inv, 0); got != "search 第一行\n第二行" {
+	if got := strings.TrimSpace(inv.RawAfter(0)); got != "search 第一行\n第二行" {
 		t.Errorf("got %q", got)
 	}
-	if got := questionText(&command.Invocation{Prefix: ".", Text: ".ai"}, 0); got != "" {
+	if got := strings.TrimSpace((&command.Invocation{Prefix: ".", Text: ".ai"}).RawAfter(0)); got != "" {
 		t.Errorf("got %q", got)
 	}
 	own := &bot.Message{ID: 10, ChatID: "-1001"}

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"
@@ -118,13 +119,11 @@ func parseYvlu(inv *command.Invocation) (*yvluOptions, bool) {
 		options.IncludeReply = sub == "fr"
 		// 伪造的文本从原始消息里取，这样它自带的格式 entity 能保留
 		// 下来，只是平移到新的偏移位置。
-		marker := regexp.MustCompile(`^\S+\s+` + sub + `\s+`)
-		match := marker.FindString(inv.Text)
-		if match == "" {
+		options.FakeText = strings.TrimLeftFunc(inv.RawAfter(1), unicode.IsSpace)
+		if options.FakeText == "" {
 			return nil, false
 		}
-		offset := kit.UTF16Len(match)
-		options.FakeText = string([]rune(inv.Text)[len([]rune(match)):])
+		offset := kit.UTF16Len(inv.Text[:len(inv.Text)-len(options.FakeText)])
 		// 解析函数拿到的是一次调用而不是一条消息：背后没有协议层
 		// 消息的调用方，文本照样能被解析。
 		if inv.Message != nil && inv.Message.Raw != nil {

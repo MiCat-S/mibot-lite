@@ -261,3 +261,17 @@ func TestWantsHelpAndHelpText(t *testing.T) {
 		t.Errorf("帮助已经提到简写，不该重复：%q", got)
 	}
 }
+
+// RawAfter 取命令和前几个词之后的原文：换行、多个空格都照原样。
+func TestRawAfter(t *testing.T) {
+	inv := &Invocation{Prefix: ".", Text: ".yvlu f  第一行\n第二行"}
+	if got := inv.RawAfter(1); got != "  第一行\n第二行" {
+		t.Errorf("RawAfter(1) = %q", got)
+	}
+	if got := inv.RawAfter(0); got != " f  第一行\n第二行" {
+		t.Errorf("RawAfter(0) = %q", got)
+	}
+	if got := inv.RawAfter(5); got != "" {
+		t.Errorf("RawAfter past the end = %q", got)
+	}
+}

@@ -1107,10 +1107,7 @@ func (c *acnCall) text() error {
 	case "add":
 		// "text add" 之后的内容原样收下，每行一条，
 		// 所以一条多行消息能一次添加好几条。
-		body := inv.Text
-		if index := strings.Index(strings.ToLower(body), "add"); index >= 0 {
-			body = body[index+len("add"):]
-		}
+		body := inv.RawAfter(2)
 		var additions []string
 		for _, line := range strings.Split(body, "\n") {
 			line = strings.TrimSpace(line)
