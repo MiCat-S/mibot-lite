@@ -58,25 +58,6 @@ func NewStore[T any](a *app.App, name string, defaults func() T) *store.Store[T]
 	return store.New(dataPath(a, name), defaults)
 }
 
-// SendPages 把命令消息编辑成第一页，其余各页作为回复发出。
-func SendPages(ctx context.Context, inv *command.Invocation, pages []string) error {
-	for index, page := range pages {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if index == 0 {
-			if err := inv.Edit(ctx, page); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := inv.Reply(ctx, page); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // Warn 在 err 不为空时记一条带 error 的警告。用于「失败了也不影响这次命令，但不能悄悄吞掉」
 // 的地方，比如存进度、写缓存。a 或它的日志器为空（测试里）时什么也不做。
 func Warn(a *app.App, event string, err error) {

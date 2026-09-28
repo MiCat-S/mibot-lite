@@ -232,7 +232,7 @@ func Register(a *app.App) {
 	help := func(prefix string) string {
 		return "🧮 <b>计算器</b>\n\n• " + command.Code(prefix+"calc 2+2*5") + "\n• " + command.Code(prefix+"calc (10-3)*4") + "\n• " + command.Code(prefix+"calc -(2-5)/3") + "\n支持括号、小数和负数。"
 	}
-	a.Registry.Register(&command.Command{Name: "calc", Group: command.GroupTools, Description: "计算四则运算表达式", Usage: "表达式", Help: help,
+	a.Registry.Register(&command.Command{Name: "calc", Group: command.GroupTools, Description: "计算四则运算表达式", Usage: "表达式", Help: help, FreeText: true,
 		Handle: func(ctx context.Context, inv *command.Invocation) error {
 			expression := inv.Rest(0)
 			lower := strings.ToLower(expression)

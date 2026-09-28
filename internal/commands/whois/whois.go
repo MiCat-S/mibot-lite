@@ -162,9 +162,6 @@ func Register(a *app.App) {
 		Handle: func(ctx context.Context, inv *command.Invocation) error {
 			raw := inv.Arg(0)
 			lower := strings.ToLower(raw)
-			if lower == "help" || lower == "h" {
-				return inv.Edit(ctx, help(inv.Prefix))
-			}
 			if lower == "batch" {
 				return whoisBatch(ctx, inv, data, inv.Args[1:], help)
 			}
@@ -230,7 +227,7 @@ func Register(a *app.App) {
 			if result == "" {
 				return inv.EditText(ctx, "未取得 WHOIS 数据")
 			}
-			return kit.SendPages(ctx, inv, whoisReport(name, result))
+			return inv.EditPages(ctx, whoisReport(name, result))
 		}})
 }
 

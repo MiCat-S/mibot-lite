@@ -390,9 +390,6 @@ func dcHelp(prefix string) string {
 // Register 注册 .ids 和 .dc。
 func Register(a *app.App) {
 	ids := func(ctx context.Context, inv *command.Invocation) error {
-		if strings.EqualFold(inv.Arg(0), "help") || strings.EqualFold(inv.Arg(0), "h") {
-			return inv.Edit(ctx, idsHelp(inv.Prefix))
-		}
 		found, err := resolveEntity(ctx, inv, &tg.InputPeerSelf{})
 		if err != nil {
 			return err
@@ -413,9 +410,6 @@ func Register(a *app.App) {
 		return inv.Edit(ctx, renderIDs(info, joined, time.Now()))
 	}
 	dc := func(ctx context.Context, inv *command.Invocation) error {
-		if strings.EqualFold(inv.Arg(0), "help") || strings.EqualFold(inv.Arg(0), "h") {
-			return inv.Edit(ctx, dcHelp(inv.Prefix))
-		}
 		here, err := inv.Client.InputPeer(inv.Message.Peer)
 		if err != nil {
 			here = &tg.InputPeerSelf{}

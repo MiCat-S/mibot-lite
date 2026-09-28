@@ -697,8 +697,6 @@ func showSaveSettings(ctx context.Context, inv *command.Invocation, settings *st
 // 第一个返回值表示参数是不是设置命令；不是的话，调用方把它当成保存请求。
 func saveSetting(ctx context.Context, inv *command.Invocation, settings *store.Store[saveDocument]) (bool, error) {
 	switch strings.ToLower(inv.Arg(0)) {
-	case "help", "h":
-		return true, inv.Edit(ctx, saveHelp(inv.Prefix))
 	case "target", "config":
 		return true, showSaveSettings(ctx, inv, settings)
 	case "source":

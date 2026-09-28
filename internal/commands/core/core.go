@@ -22,10 +22,7 @@ func Register(a *app.App) {
 	registry := a.Registry
 	registry.Register(
 		&command.Command{Name: "ping", Group: command.GroupSystem, Description: "测试网络延迟", Usage: "[域名|IP]", Help: pingHelp, Handle: func(ctx context.Context, inv *command.Invocation) error {
-			switch target := inv.Arg(0); {
-			case target == "help" || target == "h":
-				return inv.Edit(ctx, pingHelp(inv.Prefix))
-			case target != "":
+			if target := inv.Arg(0); target != "" {
 				return inv.Edit(ctx, probe(ctx, target))
 			}
 			elapsed, err := inv.Client.Ping(ctx)

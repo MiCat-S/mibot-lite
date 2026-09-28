@@ -61,10 +61,6 @@ func backupHelp(prefix string) string {
 // Register 注册 .bf。
 func Register(a *app.App) {
 	handle := func(ctx context.Context, inv *command.Invocation) error {
-		switch strings.ToLower(inv.Arg(0)) {
-		case "help", "h":
-			return inv.Edit(ctx, backupHelp(inv.Prefix))
-		}
 		if err := inv.EditText(ctx, kit.Working("正在打包配置")); err != nil {
 			return err
 		}

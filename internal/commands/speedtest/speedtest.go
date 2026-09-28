@@ -869,7 +869,7 @@ func installProblem(err error) error {
 // setting 处理 help、config、clear、set。第一个返回值表示参数是不是这几个之一。
 func (s *speedtester) setting(ctx context.Context, inv *command.Invocation) (bool, error) {
 	switch strings.ToLower(inv.Arg(0)) {
-	case "help", "h", "config":
+	case "config":
 		return true, inv.Edit(ctx, s.help(inv.Prefix))
 	case "clear", "auto", "自动":
 		if err := s.settings.Update(func(value *speedtestDocument) error { value.Server = 0; return nil }); err != nil {

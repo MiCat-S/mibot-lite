@@ -186,7 +186,7 @@ func Register(a *app.App) {
 	settings := kit.NewStore(a, "translate.json", translateDefaults)
 	a.Registry.Register(&command.Command{
 		Name: "tr", Group: command.GroupTools, Description: "用谷歌翻译文本", Usage: "[语言] 文本|set 语言",
-		Help: translateHelp, Timeout: 2 * time.Minute,
+		Help: translateHelp, Timeout: 2 * time.Minute, FreeText: true,
 		Handle: func(ctx context.Context, inv *command.Invocation) error {
 			return kit.FailWith("翻译失败", runTranslate(ctx, inv, settings))
 		}})
@@ -266,5 +266,5 @@ func runTranslate(ctx context.Context, inv *command.Invocation, settings *store.
 	pages := command.EscapedPages(result.Text, command.PageLimit)
 	pages[0] = "🌐 <b>翻译</b>（" + command.Escape(source) + " → " + command.Escape(languageName(target)) +
 		"）\n\n<b>原文</b>\n<code>" + command.Escape(preview) + suffix + "</code>\n\n<b>译文</b>\n" + pages[0]
-	return kit.SendPages(ctx, inv, pages)
+	return inv.EditPages(ctx, pages)
 }

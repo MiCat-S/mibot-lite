@@ -56,8 +56,6 @@ func Register(a *app.App) {
 			switch {
 			case scope == "":
 				return inv.Edit(ctx, "🛡 IP 显示："+command.Escape(describe(bot.CurrentIPPolicy()))+"\n\n"+usage(inv.Prefix))
-			case strings.EqualFold(scope, "help") || strings.EqualFold(scope, "h"):
-				return inv.Edit(ctx, help(inv.Prefix))
 			case !strings.EqualFold(scope, "ip"):
 				return inv.Edit(ctx, "用法：\n"+usage(inv.Prefix))
 			case action == "hide" && len(inv.Args) == 2:

@@ -698,7 +698,7 @@ func Register(a *app.App) {
 func (s *sumService) handle(ctx context.Context, inv *command.Invocation) error {
 	sub := strings.ToLower(inv.Arg(0))
 	switch sub {
-	case "help", "h", "?":
+	case "?":
 		return inv.Edit(ctx, sumHelp(inv.Prefix))
 	case "config":
 		return s.config(ctx, inv)
@@ -749,7 +749,7 @@ func (s *sumService) instant(ctx context.Context, inv *command.Invocation, sub s
 	}
 	pages := command.HTMLPages(html, command.PageLimit)
 	if !db.AIConfig.ReplyMode {
-		return kit.SendPages(ctx, inv, pages)
+		return inv.EditPages(ctx, pages)
 	}
 	// 回复模式：摘要作为新消息发出（回复命令所回复的那条），再删掉命令消息，
 	// 这样耗时较长的摘要不会被新消息顶到上面去。
@@ -788,5 +788,5 @@ func (s *sumService) debug(ctx context.Context, inv *command.Invocation) error {
 	if runes := []rune(preview); len(runes) > 2000 {
 		preview = "…（前面省略）…\n\n" + string(runes[len(runes)-2000:])
 	}
-	return kit.SendPages(ctx, inv, command.HTMLPages("📋 发送给 AI 的文本预览（最后2000字符）：\n\n"+command.Code(preview), command.PageLimit))
+	return inv.EditPages(ctx, command.HTMLPages("📋 发送给 AI 的文本预览（最后2000字符）：\n\n"+command.Code(preview), command.PageLimit))
 }

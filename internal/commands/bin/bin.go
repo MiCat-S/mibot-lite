@@ -129,7 +129,7 @@ func binHelp(prefix string) string {
 func Register(a *app.App) {
 	binHandle := func(ctx context.Context, inv *command.Invocation) error {
 		input := inv.Rest(0)
-		if strings.EqualFold(input, "help") || strings.EqualFold(input, "h") || input == "" {
+		if input == "" {
 			return inv.Edit(ctx, binHelp(inv.Prefix))
 		}
 		bin, ok := binDigits(input)

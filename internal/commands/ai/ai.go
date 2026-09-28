@@ -226,7 +226,7 @@ func aiHelp(prefix string) string {
 func Register(a *app.App) {
 	service := &aiService{a: a, store: kit.NewStore(a, "ai.json", aiDefaults)}
 	shared = service
-	a.Registry.Register(&command.Command{Name: "ai", Group: command.GroupAI, Description: "与 AI 对话或联网搜索", Usage: "[search] 问题", Help: aiHelp, Timeout: 15 * time.Minute,
+	a.Registry.Register(&command.Command{Name: "ai", Group: command.GroupAI, Description: "与 AI 对话或联网搜索", Usage: "[search] 问题", Help: aiHelp, Timeout: 15 * time.Minute, FreeText: true,
 		Handle: func(ctx context.Context, inv *command.Invocation) error {
 			return kit.FailWith("AI 操作失败", service.handle(ctx, inv))
 		}})
@@ -281,7 +281,7 @@ func (s *aiService) showStatus(ctx context.Context, inv *command.Invocation, vie
 	if err != nil {
 		return err
 	}
-	return kit.SendPages(ctx, inv, command.HTMLPages(view(cfg), command.PageLimit))
+	return inv.EditPages(ctx, command.HTMLPages(view(cfg), command.PageLimit))
 }
 
 func (s *aiService) handle(ctx context.Context, inv *command.Invocation) error {

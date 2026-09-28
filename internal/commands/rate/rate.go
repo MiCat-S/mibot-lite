@@ -603,7 +603,7 @@ func rateHandle(ctx context.Context, inv *command.Invocation, service *rateServi
 	defer service.leave()
 
 	first := strings.ToLower(inv.Arg(0))
-	if first == "" || first == "help" || first == "h" {
+	if first == "" {
 		return inv.Edit(ctx, rateHelp(inv.Prefix))
 	}
 	base, quote, amount, err := parseRateArgs(inv.Args)

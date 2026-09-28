@@ -231,7 +231,7 @@ func Register(a *app.App) {
 				return kit.Fail("只能在群组里用")
 			}
 			switch sub := strings.ToLower(inv.Arg(0)); sub {
-			case "", "help", "h":
+			case "":
 				return inv.Edit(ctx, daHelp(inv.Prefix))
 			case "stop", "status":
 				service.report(ctx, inv, sub)

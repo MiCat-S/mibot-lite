@@ -282,7 +282,7 @@ func Register(a *app.App) {
 			if err != nil {
 				return kit.FailWith("无法读取素材列表", err)
 			}
-			if sub == "" || sub == "list" || sub == "ls" || sub == "help" || sub == "h" {
+			if sub == "" || sub == "list" || sub == "ls" {
 				names := make([]string, 0, len(catalog))
 				for name := range catalog {
 					names = append(names, name)
@@ -292,7 +292,7 @@ func Register(a *app.App) {
 				for _, name := range names {
 					lines = append(lines, "• "+command.Code(name)+" - "+command.Escape(catalog[name].Desc))
 				}
-				return kit.SendPages(ctx, inv, command.HTMLPages(strings.Join(lines, "\n"), command.PageLimit))
+				return inv.EditPages(ctx, command.HTMLPages(strings.Join(lines, "\n"), command.PageLimit))
 			}
 			selected, ok := catalog[sub]
 			if !ok {

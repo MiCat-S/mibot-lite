@@ -263,7 +263,7 @@ func Register(a *app.App) {
 	})}
 	a.Registry.Register(
 		&command.Command{Name: "t", Group: command.GroupMedia, Description: "把文字转成语音", Usage: "文本", Help: help,
-			Timeout: 3 * time.Minute, Handle: s.speak},
+			Timeout: 3 * time.Minute, FreeText: true, Handle: s.speak},
 		&command.Command{Name: "ts", Group: command.GroupMedia, Description: "管理语音合成的角色", Usage: "[页码|角色名 [模型 ID]]", Help: help, Handle: s.roles},
 		&command.Command{Name: "tk", Group: command.GroupMedia, Description: "设置语音合成的 API Key", Usage: "API Key", Help: help, Handle: s.key},
 	)

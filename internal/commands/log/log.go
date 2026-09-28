@@ -135,8 +135,6 @@ func setLogLevel(ctx context.Context, a *app.App, inv *command.Invocation) error
 func Register(a *app.App) {
 	handle := func(ctx context.Context, inv *command.Invocation) error {
 		switch strings.ToLower(inv.Arg(0)) {
-		case "help", "h":
-			return inv.Edit(ctx, logHelp(inv.Prefix))
 		case "debug", "level":
 			return setLogLevel(ctx, a, inv)
 		}

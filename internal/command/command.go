@@ -70,6 +70,25 @@ func (inv *Invocation) Reply(ctx context.Context, html string) error {
 	return err
 }
 
+// EditPages 把第一页改进命令消息，其余各页作为回复接着发。
+func (inv *Invocation) EditPages(ctx context.Context, pages []string) error {
+	for index, page := range pages {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if index == 0 {
+			if err := inv.Edit(ctx, page); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := inv.Reply(ctx, page); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Command 是一个已注册的命令。
 type Command struct {
 	Name string
@@ -89,6 +108,9 @@ type Command struct {
 	Handle func(ctx context.Context, inv *Invocation) error
 	// Timeout 是处理函数的时限。0 表示用默认值（5 分钟），NoTimeout 表示完全不设时限。
 	Timeout time.Duration
+	// FreeText 表示第一个参数可能就是正文（要翻译的词、算式、问题）。「命令 help」「命令 h」
+	// 平时由派发器直接显示帮助，这类命令交给处理函数自己分辨。「命令 --help」对谁都是帮助。
+	FreeText bool
 }
 
 // NoTimeout 放在 Command.Timeout 里表示不设时限。
@@ -132,8 +154,20 @@ func (c *Command) HelpText(prefix string) string {
 	return text
 }
 
-// wantsHelp 判断参数是不是只有一个 --help。
-func wantsHelp(args []string) bool { return len(args) == 1 && args[0] == "--help" }
+// wantsHelp 判断这次调用是不是只想看帮助：参数只有一个 --help，或者只有一个 help、h
+// 而命令不收正文（见 Command.FreeText）。
+func (c *Command) wantsHelp(args []string) bool {
+	if len(args) != 1 {
+		return false
+	}
+	switch strings.ToLower(args[0]) {
+	case "--help":
+		return true
+	case "help", "h":
+		return !c.FreeText
+	}
+	return false
+}
 
 // Job 是账号连上之后启动的后台任务。
 type Job func(ctx context.Context, client *bot.Client)
@@ -479,10 +513,10 @@ func (r *Registry) run(ctx context.Context, client *bot.Client, message, trigger
 		}()
 		started := time.Now()
 		var err error
-		if wantsHelp(inv.Args) {
+		if command.wantsHelp(inv.Args) {
 			// 和 MiBox 一样，「命令 --help」只显示帮助、不执行；有的命令根本不看参数，
-			// 不拦下来的话 .restart --help 就真的重启了。
-			err = inv.Edit(runCtx, command.HelpText(inv.Prefix))
+			// 不拦下来的话 .restart --help 就真的重启了。各命令也就不必自己判断 help。
+			err = inv.EditPages(runCtx, HTMLPages(command.HelpText(inv.Prefix), PageLimit))
 		} else {
 			err = command.Handle(runCtx, inv)
 		}

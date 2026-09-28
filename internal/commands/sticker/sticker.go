@@ -230,9 +230,6 @@ func Register(a *app.App) {
 	a.Registry.Register(&command.Command{Name: "sticker", Group: command.GroupMedia, Description: "把贴纸存进自己的贴纸包", Usage: "[to 包名|包名|cancel]", Help: help, Timeout: 2 * time.Minute,
 		Handle: func(ctx context.Context, inv *command.Invocation) error {
 			sub := strings.ToLower(inv.Arg(0))
-			if sub == "help" || sub == "h" {
-				return inv.Edit(ctx, help(inv.Prefix))
-			}
 			reply, err := kit.Reply(ctx, inv)
 			if err != nil {
 				return err

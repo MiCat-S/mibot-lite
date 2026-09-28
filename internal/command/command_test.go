@@ -240,10 +240,22 @@ func TestUnknownWordsStillDoNotParse(t *testing.T) {
 }
 
 func TestWantsHelpAndHelpText(t *testing.T) {
-	if !wantsHelp([]string{"--help"}) || wantsHelp([]string{"help"}) || wantsHelp([]string{"--help", "x"}) || wantsHelp(nil) {
-		t.Error("只有单独一个 --help 才拦下来")
-	}
 	plain := &Command{Name: "restart", Usage: "[x]", Description: "重启 <服务>"}
+	text := &Command{Name: "tr", FreeText: true}
+	for _, args := range [][]string{{"--help"}, {"help"}, {"H"}} {
+		if !plain.wantsHelp(args) {
+			t.Errorf("%q 应该显示帮助", args)
+		}
+	}
+	for _, args := range [][]string{{"help", "x"}, {"--help", "x"}, nil, {"hi"}} {
+		if plain.wantsHelp(args) {
+			t.Errorf("%q 不是只想看帮助", args)
+		}
+	}
+	// 收正文的命令：help 可能就是要翻译的词，交给处理函数；--help 照样拦下来。
+	if text.wantsHelp([]string{"help"}) || text.wantsHelp([]string{"h"}) || !text.wantsHelp([]string{"--help"}) {
+		t.Error("FreeText 命令只拦 --help")
+	}
 	if got := plain.HelpText("."); got != "<code>.restart [x]</code>\n重启 &lt;服务&gt;" {
 		t.Errorf("没有 Help 时的帮助：%q", got)
 	}

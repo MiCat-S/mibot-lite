@@ -77,3 +77,42 @@ func TestDispatchShowsErrors(t *testing.T) {
 		t.Error("the detail of an internal error must still reach the log")
 	}
 }
+
+// 「命令 help」由派发器显示帮助，处理函数不执行；收正文的命令照常执行。
+func TestDispatchShowsHelp(t *testing.T) {
+	r := New([]string{"."}, slog.New(slog.DiscardHandler))
+	var ran []string
+	var mu sync.Mutex
+	handle := func(_ context.Context, inv *Invocation) error {
+		mu.Lock()
+		ran = append(ran, inv.Command)
+		mu.Unlock()
+		return nil
+	}
+	r.Register(
+		&Command{Name: "restart", Help: func(string) string { return "重启说明" }, Handle: handle},
+		&Command{Name: "tr", FreeText: true, Help: func(string) string { return "翻译说明" }, Handle: handle},
+	)
+	recorder := &editRecorder{}
+	self := &tg.User{ID: 1, AccessHash: 1}
+	peers := bot.NewPeerCache()
+	peers.SetSelf(self.ID)
+	client := bot.FromAPI(tg.NewClient(recorder), peers, self, slog.New(slog.DiscardHandler))
+	dispatch := func(text string) {
+		r.Dispatch(context.Background(), client, &bot.Message{ID: 10, Peer: &tg.PeerUser{UserID: self.ID}, ChatID: "1", Text: text, Out: true})
+		r.Wait(time.Second)
+	}
+
+	dispatch(".restart h")
+	if got := recorder.last(); got != "重启说明" || len(ran) != 0 {
+		t.Errorf(".restart h：显示 %q，执行了 %v", got, ran)
+	}
+	dispatch(".tr help")
+	if len(ran) != 1 || ran[0] != "tr" {
+		t.Errorf(".tr help 应交给处理函数，执行了 %v", ran)
+	}
+	dispatch(".tr --help")
+	if got := recorder.last(); got != "翻译说明" || len(ran) != 1 {
+		t.Errorf(".tr --help：显示 %q，执行了 %v", got, ran)
+	}
+}

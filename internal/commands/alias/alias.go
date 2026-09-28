@@ -89,8 +89,6 @@ func Register(a *app.App) {
 		switch strings.ToLower(inv.Arg(0)) {
 		case "", "ls", "list":
 			return inv.Edit(ctx, renderAliases(a.Registry.Aliases(), inv.Prefix))
-		case "help", "h":
-			return inv.Edit(ctx, aliasHelp(inv.Prefix))
 		case "del", "rm", "delete":
 			name := inv.Rest(1)
 			if name == "" {

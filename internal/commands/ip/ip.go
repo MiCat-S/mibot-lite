@@ -116,10 +116,6 @@ func ipHelp(prefix string) string {
 func Register(a *app.App) {
 	ipHandle := func(ctx context.Context, inv *command.Invocation) error {
 		query := strings.TrimSpace(inv.Rest(0))
-		switch strings.ToLower(query) {
-		case "help", "h":
-			return inv.Edit(ctx, ipHelp(inv.Prefix))
-		}
 		if query == "" && inv.Message.ReplyToID != 0 {
 			reply, err := kit.Reply(ctx, inv)
 			if err != nil {

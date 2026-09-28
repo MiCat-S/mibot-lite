@@ -57,7 +57,7 @@ func Register(a *app.App) {
 	a.Registry.Register(&command.Command{Name: "dme", Group: command.GroupMedia, Description: "删除自己最近的消息", Usage: "[-f] 条数", Help: dmeHelp, Timeout: command.NoTimeout,
 		Handle: func(ctx context.Context, inv *command.Invocation) error {
 			sub := strings.ToLower(inv.Arg(0))
-			if sub == "" || sub == "help" || sub == "h" {
+			if sub == "" {
 				return inv.Edit(ctx, dmeHelp(inv.Prefix))
 			}
 			anti := sub == "-f"

@@ -1039,7 +1039,7 @@ func (c *acnCall) reset() error {
 func acnHandle(ctx context.Context, inv *command.Invocation, service *acnService) error {
 	userID := strconv.FormatInt(inv.Client.SelfID(), 10)
 	sub := strings.ToLower(inv.Arg(0))
-	if sub == "" || sub == "help" || sub == "h" {
+	if sub == "" {
 		return inv.Edit(ctx, acnHelp(inv.Prefix))
 	}
 	state, err := service.store.Read()
