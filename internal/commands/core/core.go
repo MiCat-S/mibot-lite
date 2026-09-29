@@ -66,7 +66,7 @@ func Register(a *app.App) {
 			}
 			return inv.Edit(ctx, strings.Join(lines, "\n"))
 		}},
-		&command.Command{Name: "help", Aliases: []string{"h"}, Group: command.GroupSystem, Description: "查看命令列表或说明", Usage: "[命令]", Help: helpHelp, Handle: func(ctx context.Context, inv *command.Invocation) error {
+		&command.Command{Name: "help", Aliases: []string{"h"}, Group: command.GroupSystem, Description: "查看命令列表或说明", Usage: "[命令|分组]", Help: helpHelp, Handle: func(ctx context.Context, inv *command.Invocation) error {
 			if name := inv.Arg(0); name != "" {
 				return inv.Edit(ctx, renderCommandHelp(registry, inv.Prefix, name))
 			}
@@ -101,45 +101,87 @@ func memoryReport() string {
 	return strings.Join(lines, "\n")
 }
 
-// renderHelpList 按分组列出命令，每行「.名字（.简写） — 说明」，和 README 的表格同一套分组。
-// 参数不放在列表里：几十条命令各带一串用法就成了一堵墙，.help 命令 才看用法。
+// renderHelpList 是 .help 不带参数时的总览：每组一行组名、一行命令名，不带说明。
+// 49 条命令各带一句说明要七十行，手机上翻三屏；总览只管让人找到名字，
+// 说明看 .help 分组，用法看 .help 命令。
 func renderHelpList(registry *command.Registry, prefix string) string {
-	byGroup := map[string][]*command.Command{}
-	for _, cmd := range registry.Commands() {
-		byGroup[cmd.Group] = append(byGroup[cmd.Group], cmd)
-	}
+	byGroup := commandsByGroup(registry)
 	lines := []string{"📖 <b>命令列表</b>"}
 	for _, group := range command.Groups {
 		if len(byGroup[group]) == 0 {
 			continue
 		}
-		lines = append(lines, "", "<b>"+command.Escape(group)+"</b>")
+		names := make([]string, 0, len(byGroup[group]))
 		for _, cmd := range byGroup[group] {
-			line := command.Code(prefix + cmd.Name)
-			if len(cmd.Aliases) > 0 {
-				short := make([]string, len(cmd.Aliases))
-				for index, alias := range cmd.Aliases {
-					short[index] = command.Code(prefix + alias)
-				}
-				line += "（" + strings.Join(short, " ") + "）"
-			}
-			lines = append(lines, line+" — "+command.Escape(cmd.Description))
+			names = append(names, command.Code(prefix+cmd.Name))
 		}
+		lines = append(lines, "<b>"+command.Escape(group)+"</b>", strings.Join(names, " "))
 	}
 	quoted := make([]string, 0, len(registry.Prefixes()))
 	for _, value := range registry.Prefixes() {
 		quoted = append(quoted, command.Code(value))
 	}
-	lines = append(lines, "", "前缀："+strings.Join(quoted, " "), "用 "+command.Code(prefix+"help 命令")+" 查看用法和说明")
+	lines = append(lines, "",
+		command.Code(prefix+"help 命令")+" 看用法，"+command.Code(prefix+"help 分组")+" 看一组的说明",
+		"前缀："+strings.Join(quoted, " "))
 	return strings.Join(lines, "\n")
 }
 
-func renderCommandHelp(registry *command.Registry, prefix, name string) string {
-	cmd, ok := lookupForHelp(registry, name)
-	if !ok {
-		return "❌ 没有这个命令：" + command.Code(name) + "，" + command.Code(prefix+"help") + " 看全部命令"
+// renderGroupHelp 列出一组命令，每行「.名字（.简写） — 说明」，和 README 的表格同一套分组。
+func renderGroupHelp(registry *command.Registry, prefix, group string) string {
+	lines := []string{"📖 <b>" + command.Escape(group) + "</b>", ""}
+	for _, cmd := range commandsByGroup(registry)[group] {
+		line := command.Code(prefix + cmd.Name)
+		if len(cmd.Aliases) > 0 {
+			short := make([]string, len(cmd.Aliases))
+			for index, alias := range cmd.Aliases {
+				short[index] = command.Code(prefix + alias)
+			}
+			line += "（" + strings.Join(short, " ") + "）"
+		}
+		lines = append(lines, line+" — "+command.Escape(cmd.Description))
 	}
-	return cmd.HelpText(prefix)
+	lines = append(lines, "", command.Code(prefix+"help 命令")+" 看用法")
+	return strings.Join(lines, "\n")
+}
+
+func commandsByGroup(registry *command.Registry) map[string][]*command.Command {
+	byGroup := map[string][]*command.Command{}
+	for _, cmd := range registry.Commands() {
+		byGroup[cmd.Group] = append(byGroup[cmd.Group], cmd)
+	}
+	return byGroup
+}
+
+// findGroup 找 .help 后面写的分组：整个组名，或者组名里的一段（.help 群组、.help 工具），
+// 不分大小写。写的一段同时落在两个组名里就当没找到。
+func findGroup(name string) (string, bool) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return "", false
+	}
+	found := ""
+	for _, group := range command.Groups {
+		if strings.Contains(strings.ToLower(group), name) {
+			if found != "" {
+				return "", false
+			}
+			found = group
+		}
+	}
+	return found, found != ""
+}
+
+// renderCommandHelp 显示一条命令的帮助；写的不是命令而是分组名时列出那一组。
+// 命令先于分组：.help ai 是 .ai 的帮助，不是「AI」那一组。
+func renderCommandHelp(registry *command.Registry, prefix, name string) string {
+	if cmd, ok := lookupForHelp(registry, name); ok {
+		return cmd.HelpText(prefix)
+	}
+	if group, ok := findGroup(name); ok {
+		return renderGroupHelp(registry, prefix, group)
+	}
+	return "❌ 没有这个命令或分组：" + command.Code(name) + "，" + command.Code(prefix+"help") + " 看全部命令"
 }
 
 // lookupForHelp 找 .help 后面写的那条命令，照 MiBox 放宽：可以带前缀（.help .ping）、
@@ -206,6 +248,7 @@ func sysinfoHelp(prefix string) string {
 }
 
 func helpHelp(prefix string) string {
-	return "📖 <b>命令帮助</b>\n\n• " + command.Code(prefix+"help") + " 按分组列出全部命令\n• " + command.Code(prefix+"help 命令") +
+	return "📖 <b>命令帮助</b>\n\n• " + command.Code(prefix+"help") + " 按分组列出全部命令的名字\n• " + command.Code(prefix+"help 分组") +
+		" 列出一组命令和各自的说明，分组名写一段就行（" + command.Code(prefix+"help 群组") + "）\n• " + command.Code(prefix+"help 命令") +
 		" 看一条命令的用法和说明，命令可以带前缀、写简写或别名\n• " + command.Code("命令 --help") + " 同上，只显示帮助、不执行"
 }
