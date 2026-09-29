@@ -117,6 +117,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 | 命令 | 作用 | 可借 |
 |---|---|---|
 | `.acn` `.autochangename` | 按时间、天气自动改昵称 | |
+| `.checkin` | 每天定时向机器人签到，可以点回调按钮，发汇总 | |
 | `.sudo` `.sure` | 把命令借给名单里的人，见下文 | |
 
 ### 借用账号：.sudo 和 .sure

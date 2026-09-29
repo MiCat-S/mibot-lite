@@ -124,6 +124,7 @@ owner; blank means owner only.
 | Command | What it does | Lend |
 |---|---|---|
 | `.acn` `.autochangename` | Change your display name automatically by time and weather | |
+| `.checkin` | Daily scheduled check-ins with bots, optionally pressing a callback button, with a summary | |
 | `.sudo` `.sure` | Lend commands to people on a list, see below | |
 
 ### Lending the account: .sudo and .sure

@@ -123,6 +123,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 | コマンド | 内容 | 貸出 |
 |---|---|---|
 | `.acn` `.autochangename` | 時刻や天気に合わせて表示名を自動で変更 | |
+| `.checkin` | 毎日決まった時刻にボットへチェックイン（コールバックボタンも押せる）、結果をまとめて送信 | |
 | `.sudo` `.sure` | リストに載せた人にコマンドを貸し出す（後述） | |
 
 ### アカウントの貸し出し：.sudo と .sure
