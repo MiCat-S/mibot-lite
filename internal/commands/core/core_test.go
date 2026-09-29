@@ -45,13 +45,20 @@ func TestHelpListAndGroups(t *testing.T) {
 		&command.Command{Name: "ai", Group: command.GroupAI, Description: "与 AI 对话", Help: func(string) string { return "ai 的帮助" }},
 	)
 	list := renderHelpList(registry, ".")
-	for _, want := range []string{"<b>运行与维护</b>\n<code>.ping</code>", "<b>查询与工具</b>\n<code>.speedtest</code>", "<code>.help 分组</code>"} {
-		if !strings.Contains(list, want) {
-			t.Errorf("总览缺 %q：\n%s", want, list)
+	names, folded, ok := strings.Cut(list, "<blockquote expandable>")
+	if !ok || !strings.HasSuffix(folded, "</blockquote>") {
+		t.Fatalf("说明应折在最后的引用里：\n%s", list)
+	}
+	for _, want := range []string{"<b>运行与维护</b>\n<code>.ping</code>", "<b>查询与工具</b>\n<code>.speedtest</code>", "<code>.help 命令</code>"} {
+		if !strings.Contains(names, want) {
+			t.Errorf("总览缺 %q：\n%s", want, names)
 		}
 	}
-	if strings.Contains(list, "测试网络延迟") || strings.Contains(list, ".st") || strings.Contains(list, "账号") {
-		t.Errorf("总览不该有说明、简写和空的分组：\n%s", list)
+	if strings.Contains(names, "测试网络延迟") || strings.Contains(names, ".st") || strings.Contains(list, "账号") {
+		t.Errorf("引用外面不该有说明、简写，空的分组不列：\n%s", list)
+	}
+	if !strings.Contains(folded, "<b>查询与工具</b>\n<code>.speedtest</code>（<code>.st</code>） — 测量主机网络速度") {
+		t.Errorf("折叠的说明不对：\n%s", folded)
 	}
 	group := renderCommandHelp(registry, ".", "工具")
 	if !strings.Contains(group, "<code>.speedtest</code>（<code>.st</code>） — 测量主机网络速度") || strings.Contains(group, ".ping") {

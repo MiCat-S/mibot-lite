@@ -101,12 +101,13 @@ func memoryReport() string {
 	return strings.Join(lines, "\n")
 }
 
-// renderHelpList 是 .help 不带参数时的总览：每组一行组名、一行命令名，不带说明。
-// 49 条命令各带一句说明要七十行，手机上翻三屏；总览只管让人找到名字，
-// 说明看 .help 分组，用法看 .help 命令。
+// renderHelpList 是 .help 不带参数时的总览：每组一行组名、一行命令名，说明整段收在
+// 最后的折叠引用里，点开才展开。49 条命令各带一句说明要七十行，手机上翻三屏；
+// 总览先让人找到名字，想看说明再展开，用法看 .help 命令。
 func renderHelpList(registry *command.Registry, prefix string) string {
 	byGroup := commandsByGroup(registry)
 	lines := []string{"📖 <b>命令列表</b>"}
+	var details []string
 	for _, group := range command.Groups {
 		if len(byGroup[group]) == 0 {
 			continue
@@ -116,21 +117,33 @@ func renderHelpList(registry *command.Registry, prefix string) string {
 			names = append(names, command.Code(prefix+cmd.Name))
 		}
 		lines = append(lines, "<b>"+command.Escape(group)+"</b>", strings.Join(names, " "))
+		if len(details) > 0 {
+			details = append(details, "")
+		}
+		details = append(details, "<b>"+command.Escape(group)+"</b>")
+		details = append(details, groupLines(byGroup[group], prefix)...)
 	}
 	quoted := make([]string, 0, len(registry.Prefixes()))
 	for _, value := range registry.Prefixes() {
 		quoted = append(quoted, command.Code(value))
 	}
 	lines = append(lines, "",
-		command.Code(prefix+"help 命令")+" 看用法，"+command.Code(prefix+"help 分组")+" 看一组的说明",
-		"前缀："+strings.Join(quoted, " "))
+		"各命令的说明折在下面，"+command.Code(prefix+"help 命令")+" 看用法 · 前缀："+strings.Join(quoted, " "),
+		"<blockquote expandable>"+strings.Join(details, "\n")+"</blockquote>")
 	return strings.Join(lines, "\n")
 }
 
-// renderGroupHelp 列出一组命令，每行「.名字（.简写） — 说明」，和 README 的表格同一套分组。
+// renderGroupHelp 列出一组命令和各自的说明，不折叠。
 func renderGroupHelp(registry *command.Registry, prefix, group string) string {
-	lines := []string{"📖 <b>" + command.Escape(group) + "</b>", ""}
-	for _, cmd := range commandsByGroup(registry)[group] {
+	lines := append([]string{"📖 <b>" + command.Escape(group) + "</b>", ""}, groupLines(commandsByGroup(registry)[group], prefix)...)
+	lines = append(lines, "", command.Code(prefix+"help 命令")+" 看用法")
+	return strings.Join(lines, "\n")
+}
+
+// groupLines 是一组命令的说明行，每行「.名字（.简写） — 说明」，和 README 的表格同一套写法。
+func groupLines(commands []*command.Command, prefix string) []string {
+	lines := make([]string, 0, len(commands))
+	for _, cmd := range commands {
 		line := command.Code(prefix + cmd.Name)
 		if len(cmd.Aliases) > 0 {
 			short := make([]string, len(cmd.Aliases))
@@ -141,8 +154,7 @@ func renderGroupHelp(registry *command.Registry, prefix, group string) string {
 		}
 		lines = append(lines, line+" — "+command.Escape(cmd.Description))
 	}
-	lines = append(lines, "", command.Code(prefix+"help 命令")+" 看用法")
-	return strings.Join(lines, "\n")
+	return lines
 }
 
 func commandsByGroup(registry *command.Registry) map[string][]*command.Command {
@@ -248,7 +260,7 @@ func sysinfoHelp(prefix string) string {
 }
 
 func helpHelp(prefix string) string {
-	return "📖 <b>命令帮助</b>\n\n• " + command.Code(prefix+"help") + " 按分组列出全部命令的名字\n• " + command.Code(prefix+"help 分组") +
+	return "📖 <b>命令帮助</b>\n\n• " + command.Code(prefix+"help") + " 按分组列出全部命令，说明折在引用里，点开展开\n• " + command.Code(prefix+"help 分组") +
 		" 列出一组命令和各自的说明，分组名写一段就行（" + command.Code(prefix+"help 群组") + "）\n• " + command.Code(prefix+"help 命令") +
 		" 看一条命令的用法和说明，命令可以带前缀、写简写或别名\n• " + command.Code("命令 --help") + " 同上，只显示帮助、不执行"
 }
