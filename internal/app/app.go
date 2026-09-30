@@ -205,6 +205,10 @@ func Prepare(ctx context.Context, options Options) (*App, error) {
 			bot.IPRedactor{},
 			bot.Retrier{Logger: app.Logger, MaxWait: 60 * time.Second, Attempts: 5},
 			bot.EntityRecorder{Peers: app.peers},
+			// 自己发出的消息记进去重表：更新引擎补抓缺口时会把它们再送一遍，见 SentRecorder。
+			bot.SentRecorder{Self: app.selfID, Mark: func(peer tg.PeerClass, id int) {
+				app.seen.first(messageKey(bot.PeerID(peer), id), time.Now())
+			}},
 		},
 	}
 	if cfg.Proxy != nil {
@@ -541,4 +545,12 @@ func (a *App) stopCommands() {
 	if !a.Registry.Wait(2 * time.Second) {
 		a.Logger.Warn("shutdown.commands_lingering")
 	}
+}
+
+// selfID 是本账号的 ID；还没连上时是 0。
+func (a *App) selfID() int64 {
+	if client := a.bot.Load(); client != nil {
+		return client.SelfID()
+	}
+	return 0
 }
