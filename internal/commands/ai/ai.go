@@ -575,13 +575,14 @@ func (s *Service) ask(ctx context.Context, inv *command.Invocation, search bool)
 		return err
 	}
 	options := chatOptions{images: images.images}
-	var answer, tag string
+	var answer, model string
 	var sources []aiSource
 	if search {
-		answer, sources, tag, err = searchText(ctx, cfg, userText, options)
+		answer, sources, model, err = searchText(ctx, cfg, userText, options)
 	} else {
-		tag = cfg.CurrentChatTag
-		answer, err = chatText(ctx, cfg, cfg.selection("chat"), userText, cfg.Prompt, options)
+		selection := cfg.selection("chat")
+		model = selection.Model
+		answer, err = chatText(ctx, cfg, selection, userText, cfg.Prompt, options)
 	}
 	if err != nil {
 		return err
@@ -593,9 +594,9 @@ func (s *Service) ask(ctx context.Context, inv *command.Invocation, search bool)
 		if err != nil {
 			return err
 		}
-		return deliverAnswer(ctx, inv, answerPages(question, telegraphLinkHTML(link), tag, cfg.Collapse), replyAnchor(inv.Message, reply))
+		return deliverAnswer(ctx, inv, answerPages(question, telegraphLinkHTML(link), model, cfg.Collapse), replyAnchor(inv.Message, reply))
 	}
-	return deliverAnswer(ctx, inv, answerPages(question, body, tag, cfg.Collapse), replyAnchor(inv.Message, reply))
+	return deliverAnswer(ctx, inv, answerPages(question, body, model, cfg.Collapse), replyAnchor(inv.Message, reply))
 }
 
 func (s *Service) configure(ctx context.Context, inv *command.Invocation) error {

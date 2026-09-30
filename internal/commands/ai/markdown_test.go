@@ -90,8 +90,8 @@ func TestHTMLPages(t *testing.T) {
 
 // TestAnswerPages 检查 Q/A 版式、折叠、续页标签和署名。
 func TestAnswerPages(t *testing.T) {
-	pages := answerPages("问<题>", "<b>答</b>", "main", true)
-	want := "问：\n<blockquote expandable>问&lt;题&gt;</blockquote>\n答：\n<blockquote expandable><b>答</b></blockquote>\n<i>🍀 由 main 生成</i>"
+	pages := answerPages("问<题>", "<b>答</b>", "gpt-5.1", true)
+	want := "问：\n<blockquote expandable>问&lt;题&gt;</blockquote>\n答：\n<blockquote expandable><b>答</b></blockquote>\n<i>🍀 由 gpt-5.1 生成</i>"
 	if len(pages) != 1 || pages[0] != want {
 		t.Fatalf("got %q", pages)
 	}

@@ -45,8 +45,8 @@ func telegraphLinkHTML(link string) string {
 }
 
 // answerPages 按 MiBox 的版式排出回答：「问：」问题、「答：」回答，开启折叠时两段各自包进
-// 可展开的引用；超长时分页，续页带「续（i/n）」标签，最后一页署上服务商标签。
-func answerPages(question, answerHTML, tag string, collapse bool) []string {
+// 可展开的引用；超长时分页，续页带「续（i/n）」标签，最后一页署上模型名。
+func answerPages(question, answerHTML, model string, collapse bool) []string {
 	wrap := func(html string) string {
 		if collapse && strings.TrimSpace(html) != "" {
 			return "<blockquote expandable>" + html + "</blockquote>"
@@ -64,8 +64,9 @@ func answerPages(question, answerHTML, tag string, collapse bool) []string {
 			pages[index] = fmt.Sprintf("<b>续（%d/%d）</b>\n\n", index, len(pages)-1) + pages[index]
 		}
 	}
-	if tag != "" {
-		pages[len(pages)-1] += "\n<i>🍀 由 " + command.Escape(tag) + " 生成</i>"
+	// 末尾写模型名，不写配置标签：标签是自己起的名字（main、a-2），看不出是哪个模型答的。
+	if model != "" {
+		pages[len(pages)-1] += "\n<i>🍀 由 " + command.Escape(model) + " 生成</i>"
 	}
 	return pages
 }
@@ -122,6 +123,7 @@ func deliverAnswer(ctx context.Context, inv *command.Invocation, pages []string,
 	return nil
 }
 
+// searchText 用搜索模型回答，返回回答、引用的来源和实际用的模型名（写进回答末尾的「由 … 生成」）。
 func searchText(ctx context.Context, cfg aiConfig, text string, options chatOptions) (string, []aiSource, string, error) {
 	sel := cfg.selection("search")
 	provider, ok := cfg.Configs[sel.Tag]
@@ -181,7 +183,7 @@ func searchText(ctx context.Context, cfg aiConfig, text string, options chatOpti
 	}
 	payloads, err := Payloads(raw)
 	if err != nil {
-		return output, nil, sel.Tag, nil
+		return output, nil, sel.Model, nil
 	}
 	for _, payload := range payloads {
 		if request.Format == formatGemini {
@@ -238,7 +240,7 @@ func searchText(ctx context.Context, cfg aiConfig, text string, options chatOpti
 			add(ObjectOf(annotation)["url"], ObjectOf(annotation)["title"])
 		}
 	}
-	return output, sources, sel.Tag, nil
+	return output, sources, sel.Model, nil
 }
 
 func (s *Service) telegraphPost(ctx context.Context, cfg aiConfig, method string, body any) (map[string]any, error) {
