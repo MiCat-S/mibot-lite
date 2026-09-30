@@ -4,6 +4,7 @@ package restart
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -11,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/MiCat-S/mibot-lite/internal/app"
@@ -97,12 +99,52 @@ func (r *Restarter) Schedule(ctx context.Context, chatID string, messageID int, 
 		release()
 		return err
 	}
-	if err := r.trigger(ctx); err != nil {
+	if err := triggerRestart(ctx, r.service); err != nil {
+		if interrupted(ctx, err) {
+			// 重启已经在进行，本进程马上就退出：回执留着，新进程回来改那条消息。
+			return nil
+		}
 		release()
 		kit.Warn(r.a, "restart.receipt_clear_failed", r.store.Update(func(doc *receiptDocument) error { doc.Pending = nil; return nil }))
 		return triggerError{err}
 	}
 	return nil
+}
+
+// errTriggerTimeout 是 systemctl 5 秒没返回：重启请求多半没提交上。
+var errTriggerTimeout = errors.New("systemctl 5 秒没有返回")
+
+// triggerRestart 让 systemd 重启 service，不等它完成。测试里换掉。
+var triggerRestart = func(ctx context.Context, service string) error {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	err := exec.CommandContext(ctx, systemctl(), "--no-block", "restart", service).Run()
+	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return fmt.Errorf("%w: %w", errTriggerTimeout, err)
+	}
+	return err
+}
+
+// interrupted 判断 systemctl 是不是被这次重启本身打断的。
+//
+// systemd 一收到重启请求就开始停本服务：给本进程发 SIGTERM，连同同一个 cgroup 里还没退出
+// 的 systemctl 一起结束；本进程退出时也会取消正在跑的命令的 ctx。两种情况下 Run 都返回
+// 错误，可重启已经在进行。以前把这当成失败撤掉了回执，结果重启回来没人改那条
+// 「正在重启…」的消息。真的失败是 systemctl 非零退出，或者 5 秒没返回。
+func interrupted(ctx context.Context, err error) bool {
+	if errors.Is(err, errTriggerTimeout) {
+		return false
+	}
+	if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+		return true
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		if status, ok := exit.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+			return true
+		}
+	}
+	return false
 }
 
 // Status 是 systemd 眼里这个服务的状态，重启没提交成功时给人看。
@@ -124,12 +166,6 @@ func (r *Restarter) command(ctx context.Context, inv *command.Invocation, kind, 
 			"\n\n可执行 "+command.Code("systemctl status "+r.service+" --no-pager")+" 查看详情。")
 	}
 	return err
-}
-
-func (r *Restarter) trigger(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	return exec.CommandContext(ctx, systemctl(), "--no-block", "restart", r.service).Run()
 }
 
 func (r *Restarter) status(ctx context.Context) string {
