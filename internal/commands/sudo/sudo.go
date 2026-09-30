@@ -48,6 +48,7 @@ type lending struct {
 var lendable = map[string]lending{
 	"ping": {}, "help": {}, "version": {}, "status": {}, "memory": {},
 	"calc": {}, "rate": {}, "gt": {}, "ip": {}, "bin": {}, "ids": {}, "dc": {}, "re": {},
+	"dig": {}, "bgp": {}, "ddg": {}, "encode": {}, "b64encode": {}, "b64decode": {}, "urlencode": {}, "urldecode": {},
 	"ban": {}, "unban": {}, "kick": {}, "mute": {}, "unmute": {},
 	"tr":     {ownerOnly: []string{"set"}},
 	"yvlu":   {ownerOnly: []string{"config", "s"}},

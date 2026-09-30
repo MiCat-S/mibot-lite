@@ -65,6 +65,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 | `.status` | 状態カード（CPU、メモリ、ディスク、Swap） | ✓ |
 | `.memory` | プロセスのメモリ | ✓ |
 | `.sysinfo` | 詳しいシステム情報 | |
+| `.service [サービス名]` | systemd サービスの状態、稼働時間、メモリ、CPU | |
 | `.version` `.ver` | バージョン情報 | ✓ |
 | `.help` `.h` | コマンド一覧、または個々のコマンドの説明 | ✓ |
 | `.update [check\|run\|rollback]` | 更新の確認、適用、ロールバック | |
@@ -84,6 +85,11 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 | `.gt [en] テキスト` | AI 翻訳 | ✓ |
 | `.whois ドメイン` | ドメインの登録情報、一括検索にも対応 | 一部 |
 | `.ip [IP\|ドメイン]` | IP の所在地と回線事業者 | ✓ |
+| `.dig ドメイン [タイプ] [@サーバー]` | DNS レコード、IP の所在地と AS 付き | ✓ |
+| `.bgp [dns] [IP\|プレフィックス\|AS]` | IP・プレフィックス・AS の BGP 経路：起源、上流、逆引き | ✓ |
+| `.ddg キーワード` `.duckduckgo` | ウェブ検索（DuckDuckGo、ブロック時は Firecrawl） | ✓ |
+| `.b64encode` `.b64decode` `.urlencode` `.urldecode` `.encode` | Base64・URL のエンコードとデコード | ✓ |
+| `.subinfo [txt] サブスクURL` `.cha` | サブスクのノード数・プロトコル・地域・通信量と期限（後者は簡易版） | |
 | `.bin カード番号の先頭 6–8 桁` | カード番号に対応する発行銀行 | ✓ |
 | `.ids` `.dc` | ユーザーやチャットの情報と、所属するデータセンター | ✓ |
 | `.speedtest` `.st` | サーバーの回線速度測定（Ookla 公式 CLI） | 一部 |
@@ -94,6 +100,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 |---|---|---|
 | `.ai [search] 質問` | AI との対話とウェブ検索 | 一部 |
 | `.sum [件数]` | グループのメッセージの要約、定期実行も可能 | 一部 |
+| `.checkapi [check\|speed\|compare] タグ` | AI コマンドで設定した API を検査（モデル一覧・テスト質問・速度・比較） | |
 
 **メッセージとスタンプ**
 
@@ -105,9 +112,12 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 | `.sticker` | スタンプを自分のスタンプセットに保存 | |
 | `.t テキスト` `.ts` `.tk` | 音声読み上げ（`.ts` で声を選び、`.tk` で API キーを設定） | |
 | `.re [件数] [回数]` | 返信先のメッセージを繰り返し転送 | ✓ |
+| `.so キーワード` `.search` | 登録したチャンネルから動画を検索して送信 | |
+| `.aff [番号]` | 空港の Aff 紹介文を保存してすぐ送信 | |
 | `.save リンク` | メッセージを保存・転送、転送禁止のものも可能 | |
 | `.dme 件数` | 自分のメッセージを削除 | |
 | `.da` | グループのメッセージを一括削除 | |
+| `.acron タイプ Cron チャット` | 秒付き 6 項目の Cron で、メッセージの送信・コピー・転送・削除・ピン留め、またはコマンド実行を定期的に行う | |
 
 **グループ管理**
 
@@ -117,6 +127,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 | `.sb` `.unsb` | 管理しているすべてのグループで BAN、BAN 解除 | |
 | `.refresh` | 管理グループの一覧を更新（1 日キャッシュし、期限切れの後は次に使うときに取り直す） | |
 | `.aban` | 上記コマンドのヘルプ | |
+| `.keyword` | キーワード自動返信（削除・BAN・ミュートも可） | |
+| `.clean_member モード` | 最終オンライン・発言・削除済みでメンバーを検索／削除 | |
 
 **アカウント**
 
@@ -219,7 +231,8 @@ MIBOT_EATGIF_ASSETS=/path/to/eatgif go test ./internal/imaging/ -run RealAnimati
 | `internal/commands/kit` | コマンド共通の小さなユーティリティ |
 
 1 つのディレクトリに複数のコマンドがあるもの：`aban` はグループ管理コマンドすべて、`ids` は `.dc` を含み、
-`sudo` は `.sure` を含み、`eatgif` は `.eat` と `.eat2` を含みます。`tts` は `.t`、`.ts`、`.tk` で、`.status` などの
+`sudo` は `.sure` を含み、`eatgif` は `.eat` と `.eat2` を含みます。`tts` は `.t`、`.ts`、`.tk`、`encode` は
+Base64 と URL の 4 つのコマンド、`subinfo` は `.cha` を含み、`.status` などの
 基本コマンドは `core` にあります。短縮形（`.st`、`.h` など）は登録時の別名で、本来の名前と同じディレクトリにあります。
 
 コマンドがチャットに返す文言（見出し、失敗メッセージ、使い方、用語、句読点）は [STYLE.md](STYLE.md)（中国語）に従います。

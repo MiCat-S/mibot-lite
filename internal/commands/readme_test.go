@@ -34,7 +34,7 @@ var readmeLanguages = []struct {
 	{"README.ja.md", "## コマンド", "一部"},
 }
 
-var readmeCommand = regexp.MustCompile("`\\.([a-z0-9]+)")
+var readmeCommand = regexp.MustCompile("`\\.([a-z0-9_]+)")
 
 // readmeTables 读出「命令」一节里各分组的表格；分组按出现顺序编号，对应 command.Groups。
 func readmeTables(t *testing.T, file, heading, partly string) []readmeRow {

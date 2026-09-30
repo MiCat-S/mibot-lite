@@ -59,6 +59,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 | `.status` | 執行狀態卡片（CPU、記憶體、磁碟、Swap） | ✓ |
 | `.memory` | 行程記憶體 | ✓ |
 | `.sysinfo` | 詳細系統資訊 | |
+| `.service [服務名稱]` | systemd 服務的狀態、執行時間、記憶體與 CPU | |
 | `.version` `.ver` | 版本資訊 | ✓ |
 | `.help` `.h` | 指令列表或單條指令說明 | ✓ |
 | `.update [check\|run\|rollback]` | 檢查、更新或回滾程式 | |
@@ -78,6 +79,11 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 | `.gt [en] 文字` | AI 翻譯 | ✓ |
 | `.whois 網域` | 網域註冊資訊，支援批次查詢 | 部分 |
 | `.ip [IP\|網域]` | IP 的位置與電信業者 | ✓ |
+| `.dig 網域 [類型] [@伺服器]` | DNS 記錄，附 IP 位置與 AS | ✓ |
+| `.bgp [dns] [IP\|前綴\|AS]` | IP、前綴或 AS 的 BGP 路由：起源、上游與反向解析 | ✓ |
+| `.ddg 關鍵字` `.duckduckgo` | 網頁搜尋（DuckDuckGo，被擋時改用 Firecrawl） | ✓ |
+| `.b64encode` `.b64decode` `.urlencode` `.urldecode` `.encode` | Base64、URL 編碼與解碼 | ✓ |
+| `.subinfo [txt] 訂閱連結` `.cha` | 訂閱的節點、協定、地區與流量到期，後者為精簡版 | |
 | `.bin 卡號前 6–8 碼` | 卡號對應的發卡銀行 | ✓ |
 | `.ids` `.dc` | 使用者或對話的資料、所在資料中心 | ✓ |
 | `.speedtest` `.st` | 伺服器測速（Ookla 官方 CLI） | 部分 |
@@ -88,6 +94,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 |---|---|---|
 | `.ai [search] 問題` | AI 對話與連網搜尋 | 部分 |
 | `.sum [數量]` | 群組訊息摘要，也能設定排程 | 部分 |
+| `.checkapi [check\|speed\|compare] 標籤` | 檢測 AI 指令裡設定的 API：模型、測試提問、測速與比較 | |
 
 **訊息與貼圖**
 
@@ -99,9 +106,12 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 | `.sticker` | 把貼圖存進自己的貼圖包 | |
 | `.t 文字` `.ts` `.tk` | 文字轉語音（`.ts` 選角色，`.tk` 設定 API Key） | |
 | `.re [訊息數] [次數]` | 複讀回覆的訊息 | ✓ |
+| `.so 關鍵字` `.search` | 在已加入的頻道搜尋影片並傳到目前對話 | |
+| `.aff [序號]` | 儲存並一鍵送出機場 Aff 推廣文字 | |
 | `.save 連結` | 儲存或轉傳訊息，禁止轉傳的也可以 | |
 | `.dme 數量` | 刪除自己的訊息 | |
 | `.da` | 批次刪除群組訊息 | |
+| `.acron 類型 Cron 對話` | 按含秒的六段 Cron 定時傳送、複製、轉傳、刪除、置頂訊息或執行指令 | |
 
 **群組管理**
 
@@ -111,6 +121,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 | `.sb` `.unsb` | 在所有管理的群組裡封鎖、解除封鎖 | |
 | `.refresh` | 重新整理管理群組快取（快取一天，過期後下次用到時重掃） | |
 | `.aban` | 以上幾條的說明 | |
+| `.keyword` | 關鍵詞自動回覆，可刪訊息、封鎖或禁言 | |
+| `.clean_member 模式` | 依上線時間、發言或註銷狀態搜尋或移出群組成員 | |
 
 **帳號**
 
@@ -204,7 +216,8 @@ MIBOT_EATGIF_ASSETS=/path/to/eatgif go test ./internal/imaging/ -run RealAnimati
 | `internal/commands/kit` | 指令共用的小工具 |
 
 一個目錄裡有幾條指令的：`aban` 是全部群組管理指令，`ids` 含 `.dc`，`sudo` 含 `.sure`，
-`eatgif` 含 `.eat`、`.eat2`，`tts` 是 `.t`、`.ts`、`.tk`，`.status` 等基本指令在 `core`。
+`eatgif` 含 `.eat`、`.eat2`，`tts` 是 `.t`、`.ts`、`.tk`，`encode` 含 Base64 和 URL 的四條，
+`subinfo` 含 `.cha`，`.status` 等基本指令在 `core`。
 簡寫（`.st`、`.h` 這些）是註冊時的別名，和本名在同一個目錄。
 
 指令回到聊天裡的文字（標題、失敗提示、用法、用詞、標點）依照 [STYLE.md](STYLE.md)（簡體中文）撰寫，

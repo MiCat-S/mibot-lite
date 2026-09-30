@@ -13,19 +13,28 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/app"
 	"github.com/MiCat-S/mibot-lite/internal/commands/aban"
 	"github.com/MiCat-S/mibot-lite/internal/commands/acn"
+	"github.com/MiCat-S/mibot-lite/internal/commands/acron"
+	"github.com/MiCat-S/mibot-lite/internal/commands/aff"
 	"github.com/MiCat-S/mibot-lite/internal/commands/ai"
 	"github.com/MiCat-S/mibot-lite/internal/commands/alias"
 	"github.com/MiCat-S/mibot-lite/internal/commands/bf"
+	"github.com/MiCat-S/mibot-lite/internal/commands/bgp"
 	"github.com/MiCat-S/mibot-lite/internal/commands/bin"
 	"github.com/MiCat-S/mibot-lite/internal/commands/calc"
+	"github.com/MiCat-S/mibot-lite/internal/commands/checkapi"
 	"github.com/MiCat-S/mibot-lite/internal/commands/checkin"
+	"github.com/MiCat-S/mibot-lite/internal/commands/cleanmember"
 	"github.com/MiCat-S/mibot-lite/internal/commands/core"
 	"github.com/MiCat-S/mibot-lite/internal/commands/da"
+	"github.com/MiCat-S/mibot-lite/internal/commands/ddg"
+	"github.com/MiCat-S/mibot-lite/internal/commands/dig"
 	"github.com/MiCat-S/mibot-lite/internal/commands/dme"
 	"github.com/MiCat-S/mibot-lite/internal/commands/eatgif"
+	"github.com/MiCat-S/mibot-lite/internal/commands/encode"
 	"github.com/MiCat-S/mibot-lite/internal/commands/gt"
 	"github.com/MiCat-S/mibot-lite/internal/commands/ids"
 	"github.com/MiCat-S/mibot-lite/internal/commands/ip"
+	"github.com/MiCat-S/mibot-lite/internal/commands/keyword"
 	"github.com/MiCat-S/mibot-lite/internal/commands/log"
 	"github.com/MiCat-S/mibot-lite/internal/commands/prefix"
 	"github.com/MiCat-S/mibot-lite/internal/commands/privacy"
@@ -33,8 +42,11 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/commands/re"
 	"github.com/MiCat-S/mibot-lite/internal/commands/restart"
 	"github.com/MiCat-S/mibot-lite/internal/commands/save"
+	"github.com/MiCat-S/mibot-lite/internal/commands/search"
+	"github.com/MiCat-S/mibot-lite/internal/commands/service"
 	"github.com/MiCat-S/mibot-lite/internal/commands/speedtest"
 	"github.com/MiCat-S/mibot-lite/internal/commands/sticker"
+	"github.com/MiCat-S/mibot-lite/internal/commands/subinfo"
 	"github.com/MiCat-S/mibot-lite/internal/commands/sudo"
 	"github.com/MiCat-S/mibot-lite/internal/commands/sum"
 	"github.com/MiCat-S/mibot-lite/internal/commands/tr"
@@ -57,17 +69,29 @@ func RegisterAll(a *app.App) {
 	gt.Register(a, models)
 	tr.Register(a)
 	speedtest.Register(a)
+	service.Register(a)
 	log.Register(a)
 	bf.Register(a)
 	save.Register(a)
 	ip.Register(a)
+	dig.Register(a)
+	bgp.Register(a)
+	ddg.Register(a)
+	encode.Register(a)
+	subinfo.Register(a)
 	bin.Register(a)
 	ids.Register(a)
 	sum.Register(a, models)
+	checkapi.Register(a, models)
 	re.Register(a)
+	search.Register(a)
+	aff.Register(a)
+	acron.Register(a)
 	dme.Register(a)
 	da.Register(a)
 	aban.Register(a)
+	keyword.Register(a)
+	cleanmember.Register(a)
 	acn.Register(a)
 	checkin.Register(a)
 	yvlu.Register(a)
@@ -105,6 +129,13 @@ var miboxImports = []miboxImport{
 	{source: "assets/sticker/config.json", target: "sticker.json"},
 	{source: "assets/privacy/ip.json", target: "privacy.json"},
 	{source: "assets/checkin/checkin_config.json", target: "checkin.json"},
+	{source: "assets/acron/acron_config.json", target: "acron.json"},
+	{source: "assets/aff/data.json", target: "aff.json"},
+	{source: "assets/keyword/config.json", target: "keyword.json"},
+	{source: "assets/search/channel_search_config.json", target: "search.json"},
+	// checkapi：v2 的 keys-v2.json 格式相同；v1 的 keys.json 要转换。
+	{source: "assets/checkapi/keys-v2.json", target: "checkapi.json"},
+	{source: "assets/checkapi/keys.json", target: "checkapi.json", convert: checkapi.ConvertLegacy},
 	// save：v2 存在自己的 config.json，v1 存在 prometheus 目录下，格式都要转换。
 	{source: "assets/save/config.json", target: "save.json", convert: save.ConvertMiBox},
 	{source: "assets/prometheus/config.json", target: "save.json", convert: save.ConvertMiBox},

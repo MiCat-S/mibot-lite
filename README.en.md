@@ -66,6 +66,7 @@ owner; blank means owner only.
 | `.status` | Status card (CPU, memory, disk, swap) | ✓ |
 | `.memory` | Process memory | ✓ |
 | `.sysinfo` | Detailed system information | |
+| `.service [name]` | State, uptime, memory and CPU of a systemd service | |
 | `.version` `.ver` | Version information | ✓ |
 | `.help` `.h` | Command list, or the help for one command | ✓ |
 | `.update [check\|run\|rollback]` | Check for, install or roll back an update | |
@@ -85,6 +86,11 @@ owner; blank means owner only.
 | `.gt [en] <text>` | AI translation | ✓ |
 | `.whois <domain>` | Domain registration data, in batches too | partly |
 | `.ip [IP\|domain]` | Location and network of an IP | ✓ |
+| `.dig <domain> [type] [@server]` | DNS records, with IP location and ASN | ✓ |
+| `.bgp [dns] [IP\|prefix\|AS]` | BGP route of an IP, prefix or AS: origin, upstreams, reverse DNS | ✓ |
+| `.ddg <keywords>` `.duckduckgo` | Web search (DuckDuckGo, falling back to Firecrawl when blocked) | ✓ |
+| `.b64encode` `.b64decode` `.urlencode` `.urldecode` `.encode` | Base64 and URL encoding and decoding | ✓ |
+| `.subinfo [txt] <link>` `.cha` | Nodes, protocols, regions, traffic and expiry of a proxy subscription; the latter is the short form | |
 | `.bin <first 6–8 card digits>` | Issuing bank of a card BIN | ✓ |
 | `.ids` `.dc` | Profile of a user or chat, and its data center | ✓ |
 | `.speedtest` `.st` | Server speed test (official Ookla CLI) | partly |
@@ -95,6 +101,7 @@ owner; blank means owner only.
 |---|---|---|
 | `.ai [search] <question>` | AI chat and web search | partly |
 | `.sum [count]` | Group chat summaries, also on a schedule | partly |
+| `.checkapi [check\|speed\|compare] <tag>` | Test the APIs configured for the AI command: models, test prompt, speed, comparison | |
 
 **Messages and stickers**
 
@@ -106,9 +113,12 @@ owner; blank means owner only.
 | `.sticker` | Save a sticker into your own sticker pack | |
 | `.t <text>` `.ts` `.tk` | Text to speech (`.ts` picks a voice, `.tk` sets the API key) | |
 | `.re [messages] [times]` | Repeat the replied-to message | ✓ |
+| `.so <keyword>` `.search` | Search videos in your channel sources and send one here | |
+| `.aff [number]` | Save affiliate texts and send them with one command | |
 | `.save <link>` | Save or forward messages, even where forwarding is restricted | |
 | `.dme <count>` | Delete your own messages | |
 | `.da` | Delete group messages in bulk | |
+| `.acron <type> <cron> <chat>` | Scheduled (6-field cron with seconds) sending, copying, forwarding, deleting or pinning of messages, or running a command | |
 
 **Group administration**
 
@@ -118,6 +128,8 @@ owner; blank means owner only.
 | `.sb` `.unsb` | Ban or unban in every group you administer | |
 | `.refresh` | Refresh the list of administered groups (cached for a day, rescanned on next use after that) | |
 | `.aban` | Help for the commands above | |
+| `.keyword` | Keyword auto-replies, optionally deleting, banning or muting | |
+| `.clean_member <mode>` | Find or remove group members by last seen, messages or deleted status | |
 
 **Account**
 
@@ -221,7 +233,8 @@ Code layout:
 | `internal/commands/kit` | Small helpers shared by commands |
 
 Directories holding more than one command: `aban` holds all the group administration commands, `ids` includes `.dc`,
-`sudo` includes `.sure`, `eatgif` includes `.eat` and `.eat2`, `tts` is `.t`, `.ts` and `.tk`, and basic commands such as
+`sudo` includes `.sure`, `eatgif` includes `.eat` and `.eat2`, `tts` is `.t`, `.ts` and `.tk`, `encode` holds the four
+Base64 and URL commands, `subinfo` includes `.cha`, and basic commands such as
 `.status` are in `core`. Short forms (`.st`, `.h` and so on) are aliases registered alongside the full name, in the same directory.
 
 The text commands send back to the chat (titles, failure messages, usage, wording, punctuation) follows
