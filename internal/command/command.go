@@ -549,6 +549,10 @@ func (r *Registry) run(ctx context.Context, client *bot.Client, message, trigger
 	}()
 }
 
+// Running 是正在执行的命令数（占着执行名额的，不含排队的）。自动更新要重启服务，
+// 等它为 0 时再装，免得把正在跑的命令掐断。
+func (r *Registry) Running() int { return len(r.sem) }
+
 // Wait 阻塞到正在运行的命令全部结束，或者超时为止。
 func (r *Registry) Wait(timeout time.Duration) bool {
 	done := make(chan struct{})

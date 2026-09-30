@@ -68,7 +68,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 | `.service [サービス名]` | systemd サービスの状態、稼働時間、メモリ、CPU | |
 | `.version` `.ver` | バージョン情報 | ✓ |
 | `.help` `.h` | コマンド一覧、または個々のコマンドの説明 | ✓ |
-| `.update [check\|run\|rollback]` | 更新の確認、適用、ロールバック | |
+| `.update [check\|run\|rollback\|auto]` | 更新の確認、適用、ロールバック（既定で毎日自動更新） | |
 | `.restart` | サービスを再起動 | |
 | `.log` | 実行ログを書き出す（機密情報は除去済み） | |
 | `.bf` | 設定を「保存済みメッセージ」にバックアップ | |

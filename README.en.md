@@ -69,7 +69,7 @@ owner; blank means owner only.
 | `.service [name]` | State, uptime, memory and CPU of a systemd service | |
 | `.version` `.ver` | Version information | ✓ |
 | `.help` `.h` | Command list, or the help for one command | ✓ |
-| `.update [check\|run\|rollback]` | Check for, install or roll back an update | |
+| `.update [check\|run\|rollback\|auto]` | Check for, install or roll back an update; updates itself daily by default | |
 | `.restart` | Restart the service | |
 | `.log` | Export the run log (sensitive values removed) | |
 | `.bf` | Back up the configuration to Saved Messages | |

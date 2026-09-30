@@ -62,7 +62,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 | `.service [服务名]` | systemd 服务的状态、运行时间、内存和 CPU | |
 | `.version` `.ver` | 版本信息 | ✓ |
 | `.help` `.h` | 命令列表或单条命令说明 | ✓ |
-| `.update [check\|run\|rollback]` | 检查、更新或回滚程序 | |
+| `.update [check\|run\|rollback\|auto]` | 检查、更新或回滚程序，默认每天自动更新 | |
 | `.restart` | 重启服务 | |
 | `.log` | 导出运行日志（已脱敏） | |
 | `.bf` | 备份配置到收藏夹 | |

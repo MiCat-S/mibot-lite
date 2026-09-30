@@ -3,6 +3,7 @@ package restart
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -69,21 +70,29 @@ func Register(a *app.App) *Restarter {
 	return r
 }
 
-func (r *Restarter) command(ctx context.Context, inv *command.Invocation, kind, progress, failure string) error {
+// ErrPending 表示已经有一个重启请求在等 systemd 处理。
+var ErrPending = errors.New("重启请求已提交，请稍候")
+
+// triggerError 是 systemctl 没能提交重启。回执已经撤掉，服务还在跑原来的版本。
+type triggerError struct{ err error }
+
+func (e triggerError) Error() string { return "systemctl restart: " + e.err.Error() }
+func (e triggerError) Unwrap() error { return e.err }
+
+// Schedule 留下回执再向 systemd 提交重启。回执让重启回来的进程把 chatID 对话里的
+// messageID 那条消息改成结果；kind 决定改成什么（restart、update、rollback、auto-update）。
+// 没有命令消息的调用方（自动更新）先自己发一条，再把它交给这里。
+func (r *Restarter) Schedule(ctx context.Context, chatID string, messageID int, kind string) error {
 	r.mu.Lock()
 	if r.pending {
 		r.mu.Unlock()
-		return inv.EditText(ctx, "重启请求已提交，请稍候")
+		return ErrPending
 	}
 	r.pending = true
 	r.mu.Unlock()
 	release := func() { r.mu.Lock(); r.pending = false; r.mu.Unlock() }
 
-	if err := inv.Edit(ctx, progress); err != nil {
-		release()
-		return err
-	}
-	note := receipt{ChatID: inv.Message.ChatID, MessageID: inv.Message.ID, RequestedAt: time.Now().UnixMilli(), BootID: r.a.BootID, Kind: kind}
+	note := receipt{ChatID: chatID, MessageID: messageID, RequestedAt: time.Now().UnixMilli(), BootID: r.a.BootID, Kind: kind}
 	if err := r.store.Update(func(doc *receiptDocument) error { doc.Pending = &note; return nil }); err != nil {
 		release()
 		return err
@@ -91,11 +100,30 @@ func (r *Restarter) command(ctx context.Context, inv *command.Invocation, kind, 
 	if err := r.trigger(ctx); err != nil {
 		release()
 		kit.Warn(r.a, "restart.receipt_clear_failed", r.store.Update(func(doc *receiptDocument) error { doc.Pending = nil; return nil }))
-		status := r.status(ctx)
-		return inv.Edit(ctx, command.Escape(failure)+"\n状态：\n"+status+"\n"+command.Escape(ownerHint())+
-			"\n\n可执行 "+command.Code("systemctl status "+r.service+" --no-pager")+" 查看详情。")
+		return triggerError{err}
 	}
 	return nil
+}
+
+// Status 是 systemd 眼里这个服务的状态，重启没提交成功时给人看。
+func (r *Restarter) Status(ctx context.Context) string {
+	return r.status(ctx) + "\n" + command.Escape(ownerHint())
+}
+
+func (r *Restarter) command(ctx context.Context, inv *command.Invocation, kind, progress, failure string) error {
+	if err := inv.Edit(ctx, progress); err != nil {
+		return err
+	}
+	err := r.Schedule(ctx, inv.Message.ChatID, inv.Message.ID, kind)
+	var failed triggerError
+	switch {
+	case errors.Is(err, ErrPending):
+		return inv.EditText(ctx, ErrPending.Error())
+	case errors.As(err, &failed):
+		return inv.Edit(ctx, command.Escape(failure)+"\n状态：\n"+r.Status(ctx)+
+			"\n\n可执行 "+command.Code("systemctl status "+r.service+" --no-pager")+" 查看详情。")
+	}
+	return err
 }
 
 func (r *Restarter) trigger(ctx context.Context) error {
@@ -163,6 +191,8 @@ func (r *Restarter) notifyReady(ctx context.Context, client *bot.Client) {
 		text = "⬆️ <b>程序更新</b>\n✅ 更新完成，新版本已就绪"
 	case "rollback":
 		text = "⬆️ <b>程序更新</b>\n✅ 回滚完成，已换回上一版本"
+	case "auto-update":
+		text = "⬆️ <b>自动更新</b>\n✅ 已更新到 " + command.Code(kit.Version(r.a))
 	}
 	if err := client.EditMessage(ctx, peer, note.MessageID, text, false); err != nil {
 		client.Logger().Warn("restart.receipt_failed", slog.String("error", err.Error()))

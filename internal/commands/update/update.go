@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +19,7 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/commands/kit"
 	"github.com/MiCat-S/mibot-lite/internal/commands/restart"
 	"github.com/MiCat-S/mibot-lite/internal/httpx"
+	"github.com/MiCat-S/mibot-lite/internal/store"
 )
 
 // 从 GitHub Releases 自更新：release 里必须有名为 mibot-lite-<os>-<arch>
@@ -36,86 +37,137 @@ type release struct {
 	} `json:"assets"`
 }
 
-// Register 注册 .update。装好新版本或回滚之后，用 restarter 重启服务。
-func Register(a *app.App, restarter *restart.Restarter) {
-	repo := a.Env.Get("MIBOT_UPDATE_REPO", "MiCat-S/mibot-lite")
-	a.Registry.Register(&command.Command{Name: "update", Group: command.GroupSystem, Description: "检查并更新程序", Usage: "[check|run|rollback]", Timeout: 10 * time.Minute,
-		Help: func(prefix string) string {
-			return "⬆️ <b>程序更新</b>\n\n• " + command.Code(prefix+"update") + " 当前版本与回滚状态\n• " + command.Code(prefix+"update check") + " 读取 GitHub Releases 检查新版本\n• " +
-				command.Code(prefix+"update run") + " 下载、校验、试跑、替换并重启\n• " + command.Code(prefix+"update rollback") + " 换回上一版本并重启\n\n发布仓库由 " + command.Code("MIBOT_UPDATE_REPO") + " 指定。"
-		},
-		Handle: func(ctx context.Context, inv *command.Invocation) error {
-			binary, located := executablePath()
-			// 下载、替换程序文件、回滚都只能一个一个来：两个同时跑会互相覆盖下载的文件，
-			// 或者把留作回滚的上一版本弄丢。
-			if sub := strings.ToLower(inv.Arg(0)); sub == "run" || sub == "apply" || sub == "rollback" {
-				if located != nil {
-					inv.Log.Warn("update.locate_failed", "error", located.Error())
-					return kit.Fail("找不到程序文件在哪里，不能替换它")
-				}
-				if !busy.TryLock() {
-					return kit.Fail("已有一个更新或回滚正在进行，请稍候")
-				}
-				defer busy.Unlock()
-			}
-			switch strings.ToLower(inv.Arg(0)) {
-			case "", "ver", "status":
-				where := command.Code(binary)
-				if located != nil {
-					where = "无法确定"
-				}
-				rows := []string{"⬆️ <b>程序更新</b>", "当前版本：" + command.Code(kit.Version(a)), "程序文件：" + where, "发布仓库：" + command.Code(repo)}
-				if info, err := os.Stat(binary + ".previous"); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
-					rows = append(rows, "可回滚到上一版本："+command.Code(inv.Prefix+"update rollback"))
-				} else {
-					rows = append(rows, "暂无可回滚的上一版本")
-				}
-				return inv.Edit(ctx, strings.Join(rows, "\n"))
-			case "check":
-				if err := inv.Edit(ctx, "⬆️ <b>程序更新</b>\n"+command.Escape(kit.Working("正在读取发布信息"))); err != nil {
-					return err
-				}
-				latest, err := fetchRelease(ctx, repo)
-				if err != nil {
-					return kit.FailWith("检查更新失败", err)
-				}
-				if !newer(a.Version, latest.TagName) {
-					return inv.Edit(ctx, "✅ 已是最新版本\n当前："+command.Code(kit.Version(a))+"\n最新："+command.Code(latest.TagName))
-				}
-				notes := command.Truncate(strings.TrimSpace(latest.Body), 800)
-				text := "⬆️ <b>发现新版本</b>\n当前：" + command.Code(kit.Version(a)) + "\n最新：" + command.Code(latest.TagName) + "\n执行 " + command.Code(inv.Prefix+"update run") + " 安装。"
-				if notes != "" {
-					text += "\n\n<blockquote expandable>" + command.Escape(notes) + "</blockquote>"
-				}
-				return inv.Edit(ctx, text)
-			case "run", "apply":
-				return runUpdate(ctx, a, inv, restarter, repo, binary)
-			case "rollback":
-				previous := binary + ".previous"
-				if info, err := os.Stat(previous); err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
-					return kit.Fail("没有可回滚的上一版本")
-				}
-				if restarter == nil {
-					return kit.Fail("重启组件不可用")
-				}
-				// 当前版本先挪到 .rollback，上一版本换进来之后，再把它改名成新的 .previous：
-				// 回滚之后还能再滚回来。
-				aside := binary + ".rollback"
-				if err := swapBinary(os.Rename, binary, previous, aside); err != nil {
-					inv.Log.Error("update.rollback_swap_failed", "error", err.Error())
-					return err
-				}
-				if err := os.Rename(aside, previous); err != nil {
-					inv.Log.Warn("update.keep_previous_failed", "error", err.Error(), "left_at", aside)
-				}
-				return restarter.Now(ctx, inv, "rollback", "⬆️ <b>程序更新</b>\n⏳ 已换回上一版本，正在重启…", "回滚后重启失败。")
-			}
-			return kit.Usage(inv.Prefix, "update [check|run|rollback]")
-		}})
+// updater 装新版本、回滚，以及每天的自动更新。
+type updater struct {
+	a         *app.App
+	restarter *restart.Restarter
+	repo      string
+	settings  *store.Store[autoConfig]
 }
 
+// Register 注册 .update 和自动更新的后台任务。装好新版本或回滚之后，用 restarter 重启服务。
+func Register(a *app.App, restarter *restart.Restarter) {
+	u := &updater{a: a, restarter: restarter, repo: a.Env.Get("MIBOT_UPDATE_REPO", "MiCat-S/mibot-lite"),
+		settings: kit.NewStore(a, "update.json", autoDefaults)}
+	a.Registry.Register(&command.Command{Name: "update", Group: command.GroupSystem, Description: "检查并更新程序", Usage: "[check|run|rollback|auto]", Timeout: 10 * time.Minute,
+		Help: help, Handle: u.handle})
+	a.Registry.AddJob(u.schedule)
+}
+
+func help(prefix string) string {
+	c := func(text string) string { return command.Code(prefix + "update" + text) }
+	return "⬆️ <b>程序更新</b>\n\n" +
+		"• " + c("") + " 当前版本、回滚和自动更新的状态\n" +
+		"• " + c(" check") + " 读取 GitHub Releases 检查新版本\n" +
+		"• " + c(" run") + " 下载、校验、试跑、替换并重启\n" +
+		"• " + c(" rollback") + " 换回上一版本并重启\n" +
+		"• " + c(" auto on|off") + " 开启或关闭自动更新\n" +
+		"• " + c(" auto time 04:00") + " 自动更新每天检查的时间（北京时间）\n\n" +
+		"自动更新默认开启：每天到点检查一次，有新版本就走和 " + c(" run") + " 一样的流程，" +
+		"开始和结果都发到收藏夹。它要重启服务，所以等没有命令在跑时再装，最多等两小时，还不空就改天。\n\n" +
+		"发布仓库由 " + command.Code("MIBOT_UPDATE_REPO") + " 指定。"
+}
+
+func (u *updater) handle(ctx context.Context, inv *command.Invocation) error {
+	binary, located := executablePath()
+	sub := strings.ToLower(inv.Arg(0))
+	// 下载、替换程序文件、回滚都只能一个一个来：两个同时跑会互相覆盖下载的文件，
+	// 或者把留作回滚的上一版本弄丢。
+	if sub == "run" || sub == "apply" || sub == "rollback" {
+		if located != nil {
+			inv.Log.Warn("update.locate_failed", "error", located.Error())
+			return kit.Fail("找不到程序文件在哪里，不能替换它")
+		}
+		if u.restarter == nil {
+			return kit.Fail("重启组件不可用")
+		}
+		if !busy.TryLock() {
+			return kit.Fail("已有一个更新或回滚正在进行，请稍候")
+		}
+		defer busy.Unlock()
+	}
+	switch sub {
+	case "", "ver", "status":
+		return u.status(ctx, inv, binary, located)
+	case "check":
+		if err := inv.Edit(ctx, "⬆️ <b>程序更新</b>\n"+command.Escape(kit.Working("正在读取发布信息"))); err != nil {
+			return err
+		}
+		latest, err := fetchRelease(ctx, u.repo)
+		if err != nil {
+			return kit.FailWith("检查更新失败", err)
+		}
+		if !newer(u.a.Version, latest.TagName) {
+			return inv.Edit(ctx, "✅ 已是最新版本\n当前："+command.Code(kit.Version(u.a))+"\n最新："+command.Code(latest.TagName))
+		}
+		notes := command.Truncate(strings.TrimSpace(latest.Body), 800)
+		text := "⬆️ <b>发现新版本</b>\n当前：" + command.Code(kit.Version(u.a)) + "\n最新：" + command.Code(latest.TagName) + "\n执行 " + command.Code(inv.Prefix+"update run") + " 安装。"
+		if notes != "" {
+			text += "\n\n<blockquote expandable>" + command.Escape(notes) + "</blockquote>"
+		}
+		return inv.Edit(ctx, text)
+	case "run", "apply":
+		progress := func(text string) error { return inv.Edit(ctx, "⬆️ <b>程序更新</b>\n⏳ "+text) }
+		if err := progress("正在读取发布信息…"); err != nil {
+			return err
+		}
+		latest, err := fetchRelease(ctx, u.repo)
+		if err != nil {
+			return kit.FailWith("更新失败，当前运行的版本没有改动", err)
+		}
+		if !newer(u.a.Version, latest.TagName) {
+			return inv.Edit(ctx, "✅ 已是最新版本\n当前："+command.Code(kit.Version(u.a)))
+		}
+		if err := u.install(ctx, inv.Log, latest, binary, progress); err != nil {
+			return err
+		}
+		return u.restarter.Now(ctx, inv, "update", "⬆️ <b>程序更新</b>\n⏳ 已安装 "+command.Code(latest.TagName)+"，正在重启…", "更新后重启失败，可手动重启服务。")
+	case "rollback":
+		previous := binary + ".previous"
+		if info, err := os.Stat(previous); err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
+			return kit.Fail("没有可回滚的上一版本")
+		}
+		// 当前版本先挪到 .rollback，上一版本换进来之后，再把它改名成新的 .previous：
+		// 回滚之后还能再滚回来。
+		aside := binary + ".rollback"
+		if err := swapBinary(os.Rename, binary, previous, aside); err != nil {
+			inv.Log.Error("update.rollback_swap_failed", "error", err.Error())
+			return err
+		}
+		if err := os.Rename(aside, previous); err != nil {
+			inv.Log.Warn("update.keep_previous_failed", "error", err.Error(), "left_at", aside)
+		}
+		return u.restarter.Now(ctx, inv, "rollback", "⬆️ <b>程序更新</b>\n⏳ 已换回上一版本，正在重启…", "回滚后重启失败。")
+	case "auto":
+		return u.configureAuto(ctx, inv)
+	}
+	return kit.Usage(inv.Prefix, "update [check|run|rollback|auto]")
+}
+
+func (u *updater) status(ctx context.Context, inv *command.Invocation, binary string, located error) error {
+	where := command.Code(binary)
+	if located != nil {
+		where = "无法确定"
+	}
+	rows := []string{"⬆️ <b>程序更新</b>", "当前版本：" + command.Code(kit.Version(u.a)), "程序文件：" + where, "发布仓库：" + command.Code(u.repo)}
+	if info, err := os.Stat(binary + ".previous"); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
+		rows = append(rows, "可回滚到上一版本："+command.Code(inv.Prefix+"update rollback"))
+	} else {
+		rows = append(rows, "暂无可回滚的上一版本")
+	}
+	cfg, err := u.settings.Read()
+	if err != nil {
+		return err
+	}
+	rows = append(rows, "自动更新："+autoSummary(cfg))
+	return inv.Edit(ctx, strings.Join(rows, "\n"))
+}
+
+// githubAPI 是 GitHub API 的地址，测试里换成本地的假服务。
+var githubAPI = "https://api.github.com"
+
 func fetchRelease(ctx context.Context, repo string) (*release, error) {
-	response, err := httpx.Do(ctx, httpx.Request{URL: "https://api.github.com/repos/" + repo + "/releases/latest",
+	response, err := httpx.Do(ctx, httpx.Request{URL: githubAPI + "/repos/" + repo + "/releases/latest",
 		Headers: map[string]string{"Accept": "application/vnd.github+json"}, Timeout: 20 * time.Second, MaxBytes: 1 << 20})
 	if err != nil {
 		return nil, err
@@ -145,24 +197,13 @@ func newer(current, latest string) bool {
 	return current != latest
 }
 
-// busy 让更新和回滚同一时间只有一个在跑。
+// busy 让更新、回滚和自动更新同一时间只有一个在跑。
 var busy sync.Mutex
 
-func runUpdate(ctx context.Context, a *app.App, inv *command.Invocation, restarter *restart.Restarter, repo, binary string) error {
-	if restarter == nil {
-		return kit.Fail("重启组件不可用")
-	}
-	progress := func(text string) error { return inv.Edit(ctx, "⬆️ <b>程序更新</b>\n⏳ "+text) }
-	if err := progress("正在读取发布信息…"); err != nil {
-		return err
-	}
-	latest, err := fetchRelease(ctx, repo)
-	if err != nil {
-		return kit.FailWith("更新失败，当前运行的版本没有改动", err)
-	}
-	if !newer(a.Version, latest.TagName) {
-		return inv.Edit(ctx, "✅ 已是最新版本\n当前："+command.Code(kit.Version(a)))
-	}
+// install 把 latest 装到 binary 的位置：下载、核对 SHA-256、让新版本试跑 --check，都过了才
+// 替换，原来的版本留作 .previous。不重启。progress 报告进度；返回的错误都是给用户看的一句话，
+// 写明当前运行的版本有没有改动。
+func (u *updater) install(ctx context.Context, logger *slog.Logger, latest *release, binary string, progress func(string) error) error {
 	assetName := "mibot-lite-" + runtime.GOOS + "-" + runtime.GOARCH
 	var assetURL, sumsURL string
 	var assetSize int64
@@ -180,7 +221,7 @@ func runUpdate(ctx context.Context, a *app.App, inv *command.Invocation, restart
 	if sumsURL == "" {
 		return kit.Fail("更新失败：发布里缺少 checksums.txt，不安装没有校验过的程序。当前运行的版本没有改动")
 	}
-	if err := progress("正在下载 " + command.Code(latest.TagName) + fmt.Sprintf("（%.1f MB）…", float64(assetSize)/(1<<20))); err != nil {
+	if err := progress("正在下载 " + command.Code(latest.TagName) + "（" + kit.FormatBytes(assetSize) + "）…"); err != nil {
 		return err
 	}
 	sums, err := httpx.Do(ctx, httpx.Request{URL: sumsURL, Timeout: 30 * time.Second, MaxBytes: 64 << 10})
@@ -215,24 +256,31 @@ func runUpdate(ctx context.Context, a *app.App, inv *command.Invocation, restart
 		return err
 	}
 	checkCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	output, err := exec.CommandContext(checkCtx, candidate, "--check", "--root", a.Root).CombinedOutput()
+	output, err := exec.CommandContext(checkCtx, candidate, "--check", "--root", u.a.Root).CombinedOutput()
 	cancel()
 	if err != nil {
 		os.Remove(candidate)
-		tail := []rune(strings.TrimSpace(string(output)))
-		if len(tail) > 400 {
-			tail = append([]rune("…"), tail[len(tail)-400:]...)
-		}
-		return inv.Edit(ctx, "❌ 更新失败：新版本读不了当前部署，已丢弃。当前运行的版本没有改动\n<pre>"+command.Escape(string(tail))+"</pre>")
+		// 试跑的输出里有部署目录的路径，只进日志。
+		logger.Warn("update.check_failed", "version", latest.TagName, "error", err.Error(), "output", tail(string(output), 400))
+		return kit.Fail("更新失败：新版本试跑没通过（详情见日志），已丢弃。当前运行的版本没有改动")
 	}
 	previous := binary + ".previous"
 	os.Remove(previous)
 	if err := swapBinary(os.Rename, binary, candidate, previous); err != nil {
-		inv.Log.Error("update.swap_failed", "error", err.Error())
+		logger.Error("update.swap_failed", "error", err.Error())
 		os.Remove(candidate)
 		return err
 	}
-	return restarter.Now(ctx, inv, "update", "⬆️ <b>程序更新</b>\n⏳ 已安装 "+command.Code(latest.TagName)+"，正在重启…", "更新后重启失败，可手动重启服务。")
+	return nil
+}
+
+// tail 是 text 最后 n 个字，前面截掉的写成「…」。
+func tail(text string, n int) string {
+	runes := []rune(strings.TrimSpace(text))
+	if len(runes) <= n {
+		return string(runes)
+	}
+	return "…" + string(runes[len(runes)-n:])
 }
 
 // executablePath 是正在运行的程序文件的真实路径（解开符号链接）。
