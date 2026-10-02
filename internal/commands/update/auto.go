@@ -240,7 +240,7 @@ func (u *updater) autoInstall(ctx context.Context, client *bot.Client, latest *r
 	if err := progress("已安装 " + command.Code(latest.TagName) + "，正在重启…"); err != nil {
 		logger.Warn("update.auto_notice_failed", "error", err.Error())
 	}
-	if err := u.restarter.Schedule(ctx, strconv.FormatInt(client.SelfID(), 10), id, "auto-update"); err != nil {
+	if err := u.restarter.Schedule(ctx, self, strconv.FormatInt(client.SelfID(), 10), id, "auto-update"); err != nil {
 		logger.Error("update.auto_restart_failed", "error", err.Error())
 		_ = show("❌ 已安装 " + command.Code(latest.TagName) + "，但重启没提交成功，可以手动重启服务\n状态：\n" + u.restarter.Status(ctx))
 	}
