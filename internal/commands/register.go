@@ -32,6 +32,7 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/commands/eatgif"
 	"github.com/MiCat-S/mibot-lite/internal/commands/encode"
 	"github.com/MiCat-S/mibot-lite/internal/commands/gt"
+	"github.com/MiCat-S/mibot-lite/internal/commands/guestban"
 	"github.com/MiCat-S/mibot-lite/internal/commands/ids"
 	"github.com/MiCat-S/mibot-lite/internal/commands/ip"
 	"github.com/MiCat-S/mibot-lite/internal/commands/keyword"
@@ -91,6 +92,7 @@ func RegisterAll(a *app.App) {
 	da.Register(a)
 	aban.Register(a)
 	keyword.Register(a)
+	guestban.Register(a)
 	cleanmember.Register(a)
 	acn.Register(a)
 	checkin.Register(a)

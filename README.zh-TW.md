@@ -123,6 +123,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 | `.aban` | 以上幾條的說明 | |
 | `.keyword` | 關鍵詞自動回覆，可刪訊息、封鎖或禁言 | |
 | `.clean_member 模式` | 依上線時間、發言或註銷狀態搜尋或移出群組成員 | |
+| `.guestban [on\|off]` | 自動刪掉訪客機器人的廣告並在本群封鎖那個機器人 | |
 
 **帳號**
 

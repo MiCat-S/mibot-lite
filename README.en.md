@@ -130,6 +130,7 @@ owner; blank means owner only.
 | `.aban` | Help for the commands above | |
 | `.keyword` | Keyword auto-replies, optionally deleting, banning or muting | |
 | `.clean_member <mode>` | Find or remove group members by last seen, messages or deleted status | |
+| `.guestban [on\|off]` | Delete ads posted by guest bots and ban the bot in this group | |
 
 **Account**
 

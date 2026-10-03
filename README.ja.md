@@ -129,6 +129,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 | `.aban` | 上記コマンドのヘルプ | |
 | `.keyword` | キーワード自動返信（削除・BAN・ミュートも可） | |
 | `.clean_member モード` | 最終オンライン・発言・削除済みでメンバーを検索／削除 | |
+| `.guestban [on\|off]` | ゲストボットの広告を削除し、そのボットをこのグループで BAN | |
 
 **アカウント**
 
