@@ -119,6 +119,7 @@ owner; blank means owner only.
 | `.dme <count>` | Delete your own messages | |
 | `.da` | Delete group messages in bulk | |
 | `.acron <type> <cron> <chat>` | Scheduled (6-field cron with seconds) sending, copying, forwarding, deleting or pinning of messages, or running a command | |
+| `.trace [emoji…]` | Auto-react to messages from chosen users or containing keywords | |
 
 **Group administration**
 

@@ -112,6 +112,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 | `.dme 數量` | 刪除自己的訊息 | |
 | `.da` | 批次刪除群組訊息 | |
 | `.acron 類型 Cron 對話` | 按含秒的六段 Cron 定時傳送、複製、轉傳、刪除、置頂訊息或執行指令 | |
+| `.trace [表情…]` | 追蹤指定用戶或關鍵詞，自動給他們的訊息按表情 | |
 
 **群組管理**
 

@@ -73,7 +73,7 @@ cp /root/mibot/config.json /root/mibot-lite/config.json
 
 ## 4. 服务器：迁移已有配置（可选）
 
-把 MiBox 里 ai、sum、whois、aban、acn、checkin、acron、aff、keyword、search、checkapi、da、dme、yvlu、t、
+把 MiBox 里 ai、sum、whois、aban、acn、checkin、acron、aff、keyword、trace、search、checkapi、da、dme、yvlu、t、
 sticker、privacy、save、speedtest 的数据和别名表搬过来，`.env` 里的 `TB_PREFIX` 写成这边的 `MIBOT_PREFIX`：
 
 ```sh

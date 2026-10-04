@@ -118,6 +118,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 | `.dme 件数` | 自分のメッセージを削除 | |
 | `.da` | グループのメッセージを一括削除 | |
 | `.acron タイプ Cron チャット` | 秒付き 6 項目の Cron で、メッセージの送信・コピー・転送・削除・ピン留め、またはコマンド実行を定期的に行う | |
+| `.trace [絵文字…]` | 指定したユーザーやキーワードのメッセージに自動でリアクション | |
 
 **グループ管理**
 

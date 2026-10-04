@@ -51,6 +51,7 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/commands/sudo"
 	"github.com/MiCat-S/mibot-lite/internal/commands/sum"
 	"github.com/MiCat-S/mibot-lite/internal/commands/tr"
+	"github.com/MiCat-S/mibot-lite/internal/commands/trace"
 	"github.com/MiCat-S/mibot-lite/internal/commands/tts"
 	"github.com/MiCat-S/mibot-lite/internal/commands/update"
 	"github.com/MiCat-S/mibot-lite/internal/commands/whois"
@@ -88,6 +89,7 @@ func RegisterAll(a *app.App) {
 	search.Register(a)
 	aff.Register(a)
 	acron.Register(a)
+	trace.Register(a)
 	dme.Register(a)
 	da.Register(a)
 	aban.Register(a)
@@ -134,6 +136,7 @@ var miboxImports = []miboxImport{
 	{source: "assets/acron/acron_config.json", target: "acron.json"},
 	{source: "assets/aff/data.json", target: "aff.json"},
 	{source: "assets/keyword/config.json", target: "keyword.json"},
+	{source: "assets/trace/db.json", target: "trace.json"},
 	{source: "assets/search/channel_search_config.json", target: "search.json"},
 	// checkapi：v2 的 keys-v2.json 格式相同；v1 的 keys.json 要转换。
 	{source: "assets/checkapi/keys-v2.json", target: "checkapi.json"},

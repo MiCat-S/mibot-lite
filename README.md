@@ -112,6 +112,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 | `.dme 数量` | 删除自己的消息 | |
 | `.da` | 批量删除群消息 | |
 | `.acron 类型 Cron 对话` | 按带秒的六段 Cron 定时发送、复制、转发、删除、置顶消息或执行命令 | |
+| `.trace [表情…]` | 追踪指定用户或关键词，自动给他们的消息点表情 | |
 
 **群管理**
 
