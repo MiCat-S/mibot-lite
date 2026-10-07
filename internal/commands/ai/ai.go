@@ -201,12 +201,12 @@ func aiHelp(prefix string) string {
 		item(" 问题", "向 AI 提问；回复一条消息时，那条消息作为上下文，其中的图片一并发送") +
 		item(" search 问题", "联网搜索并回答") +
 		"\n<blockquote expandable><b>API 配置</b>\n" +
-		item(" config add 标签 URL Key [类型]", "添加一个配置") +
+		item(" config add 标签 URL Key [类型]", "添加一个配置；标签已存在时换掉它的地址和 Key") +
+		item(" config set 标签 url|key 新值", "只改地址或 Key") +
+		item(" config set 标签 type openai-compatible|openai|gemini|anthropic|doubao|moonshot|local-cliproxy", "设置接口类型") +
+		item(" config set 标签 stream|responses on|off", "流式传输、Responses 模式") +
 		item(" config del 标签", "删除配置") +
 		item(" config list", "查看配置") +
-		item(" config type 标签 openai-compatible|openai|gemini|anthropic|doubao|moonshot|local-cliproxy", "设置接口类型") +
-		item(" config stream 标签 on|off", "流式传输") +
-		item(" config responses 标签 on|off", "Responses 模式") +
 		"\n<b>模型</b>\n" +
 		item(" model", "查看当前模型") +
 		item(" model chat 标签 模型", "设置聊天模型") +
@@ -633,7 +633,8 @@ func (s *Service) configure(ctx context.Context, inv *command.Invocation) error 
 			if len(models) > 0 {
 				modelText = " · " + command.Escape(strings.Join(models, " · "))
 			}
-			rows = append(rows, "• "+command.Code(name)+" · "+command.Escape(kind)+modelText+" · 流式"+kit.OnOffText(provider.Stream)+" · Responses "+kit.OnOffText(provider.Responses))
+			rows = append(rows, "• "+command.Code(name)+" · "+command.Escape(providerHost(provider.URL))+" · "+command.Escape(kind)+modelText+
+				" · 流式"+kit.OnOffText(provider.Stream)+" · Responses "+kit.OnOffText(provider.Responses))
 		}
 		if len(rows) == 0 {
 			rows = append(rows, "• 还没有配置")
@@ -650,17 +651,26 @@ func (s *Service) configure(ctx context.Context, inv *command.Invocation) error 
 		if !inv.Message.Saved {
 			return kit.Fail("API Key 只能在收藏夹中配置")
 		}
-		if parsed, err := url.Parse(link); err != nil || parsed.Host == "" {
-			return kit.Fail("API 地址无效")
+		if err := checkProviderURL(link); err != nil {
+			return err
 		}
 		if kind != "" && !slices.Contains(aiProviderTypes, kind) {
 			return kit.Fail("无效 API 类型")
 		}
+		replaced := false
 		if err := s.update(func(cfg *aiConfig) error {
-			cfg.Configs[tag] = aiProvider{Tag: tag, URL: link, Key: key, Type: kind, Models: cfg.Configs[tag].Models}
+			// 同名的标签整条换掉地址、Key 和类型；流式、Responses 和记下的模型沿用，
+			// 只想改一项时用 config set。
+			previous, ok := cfg.Configs[tag]
+			replaced = ok
+			cfg.Configs[tag] = aiProvider{Tag: tag, URL: link, Key: key, Type: kind, Stream: previous.Stream,
+				Responses: previous.Responses, Models: previous.Models}
 			return nil
 		}); err != nil {
 			return err
+		}
+		if replaced {
+			return inv.Edit(ctx, kit.Feedback("success", "已更新 "+tag+" 的地址和 Key", "流式、Responses 和模型沿用原来的设置"))
 		}
 	case "del":
 		if tag == "" {
@@ -678,42 +688,90 @@ func (s *Service) configure(ctx context.Context, inv *command.Invocation) error 
 		}); err != nil {
 			return err
 		}
+	case "set", "edit":
+		field, value := strings.ToLower(inv.Arg(3)), inv.Arg(4)
+		if tag == "" || field == "" || value == "" {
+			return kit.Usage(inv.Prefix, "ai config set 标签 url|key|type|stream|responses 值")
+		}
+		return s.setProvider(ctx, inv, tag, field, value)
 	case "type", "stream", "responses":
-		value := strings.ToLower(inv.Arg(3))
+		value := inv.Arg(3)
 		if tag == "" || value == "" {
 			return kit.Usage(inv.Prefix, "ai config "+action+" 标签 值")
 		}
-		if err := s.update(func(cfg *aiConfig) error {
-			provider, ok := cfg.Configs[tag]
-			if !ok {
-				return kit.Fail("API 配置不存在")
-			}
-			switch action {
-			case "type":
-				if !slices.Contains(aiProviderTypes, value) {
-					return kit.Fail("无效 API 类型")
-				}
-				provider.Type = value
-			case "stream":
-				enabled, err := kit.OnOff(value)
-				if err != nil {
-					return err
-				}
-				provider.Stream = enabled
-			default:
-				enabled, err := kit.OnOff(value)
-				if err != nil {
-					return err
-				}
-				provider.Responses = enabled
-			}
-			cfg.Configs[tag] = provider
-			return nil
-		}); err != nil {
-			return err
-		}
+		return s.setProvider(ctx, inv, tag, action, value)
 	default:
 		return kit.Fail("未知 config 子命令")
 	}
 	return inv.Edit(ctx, kit.Feedback("success", "AI 配置已更新", ""))
+}
+
+// setProvider 改一个已有配置的一项：url、key、type、stream 或 responses。
+// 地址和 Key 只能在收藏夹里改：命令消息里有明文，别人看得到。
+func (s *Service) setProvider(ctx context.Context, inv *command.Invocation, tag, field, value string) error {
+	switch field {
+	case "url", "key":
+		if !inv.Message.Saved {
+			return kit.Fail("API 地址和 Key 只能在收藏夹中修改")
+		}
+	case "type", "stream", "responses":
+		value = strings.ToLower(value)
+	default:
+		return kit.Failf("能改的有 url、key、type、stream、responses，%shelp ai 看用法", inv.Prefix)
+	}
+	if field == "url" {
+		if err := checkProviderURL(value); err != nil {
+			return err
+		}
+	}
+	var label string
+	if err := s.update(func(cfg *aiConfig) error {
+		provider, ok := cfg.Configs[tag]
+		if !ok {
+			return kit.Failf("没有标签是 %s 的 API 配置，%sai config list 可以看全部", tag, inv.Prefix)
+		}
+		switch field {
+		case "url":
+			provider.URL, label = value, "地址已改为 "+providerHost(value)
+		case "key":
+			provider.Key, label = value, "Key 已更新"
+		case "type":
+			if !slices.Contains(aiProviderTypes, value) {
+				return kit.Fail("无效 API 类型，可选：" + strings.Join(aiProviderTypes, "、"))
+			}
+			provider.Type, label = value, "接口类型已设为 "+value
+		case "stream", "responses":
+			enabled, err := kit.OnOff(value)
+			if err != nil {
+				return err
+			}
+			if field == "stream" {
+				provider.Stream, label = enabled, "流式传输已"+kit.OnOffText(enabled)
+			} else {
+				provider.Responses, label = enabled, "Responses 模式已"+kit.OnOffText(enabled)
+			}
+		}
+		cfg.Configs[tag] = provider
+		return nil
+	}); err != nil {
+		return err
+	}
+	return inv.Edit(ctx, kit.Feedback("success", tag+" "+label, ""))
+}
+
+// checkProviderURL 确认 API 地址是 http 或 https 的完整地址。
+func checkProviderURL(link string) error {
+	parsed, err := url.Parse(link)
+	if err != nil || parsed.Host == "" || parsed.Scheme != "https" && parsed.Scheme != "http" {
+		return kit.Fail("API 地址无效，要写完整的 https:// 地址")
+	}
+	return nil
+}
+
+// providerHost 是 API 地址的主机名，列表里只显示它：路径和查询参数里可能带 Key。
+func providerHost(link string) string {
+	if parsed, err := url.Parse(link); err == nil && parsed.Host != "" {
+		return parsed.Host
+	}
+	return "地址无效"
 }
