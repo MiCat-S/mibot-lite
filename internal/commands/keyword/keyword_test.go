@@ -252,13 +252,12 @@ func newFixture(t *testing.T) (*service, *fakeTelegram, *bot.Client, *[]string) 
 		&tg.Channel{ID: 1002, AccessHash: 8, Title: "分群", Megagroup: true}})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	client := bot.FromAPI(tg.NewClient(fake), peers, &tg.User{ID: selfID, Self: true}, logger)
-	s := newService(store.New(filepath.Join(t.TempDir(), "keyword.json"), defaults), logger)
 	var delayed []string
-	s.background = func(work func()) { work() }
-	s.later = func(delay time.Duration, run func()) {
+	s := newService(store.New(filepath.Join(t.TempDir(), "keyword.json"), defaults), logger, func(delay time.Duration, run func(context.Context)) {
 		delayed = append(delayed, delay.String())
-		run()
-	}
+		run(context.Background())
+	})
+	s.background = func(work func()) { work() }
 	s.now = func() time.Time { return time.Unix(1000, 0) }
 	return s, fake, client, &delayed
 }

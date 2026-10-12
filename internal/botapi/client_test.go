@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"strings"
 	"sync"
 	"testing"
@@ -119,8 +120,31 @@ func TestDoesNotReplayAmbiguousSend(t *testing.T) {
 		calls++
 		return httpx.Response{Status: 500, Body: []byte(`{"ok":false,"error_code":500}`)}, nil
 	}
-	if err := c.SendHTML(context.Background(), "https://example.test", "T", "1", "x"); err == nil || calls != 1 {
-		t.Fatalf("ambiguous send retried: calls=%d err=%v", calls, err)
+	if err := c.SendHTML(context.Background(), "https://example.test", "T", "1", "x"); !Uncertain(err) || calls != 1 {
+		t.Fatalf("ambiguous send retried or not marked uncertain: calls=%d err=%v", calls, err)
+	}
+}
+
+// 明确的拒绝（4xx、连不上）不算「不确定」，调用方可以放心改走别的途径。
+func TestDefiniteFailuresAreNotUncertain(t *testing.T) {
+	c, _ := virtualClient()
+	c.post = func(context.Context, string, map[string]string, any, time.Duration, int64) (httpx.Response, error) {
+		return httpx.Response{Status: 400, Body: []byte(`{"ok":false,"error_code":400,"description":"Bad Request: chat not found"}`)}, nil
+	}
+	if err := c.SendHTML(context.Background(), "https://example.test", "T", "1", "x"); err == nil || Uncertain(err) {
+		t.Fatalf("400 marked uncertain: %v", err)
+	}
+	c.post = func(context.Context, string, map[string]string, any, time.Duration, int64) (httpx.Response, error) {
+		return httpx.Response{}, &net.OpError{Op: "dial", Err: errors.New("connection refused")}
+	}
+	if err := c.SendHTML(context.Background(), "https://example.test", "T", "1", "x"); err == nil || Uncertain(err) {
+		t.Fatalf("dial failure marked uncertain: %v", err)
+	}
+	c.post = func(context.Context, string, map[string]string, any, time.Duration, int64) (httpx.Response, error) {
+		return httpx.Response{}, &net.OpError{Op: "read", Err: errors.New("connection reset")}
+	}
+	if err := c.SendHTML(context.Background(), "https://example.test", "T", "1", "x"); !Uncertain(err) {
+		t.Fatalf("read failure not marked uncertain: %v", err)
 	}
 }
 

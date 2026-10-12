@@ -476,15 +476,21 @@ func (a *App) Bot() *bot.Client { return a.bot.Load() }
 // 是 updateShortSentMessage，只带一个 id 和一个 pts，既没有 peer 也没有
 // 文本。所以校验程序把消息完整读回来，再交到这里。
 func (a *App) DispatchMessage(ctx context.Context, message *tg.Message) bool {
+	return a.SubmitMessage(ctx, message) != command.NotCommand
+}
+
+// SubmitMessage 同 DispatchMessage，但区分「交给了命令池」和「命令池满了没执行」。
+// 还没连上时算作没执行。
+func (a *App) SubmitMessage(ctx context.Context, message *tg.Message) command.Result {
 	client := a.bot.Load()
 	if client == nil {
-		return false
+		return command.Rejected
 	}
 	envelope, ok := bot.Envelope(message, client.SelfID(), false, a.peers)
 	if !ok {
-		return false
+		return command.NotCommand
 	}
-	return a.Registry.Dispatch(ctx, client, envelope)
+	return a.Registry.Submit(ctx, client, envelope)
 }
 
 // Close 释放锁并把状态刷写到磁盘。

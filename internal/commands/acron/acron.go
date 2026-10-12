@@ -31,9 +31,9 @@ type service struct {
 	cron  *cron.Cron
 	// registry 用来按当前的前缀和别名认出 cmd 任务里的命令是不是 .acron 本身，见 invokesSelf。
 	registry *command.Registry
-	// dispatch 把一条消息交给命令注册表，cmd 任务靠它执行命令；正式运行时是 a.DispatchMessage，
+	// dispatch 把一条消息交给命令注册表，cmd 任务靠它执行命令；正式运行时是 a.SubmitMessage，
 	// 测试里换成假的。
-	dispatch func(ctx context.Context, message *tg.Message) bool
+	dispatch func(ctx context.Context, message *tg.Message) command.Result
 
 	mu      sync.Mutex
 	entries map[string]cron.EntryID
@@ -49,7 +49,7 @@ type service struct {
 const commandName = "acron"
 
 func newService(a *app.App, logger *slog.Logger, documents *store.Store[state], registry *command.Registry,
-	dispatch func(context.Context, *tg.Message) bool) *service {
+	dispatch func(context.Context, *tg.Message) command.Result) *service {
 	// robfig/cron 在单独的协程里跑任务，任务里 panic 了没人接住就会带倒整个进程；
 	// Recover 接住后记一条日志，别的任务照常。
 	jobs := cron.New(cron.WithParser(cronParser), cron.WithLocation(shanghai),
@@ -86,7 +86,7 @@ func Register(a *app.App) {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	s := newService(a, logger, kit.NewStore(a, "acron.json", defaults), a.Registry, a.DispatchMessage)
+	s := newService(a, logger, kit.NewStore(a, "acron.json", defaults), a.Registry, a.SubmitMessage)
 	a.Registry.Register(&command.Command{Name: commandName, Group: command.GroupMedia, Description: "定时发送、删除消息或执行命令",
 		Usage: "类型 Cron 对话 [参数]", Help: help, Handle: s.handle})
 	a.Registry.AddJob(s.start)
@@ -107,7 +107,7 @@ func help(prefix string) string {
 		"<b>执行命令</b>\n" +
 		"命令写在第二行，到时间发到对话，再按当前的前缀和别名执行。比如每天 2 点备份：\n" +
 		"<pre>" + p + "acron cmd 0 0 2 * * * me 定时备份\n" + p + "bf</pre>\n" +
-		"列表里的结果写明是「已执行命令」还是「已发送命令（未执行：原因）」。\n\n" +
+		"列表里的结果写明是「已提交执行命令」还是「已发送命令（未执行：原因）」。\n\n" +
 		"<b>删除与置顶</b>\n" +
 		"• " + c("del 0 0 2 * * * 对话 消息 ID [备注]") + " 删除一条消息\n" +
 		"• " + c("del_re 0 0 2 * * * 对话 100 /^test/i [备注]") + " 在最近 100 条消息里删除文字匹配正则的；" +

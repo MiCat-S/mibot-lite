@@ -211,21 +211,22 @@ func (s *daService) start(inv *command.Invocation) (bool, error) {
 	slot := &daSlot{cancel: cancel}
 	s.active[id] = slot
 	s.mu.Unlock()
-	accepted := s.a.Registry.LongRunning(taskCtx, func(taskCtx context.Context) {
-		defer cancel()
-		defer func() {
-			s.mu.Lock()
-			delete(s.active, id)
-			s.mu.Unlock()
-		}()
-		s.run(taskCtx, client, slot, id, message)
-	})
-	if !accepted {
-		// 只有服务正在退出时才会走到这里：个数已经在上面限制过了。
+	// 名额在 release 里还：.da stop 赶在任务开始前取消的话，run 根本不会执行，
+	// 放在 run 里就永远还不回来。只删自己的那一格，免得删掉同一个群后来的新任务。
+	release := func() {
 		cancel()
 		s.mu.Lock()
-		delete(s.active, id)
+		if s.active[id] == slot {
+			delete(s.active, id)
+		}
 		s.mu.Unlock()
+	}
+	accepted := s.a.Registry.LongRunning(taskCtx, func(taskCtx context.Context) {
+		s.run(taskCtx, client, slot, id, message)
+	}, release)
+	if !accepted {
+		// 只有服务正在退出时才会走到这里：个数已经在上面限制过了。
+		release()
 		return false, kit.Fail("服务正在退出，没有开始删除")
 	}
 	return true, nil

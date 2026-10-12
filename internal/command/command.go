@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -189,6 +190,11 @@ type Registry struct {
 	pool  *scheduler
 	tasks *scheduler
 	long  *scheduler
+	// delayed 跑 After 安排的延时任务；timers 是还没到点的个数，scheduled 不让它无限增长。
+	delayed *scheduler
+	timers  atomic.Int32
+	// tracked 是 Track 记下的、不在这几个池里的业务工作（如定时任务的一次执行）。
+	tracked atomic.Int32
 	// life 在 Abort 时取消，所有正在跑和排队的命令都挂在它上面。
 	life  context.Context
 	abort context.CancelFunc
@@ -208,7 +214,8 @@ func New(prefixes []string, logger *slog.Logger) *Registry {
 	life, abort := context.WithCancel(context.Background())
 	return &Registry{commands: map[string]*Command{}, prefixes: append([]string(nil), prefixes...), logger: logger,
 		life: life, abort: abort, pool: newScheduler(life, logger, commandWorkers, commandQueue),
-		tasks: newScheduler(life, logger, taskWorkers, taskQueue), long: newScheduler(life, logger, LongTasks, LongTasks)}
+		tasks: newScheduler(life, logger, taskWorkers, taskQueue), long: newScheduler(life, logger, LongTasks, LongTasks),
+		delayed: newScheduler(life, logger, delayedWorkers, delayedQueue)}
 }
 
 // Abort 中断所有正在跑和排队的命令，之后收到的命令也不再执行。进程退出（包括重启）前调用：
@@ -235,12 +242,65 @@ const LongTasks = 4
 // LongRunning 把一件按小时计的任务（如 .da）交给长任务池。这个池和 Background 分开：
 // 长任务占满了也不耽误代发。调用方应自己把同时进行的个数限制在 LongTasks 以内，
 // 否则多出来的会排队等前面的跑完，而不是马上开始。
-func (r *Registry) LongRunning(ctx context.Context, run func(context.Context)) bool {
-	if r.long.submit(ctx, run) {
+//
+// 接受了的任务结束时调用一次 release，排队期间被取消、run 没有执行时也一样，
+// 提交前占下的名额要在这里释放；返回 false 时不调用。release 可以为 nil。
+func (r *Registry) LongRunning(ctx context.Context, run func(context.Context), release func()) bool {
+	if r.long.admit(ctx, run, release) {
 		return true
 	}
 	r.logger.Warn("task.rejected", slog.String("pool", "long"), slog.String("reason", "queue full or context canceled"))
 	return false
+}
+
+// MaxTimers 是同时等着到点的延时任务上限，免得大量延时删除把计时器堆满内存。
+const MaxTimers = 4096
+
+// After 在 delay 之后把 run 交给延时任务池执行（最多 4 个同时跑、256 个排队）。
+// 计时期间不占协程和名额；Abort 时还没到点的直接放弃，到点后的 ctx 也随服务退出取消。
+// 计时器已满或服务正在退出时返回 false 并记日志；到点时池满了也只记日志、放弃这一次。
+func (r *Registry) After(delay time.Duration, run func(context.Context)) bool {
+	if r.life.Err() != nil || r.timers.Add(1) > MaxTimers {
+		r.timers.Add(-1)
+		r.logger.Warn("task.rejected", slog.String("pool", "delayed"), slog.String("reason", "too many timers or shutting down"))
+		return false
+	}
+	// stop 要在计时器回调用到之前赋好值，ready 关闭之前回调只能等着。
+	ready := make(chan struct{})
+	var stop func() bool
+	timer := time.AfterFunc(max(delay, 0), func() {
+		<-ready
+		// 计时器到点了就由这里减计数；下面 Abort 的回调只在拦下了计时器时才减。
+		r.timers.Add(-1)
+		if !stop() {
+			return // 服务正在退出
+		}
+		if !r.delayed.submit(r.life, run) && r.life.Err() == nil {
+			r.logger.Warn("task.rejected", slog.String("pool", "delayed"), slog.String("reason", "queue full"))
+		}
+	})
+	stop = context.AfterFunc(r.life, func() {
+		if timer.Stop() {
+			r.timers.Add(-1)
+		}
+	})
+	close(ready)
+	return true
+}
+
+// Track 记下一件不在命令池、后台池里跑的业务工作（如 .sum、.acron 的一次定时执行），
+// 让 Busy 把它算进去；工作结束时调用返回的函数。
+func (r *Registry) Track() (done func()) {
+	r.tracked.Add(1)
+	var once sync.Once
+	return func() { once.Do(func() { r.tracked.Add(-1) }) }
+}
+
+// Busy 是正在跑和排队的工作总数：命令、后台任务、长任务、到点的延时任务，加上 Track
+// 记下的。自动更新要它为 0 才重启，免得掐断 .da 这类命令早已返回、工作还在跑的任务。
+// 还没到点的延时任务不算：一条一天后才删的消息不该挡住更新。
+func (r *Registry) Busy() int {
+	return r.pool.pending() + r.tasks.pending() + r.long.pending() + r.delayed.pending() + int(r.tracked.Load())
 }
 
 // Register 添加命令，连同它的别名；名字（包括别名）重复属于编程错误。
@@ -454,31 +514,46 @@ func (r *Registry) resolve(text string) (Route, *Command, bool) {
 	return route, command, ok
 }
 
-// Dispatch 把一条消息交给注册表，返回是否匹配到命令；
-// 处理函数异步运行。
+// Result 是派发的结果。
+type Result int
+
+const (
+	// NotCommand 表示不是命令（或者是代发里不许借出去的命令），没有执行。
+	NotCommand Result = iota
+	// Queued 表示已经交给命令池，处理函数异步运行；不代表已经执行完。
+	Queued
+	// Rejected 表示是命令，但命令池已满或服务正在退出，没有执行。
+	Rejected
+)
+
+// Dispatch 把一条消息交给注册表，返回是否匹配到命令（包括匹配到了但因为排满而没执行的，
+// 那种会另记 command.rejected）；处理函数异步运行。要区分有没有真的交出去，用 Submit。
 func (r *Registry) Dispatch(ctx context.Context, client *bot.Client, message *bot.Message) bool {
+	return r.Submit(ctx, client, message) != NotCommand
+}
+
+// Submit 同 Dispatch，但告诉调用方命令有没有真的交给命令池。
+func (r *Registry) Submit(ctx context.Context, client *bot.Client, message *bot.Message) Result {
 	if r.wasRelayed(message) {
 		r.logger.Info("dispatch.relayed_again", slog.String("chat", message.ChatID), slog.Int("message", message.ID))
-		return false
+		return NotCommand
 	}
 	route, command, ok := r.resolve(message.Text)
 	if !ok {
-		return false
+		return NotCommand
 	}
-	r.run(ctx, client, message, nil, route, command)
-	return true
+	return r.run(ctx, client, message, nil, route, command)
 }
 
 // DispatchFor 执行一条账号替别人代发的命令。allowed 决定这条命令能不能借出去，
 // 不许就不执行；trigger 是对方原来的那条消息。
-func (r *Registry) DispatchFor(ctx context.Context, client *bot.Client, message, trigger *bot.Message, allowed func(Route) bool) bool {
+func (r *Registry) DispatchFor(ctx context.Context, client *bot.Client, message, trigger *bot.Message, allowed func(Route) bool) Result {
 	route, command, ok := r.resolve(message.Text)
 	if !ok || !allowed(route) {
-		return false
+		return NotCommand
 	}
 	r.markRelayed(message)
-	r.run(ctx, client, message, trigger, route, command)
-	return true
+	return r.run(ctx, client, message, trigger, route, command)
 }
 
 func relayKey(message *bot.Message) string { return message.ChatID + "/" + strconv.Itoa(message.ID) }
@@ -507,7 +582,7 @@ func (r *Registry) wasRelayed(message *bot.Message) bool {
 }
 
 // run 在后台执行一条命令：限制同时运行的数量、套上超时、兜住 panic、记日志。
-func (r *Registry) run(ctx context.Context, client *bot.Client, message, trigger *bot.Message, route Route, command *Command) {
+func (r *Registry) run(ctx context.Context, client *bot.Client, message, trigger *bot.Message, route Route, command *Command) Result {
 	logger := r.logger.With(slog.String("command", route.Command))
 	if trigger != nil {
 		logger = logger.With(slog.String("for", trigger.ChatID+"#"+strconv.Itoa(trigger.ID)))
@@ -516,7 +591,7 @@ func (r *Registry) run(ctx context.Context, client *bot.Client, message, trigger
 		Message: message, Client: client, Log: logger, Trigger: trigger}
 	if r.life.Err() != nil {
 		logger.Info("command.aborted", slog.String("chat", message.ChatID), slog.Int("message", message.ID), slog.String("reason", "shutting down"))
-		return
+		return Rejected
 	}
 	accepted := r.pool.submit(ctx, func(live context.Context) {
 		runCtx, cancel := live, context.CancelFunc(func() {})
@@ -573,7 +648,9 @@ func (r *Registry) run(ctx context.Context, client *bot.Client, message, trigger
 	if !accepted {
 		logger.Warn("command.rejected", slog.String("chat", message.ChatID), slog.Int("message", message.ID),
 			slog.String("reason", "queue full or context canceled"))
+		return Rejected
 	}
+	return Queued
 }
 
 // reportError 把失败原因写回命令消息。命令可能已经超时，所以另给 5 秒期限，
@@ -591,11 +668,11 @@ func (r *Registry) reportError(ctx context.Context, inv *Invocation, text string
 // 等它为 0 时再装，免得把正在跑的命令掐断。
 func (r *Registry) Running() int { return r.pool.count() }
 
-// Wait 阻塞到三个池都空闲，或者超时为止。Abort 之后不再接受新任务，
+// Wait 阻塞到所有池都空闲，或者超时为止。Abort 之后不再接受新任务，
 // 这时它等的是所有已经接受的命令和任务，包括还在排队的。
 func (r *Registry) Wait(timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
-	pools := []*scheduler{r.long, r.tasks, r.pool}
+	pools := []*scheduler{r.delayed, r.long, r.tasks, r.pool}
 	for {
 		for _, pool := range pools {
 			if !pool.wait(max(0, time.Until(deadline))) {

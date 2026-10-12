@@ -40,8 +40,8 @@ type abanCache struct {
 type abanService struct {
 	store *store.Store[abanCache]
 	mu    sync.Mutex
-	// later 安排延时执行，为 nil 时用 time.AfterFunc；测试里换成立即记录。
-	later func(delay time.Duration, run func())
+	// later 安排延时执行，正式运行时是 Registry.After，测试里换成立即记录。
+	later func(delay time.Duration, run func(context.Context))
 }
 
 // abanCacheTTL 是管理群列表的缓存复用时长：一天扫一次对话列表，其余时候用缓存；
@@ -367,28 +367,22 @@ func (s *abanService) show(ctx context.Context, inv *command.Invocation, html st
 		return err
 	}
 	if lifetime > 0 {
-		s.deleteLater(ctx, inv, lifetime)
+		s.deleteLater(inv, lifetime)
 	}
 	return nil
 }
 
-// deleteLater 在 lifetime 之后删掉命令消息。计时脱离命令的 context：命令早已结束，
-// 删除仍要照做；命令框架拿不到进程退出的信号，进程退出时尚未到点的删除随之放弃。
-func (s *abanService) deleteLater(ctx context.Context, inv *command.Invocation, lifetime time.Duration) {
-	background := context.WithoutCancel(ctx)
+// deleteLater 在 lifetime 之后删掉命令消息。计时交给注册表：命令早已结束，删除仍要
+// 照做，但跟着服务的生命周期走，进程退出时尚未到点的删除随之放弃。
+func (s *abanService) deleteLater(inv *command.Invocation, lifetime time.Duration) {
 	client, message, logger := inv.Client, inv.Message, inv.Log
-	run := func() {
-		deleteCtx, cancel := context.WithTimeout(background, 15*time.Second)
+	s.later(lifetime, func(ctx context.Context) {
+		deleteCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		defer cancel()
 		if err := client.DeleteMessage(deleteCtx, message); err != nil && !tgerr.Is(err, "MESSAGE_ID_INVALID") {
 			logger.Warn("aban.auto_delete", slog.String("chat", message.ChatID), slog.Int("message", message.ID), slog.String("error", err.Error()))
 		}
-	}
-	if s.later != nil {
-		s.later(lifetime, run)
-		return
-	}
-	time.AfterFunc(lifetime, run)
+	})
 }
 
 // fail 显示失败原因，到点删除。
@@ -428,7 +422,8 @@ func abanHelp(prefix string) string {
 
 // Register 注册封禁管理相关的命令。
 func Register(a *app.App) {
-	service := &abanService{store: kit.NewStore(a, "aban.json", func() abanCache { return abanCache{} })}
+	service := &abanService{store: kit.NewStore(a, "aban.json", func() abanCache { return abanCache{} }),
+		later: func(delay time.Duration, run func(context.Context)) { a.Registry.After(delay, run) }}
 	basic := func(action string) *command.Command {
 		// names 是失败提示里的动作（「封禁失败」），descriptions 是命令列表里的说明。
 		names := map[string]string{"kick": "踢出", "ban": "封禁", "unban": "解封", "mute": "禁言", "unmute": "解除禁言"}

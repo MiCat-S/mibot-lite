@@ -168,7 +168,7 @@ type fixture struct {
 	service *abanService
 	// deletions 记下安排好的自动删除，run 在测试里手动触发。
 	deletions []time.Duration
-	run       []func()
+	run       []func(context.Context)
 }
 
 func newFixture(t *testing.T, answer func(input bin.Encoder) (bin.Encoder, error)) *fixture {
@@ -199,7 +199,7 @@ func newFixture(t *testing.T, answer func(input bin.Encoder) (bin.Encoder, error
 		t.Fatal(err)
 	}
 	f := &fixture{fake: fake, client: client}
-	f.service = &abanService{store: cache, later: func(delay time.Duration, run func()) {
+	f.service = &abanService{store: cache, later: func(delay time.Duration, run func(context.Context)) {
 		f.deletions = append(f.deletions, delay)
 		f.run = append(f.run, run)
 	}}
@@ -507,7 +507,7 @@ func TestMuteInBroadcastChannel(t *testing.T) {
 	if !slices.Equal(f.deletions, []time.Duration{resultLifetime}) {
 		t.Fatalf("应安排一次 10 秒后的删除，实际 %v", f.deletions)
 	}
-	f.run[0]()
+	f.run[0](context.Background())
 	if f.fake.count("channels.deleteMessages 10 [1000]") != 1 {
 		t.Fatalf("到点应删掉命令消息：%v", f.fake.log())
 	}

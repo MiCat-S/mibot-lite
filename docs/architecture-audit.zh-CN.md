@@ -1,6 +1,8 @@
 # mibot-lite 架构审查与核心重构报告
 
-审查日期：2026-10-12（Asia/Taipei）。基线：`d3309cf`，`github.com/MiCat-S/mibot-lite`，Go 1.26，gotd/td v0.162.0。本报告对应的重构已随后提交到 main，附录代码与提交时的源文件一致。
+> 更新：对提交 `0e59afa` 的第二轮复查已完成，确认 5 个可复现的 P2 边界问题。详见 [第二轮复查报告](architecture-review-0e59afa.zh-CN.md)。本文件保留第一轮诊断与实现记录。
+
+审查日期：2026-10-12（Asia/Taipei）。基线：`d3309cf`，`github.com/MiCat-S/mibot-lite`，Go 1.26，gotd/td v0.162.0。本报告对应的重构已提交为 `0e59afa`，附录代码与该提交的源文件一致；之后的修复见第二轮复查报告。
 
 审查范围：基线 Git 跟踪的 116 个非测试 Go 文件，以及入口、部署脚本和依赖配置；对全仓网络调用、goroutine 启动、共享 map、锁、context 脱离和重试路径进行静态扫描，深入检查核心模块及有关命令。测试也包括工作区已有的本地测试。动态验证使用模拟 RPC、httptest 和 race detector；未连接真实 Telegram 账号，未执行删除、封禁或真实签到。静态扫描与测试覆盖不能证明所有第三方服务和所有 Telegram RPC 在生产环境都没有问题。
 

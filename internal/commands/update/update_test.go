@@ -97,10 +97,10 @@ func TestDecide(t *testing.T) {
 	day := time.Date(2026, 10, 1, 0, 0, 0, 0, shanghai)
 	on := autoConfig{Enabled: true, Time: "04:00"}
 	for name, c := range map[string]struct {
-		cfg     autoConfig
-		at      time.Duration
-		running int
-		want    autoAction
+		cfg  autoConfig
+		at   time.Duration
+		busy int
+		want autoAction
 	}{
 		"还没到点":      {on, 3*time.Hour + 59*time.Minute, 0, autoIdle},
 		"到点、空闲":     {on, 4 * time.Hour, 0, autoCheck},
@@ -111,7 +111,7 @@ func TestDecide(t *testing.T) {
 		"关着":        {autoConfig{Time: "04:00"}, 5 * time.Hour, 0, autoIdle},
 		"时间写坏了按四点算": {autoConfig{Enabled: true, Time: "25:99"}, 4 * time.Hour, 0, autoCheck},
 	} {
-		got, today := decide(c.cfg, day.Add(c.at), c.running)
+		got, today := decide(c.cfg, day.Add(c.at), c.busy)
 		if got != c.want || today != "2026-10-01" {
 			t.Errorf("%s：%v %s，应为 %v", name, got, today, c.want)
 		}
@@ -167,5 +167,36 @@ func TestTick(t *testing.T) {
 	u.tick(context.Background(), client, day.Add(4*time.Hour+time.Minute))
 	if requests != 1 {
 		t.Error("同一天查了两次")
+	}
+}
+
+// .da 这类命令早已返回、工作还在长任务池里跑的情况，自动更新要当成忙，不能检查更新后重启。
+func TestAutoUpdateWaitsForLongTasks(t *testing.T) {
+	r := command.New([]string{"."}, slog.New(slog.DiscardHandler))
+	defer r.Abort()
+	started := make(chan struct{})
+	r.LongRunning(r.Lifecycle(), func(ctx context.Context) { close(started); <-ctx.Done() }, nil)
+	<-started
+	at := time.Date(2026, 10, 12, 4, 0, 0, 0, shanghai)
+	if action, _ := decide(autoConfig{Enabled: true, Time: "04:00"}, at, r.Busy()); action != autoWait {
+		t.Fatalf("长任务在跑时的动作 = %v", action)
+	}
+}
+
+func TestWaitIdle(t *testing.T) {
+	old := idlePoll
+	idlePoll = time.Millisecond
+	defer func() { idlePoll = old }()
+	left := 3
+	if !waitIdle(context.Background(), func() int { left--; return max(left, 0) }, time.Second) {
+		t.Fatal("忙完了却没等到")
+	}
+	if waitIdle(context.Background(), func() int { return 1 }, 20*time.Millisecond) {
+		t.Fatal("一直忙却说等到了")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if waitIdle(ctx, func() int { return 0 }, time.Second) {
+		t.Fatal("ctx 取消了还说等到了")
 	}
 }

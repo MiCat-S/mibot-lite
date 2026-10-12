@@ -178,6 +178,10 @@ func (s *service) fire(id string) {
 
 // execute 执行一次任务，把结果或错误记进任务，列表里能看到。
 func (s *service) execute(ctx context.Context, client *bot.Client, id string) {
+	// 算进 Registry.Busy：自动更新不在任务执行到一半时重启。
+	if s.registry != nil {
+		defer s.registry.Track()()
+	}
 	st, err := s.read()
 	if err != nil {
 		s.log.Error("acron.load_failed", "task", id, "error", err.Error())
@@ -339,10 +343,18 @@ func (s *service) runCommand(ctx context.Context, client *bot.Client, peer tg.In
 	message := commandMessage(id, peerOf(peer, client.SelfID()), text, replyTo)
 	// 命令在后台跑，比这次任务活得久，不能随任务的 ctx 一起取消；进程退出时注册表自己会掐断它。
 	// 也不能沿用上面发送用的 ctx：命令自己的输出照常按设置给 IP 打码。
-	if s.dispatch == nil || !s.dispatch(context.WithoutCancel(ctx), message) {
-		return "已发送命令（未执行：不是可用的命令，检查前缀和命令名）", nil
+	result := command.NotCommand
+	if s.dispatch != nil {
+		result = s.dispatch(context.WithoutCancel(ctx), message)
 	}
-	return "已执行命令", nil
+	switch result {
+	case command.Queued:
+		// 命令异步执行，这里等不到它的结果，只能说交出去了。
+		return "已提交执行命令", nil
+	case command.Rejected:
+		return "", kit.Fail("命令已发出，但当时同时执行的命令太多（或服务正在退出），没有执行")
+	}
+	return "已发送命令（未执行：不是可用的命令，检查前缀和命令名）", nil
 }
 
 // commandMessage 造一条和刚发出的命令一样的消息，交给派发器。

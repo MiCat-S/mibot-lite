@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -28,6 +29,27 @@ type APIError struct {
 
 func (e *APIError) Error() string {
 	return fmt.Sprintf("Bot API 返回 %d：%s", e.Code, e.Description)
+}
+
+// UncertainError 表示这次发送不确定有没有到：请求可能已经被 Telegram 接受，只是没收到
+// 明确的结果（网络错误、请求途中取消、5xx、2xx 却读不懂的响应）。调用方不能把它当成
+// 「没发出去」再发一遍，否则可能重复。
+type UncertainError struct{ Err error }
+
+func (e *UncertainError) Error() string { return e.Err.Error() + "（不确定是否已送达）" }
+func (e *UncertainError) Unwrap() error { return e.Err }
+
+// Uncertain 判断 err 是不是「不确定有没有送达」，见 UncertainError。
+func Uncertain(err error) bool {
+	var uncertain *UncertainError
+	return errors.As(err, &uncertain)
+}
+
+// unsent 判断传输错误是否发生在请求发出之前：连不上、域名解析失败都说明对方没收到。
+func unsent(err error) bool {
+	var dns *net.DNSError
+	var op *net.OpError
+	return errors.As(err, &dns) || (errors.As(err, &op) && op.Op == "dial")
 }
 
 type budget struct {
@@ -128,7 +150,8 @@ func (c *Client) pause(key [32]byte, d time.Duration) {
 }
 
 // SendHTML 发一条 HTML 消息，只对明确的 429 拒绝有限重试。网络错误和 5xx 时消息
-// 可能已经发出去了，Bot API 没有 random_id 去重，盲目重试会发出重复消息。
+// 可能已经发出去了，Bot API 没有 random_id 去重，盲目重试会发出重复消息；
+// 这类结果以 UncertainError 返回，由调用方决定怎么办。
 func (c *Client) SendHTML(ctx context.Context, endpoint, token, chat, text string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -156,10 +179,14 @@ func (c *Client) SendHTML(ctx context.Context, endpoint, token, chat, text strin
 		response, err := c.post(ctx, strings.TrimRight(endpoint, "/")+"/bot"+token+"/sendMessage", nil, request, 15*time.Second, 1<<20)
 		if err != nil {
 			if ctx.Err() != nil {
-				return ctx.Err()
+				return &UncertainError{Err: ctx.Err()}
 			}
 			// URL 错误的文字里有 Token，不能原样往外传。
-			return errors.New("Bot API: " + httpx.Reason(err))
+			failure := errors.New("Bot API: " + httpx.Reason(err))
+			if unsent(err) {
+				return failure
+			}
+			return &UncertainError{Err: failure}
 		}
 		var envelope struct {
 			OK          bool   `json:"ok"`
@@ -171,10 +198,11 @@ func (c *Client) SendHTML(ctx context.Context, endpoint, token, chat, text strin
 		}
 		if err := json.Unmarshal(response.Body, &envelope); err != nil {
 			// 代理或网关出错时常返回 HTML 页面，这时报状态码比报「不是 JSON」有用。
-			if !response.OK() {
-				return &APIError{Code: response.Status, Description: "响应不是 JSON"}
+			apiErr := &APIError{Code: response.Status, Description: "响应不是 JSON"}
+			if response.Status >= 500 || response.OK() {
+				return &UncertainError{Err: apiErr}
 			}
-			return errors.New("Bot API 返回的不是 JSON")
+			return apiErr
 		}
 		if response.OK() && envelope.OK {
 			return nil
@@ -184,6 +212,9 @@ func (c *Client) SendHTML(ctx context.Context, endpoint, token, chat, text strin
 			code = response.Status
 		}
 		apiErr := &APIError{Code: code, Description: strings.ReplaceAll(envelope.Description, token, "[redacted]")}
+		if code >= 500 {
+			return &UncertainError{Err: apiErr}
+		}
 		if code != 429 {
 			return apiErr
 		}

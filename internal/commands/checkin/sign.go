@@ -193,26 +193,53 @@ func brief(reply string) string {
 
 // deliver 发汇总：设了机器人推送先用它，其次汇总对话；都没有或者都发不出去时，手动签到改写
 // 命令消息，定时签到发到收藏夹。汇总发到了别处的话，手动签到的命令消息删掉，和原插件一样。
+//
+// 前一个途径发到一半失败时，下一个途径只发剩下的页，见 remaining：已经发出的不重发。
 func deliver(ctx context.Context, client *bot.Client, cfg config, summary string, inv *command.Invocation) error {
 	pages := command.HTMLPages(summary, command.PageLimit)
 	if cfg.BotToken != "" && cfg.PushChatID != "" {
-		err := pushViaBot(ctx, cfg.BotToken, cfg.PushChatID, pages)
+		sent, err := pushViaBot(ctx, cfg.BotToken, cfg.PushChatID, pages)
 		if err == nil {
 			return removeCommand(ctx, inv)
 		}
-		client.Logger().Warn("checkin.bot_push_failed", "error", err.Error())
+		client.Logger().Warn("checkin.bot_push_failed", "sent", sent, "pages", len(pages), "error", err.Error())
+		pages = remaining(pages, sent, botapi.Uncertain(err))
 	}
 	if cfg.LogChat != "" {
-		err := sendPages(ctx, client, cfg.LogChat, pages)
+		sent, err := sendPages(ctx, client, cfg.LogChat, pages)
 		if err == nil {
 			return removeCommand(ctx, inv)
 		}
-		client.Logger().Warn("checkin.log_chat_failed", "chat", cfg.LogChat, "error", err.Error())
+		client.Logger().Warn("checkin.log_chat_failed", "chat", cfg.LogChat, "sent", sent, "pages", len(pages), "error", err.Error())
+		pages = remaining(pages, sent, false)
 	}
 	if inv != nil {
 		return inv.EditPages(ctx, pages)
 	}
-	return sendPages(ctx, client, "me", pages)
+	_, err := sendPages(ctx, client, "me", pages)
+	return err
+}
+
+// remaining 算出前一个途径失败后，下一个途径该发的页。前 sent 页已经发出，不再重发；
+// uncertain 表示第 sent+1 页不确定有没有到，为免重复也不重发。少发了页的话，在最前面
+// 加一页说明，免得看的人以为汇总就这么多。
+func remaining(pages []string, sent int, uncertain bool) []string {
+	if sent == 0 && !uncertain {
+		return pages
+	}
+	rest := pages[min(sent, len(pages)):]
+	note := ""
+	if sent > 0 {
+		note = fmt.Sprintf("签到汇总的前 %d 页已经发出。", sent)
+	}
+	if uncertain && len(rest) > 0 {
+		note += fmt.Sprintf("第 %d 页不确定是否送达，为免重复没有在这里重发。", sent+1)
+		rest = rest[1:]
+	}
+	if len(rest) > 0 {
+		note += fmt.Sprintf("以下是其余 %d 页。", len(rest))
+	}
+	return append([]string{"ℹ️ " + note}, rest...)
 }
 
 func removeCommand(ctx context.Context, inv *command.Invocation) error {
@@ -222,25 +249,27 @@ func removeCommand(ctx context.Context, inv *command.Invocation) error {
 	return inv.Client.DeleteMessage(ctx, inv.Message)
 }
 
-func sendPages(ctx context.Context, client *bot.Client, chat string, pages []string) error {
+// sendPages 逐页发到 chat，返回成功发出的页数。
+func sendPages(ctx context.Context, client *bot.Client, chat string, pages []string) (int, error) {
 	peer, err := client.ResolveTarget(ctx, chat)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	for _, page := range pages {
+	for index, page := range pages {
 		if _, err := client.SendHTML(ctx, peer, page, bot.SendOptions{}); err != nil {
-			return err
+			return index, err
 		}
 	}
-	return nil
+	return len(pages), nil
 }
 
-// pushViaBot 用 Bot API 把汇总发到 chat。返回的错误里不带 URL：URL 里有 Token。
-func pushViaBot(ctx context.Context, token, chat string, pages []string) error {
-	for _, page := range pages {
+// pushViaBot 用 Bot API 把汇总发到 chat，返回成功发出的页数。返回的错误里不带 URL：
+// URL 里有 Token。
+func pushViaBot(ctx context.Context, token, chat string, pages []string) (int, error) {
+	for index, page := range pages {
 		if err := botPusher.SendHTML(ctx, botAPI, token, chat, page); err != nil {
-			return err
+			return index, err
 		}
 	}
-	return nil
+	return len(pages), nil
 }

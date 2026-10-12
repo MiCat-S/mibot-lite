@@ -298,9 +298,12 @@ func testService(t *testing.T, tasks ...task) (*service, *[]*tg.Message) {
 	var dispatched []*tg.Message
 	registry := command.New([]string{".", ","}, discard)
 	registry.SetAliases(map[string]string{"ac": "acron", "backup": "bf"})
-	s := newService(nil, discard, store.New(filepath.Join(t.TempDir(), "acron.json"), defaults), registry, func(_ context.Context, message *tg.Message) bool {
+	s := newService(nil, discard, store.New(filepath.Join(t.TempDir(), "acron.json"), defaults), registry, func(_ context.Context, message *tg.Message) command.Result {
 		dispatched = append(dispatched, message)
-		return strings.HasPrefix(message.Message, ".")
+		if strings.HasPrefix(message.Message, ".") {
+			return command.Queued
+		}
+		return command.NotCommand
 	})
 	if err := s.store.Update(func(st *state) error { st.Tasks = tasks; return nil }); err != nil {
 		t.Fatal(err)
@@ -368,7 +371,7 @@ func TestExecuteCommand(t *testing.T) {
 	if request := sent[*tg.MessagesSendMessageRequest](fake)[0]; request.Message != ".bf" {
 		t.Errorf("发出的命令：%q", request.Message)
 	}
-	if got := taskByID(t, s, "1"); got.LastResult != "已执行命令" || got.Delivery != deliverySent {
+	if got := taskByID(t, s, "1"); got.LastResult != "已提交执行命令" || got.Delivery != deliverySent {
 		t.Errorf("执行了的：%+v", got)
 	}
 	if got := taskByID(t, s, "2"); !strings.HasPrefix(got.LastResult, "已发送命令（未执行：") {

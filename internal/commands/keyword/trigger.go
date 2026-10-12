@@ -81,15 +81,15 @@ type service struct {
 	warned map[string]time.Time
 	// background 让动作离开更新处理的路径；测试里换成直接执行。
 	background func(func())
-	// later 安排延时删除，测试里换成立即记录。
-	later func(time.Duration, func())
+	// later 安排延时删除，正式运行时是 Registry.After，测试里换成立即记录。
+	later func(time.Duration, func(context.Context))
 	now   func() time.Time
 }
 
-func newService(saved *store.Store[document], logger *slog.Logger) *service {
+func newService(saved *store.Store[document], logger *slog.Logger, later func(time.Duration, func(context.Context))) *service {
 	return &service{store: saved, logger: logger, slots: make(chan struct{}, 4), warned: map[string]time.Time{},
 		background: func(work func()) { go work() },
-		later:      func(delay time.Duration, run func()) { time.AfterFunc(delay, run) },
+		later:      later,
 		now:        time.Now}
 }
 
@@ -253,19 +253,20 @@ func (s *service) apply(ctx context.Context, client *bot.Client, message *bot.Me
 		logger.Warn("keyword.moderate_failed", slog.String("error", err.Error()))
 	}
 	if t.DeleteSource {
-		s.deleteAfter(client, peer, message.ID, duration(t.DeleteSourceAfter), logger)
+		s.deleteAfter(ctx, client, peer, message.ID, duration(t.DeleteSourceAfter), logger)
 	}
 	if t.DeleteReplyAfter > 0 && sent > 0 {
-		s.deleteAfter(client, peer, sent, duration(t.DeleteReplyAfter), logger)
+		s.deleteAfter(ctx, client, peer, sent, duration(t.DeleteReplyAfter), logger)
 	}
 	logger.Info("keyword.triggered", slog.Int("message", message.ID))
 }
 
-// deleteAfter 在 delay 之后删掉一条消息，0 表示马上删。计时不占协程；进程退出时
-// 还没到点的删除随之放弃（v2 也一样，任务不落盘）。
-func (s *service) deleteAfter(client *bot.Client, peer tg.InputPeerClass, id int, delay time.Duration, logger *slog.Logger) {
-	run := func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+// deleteAfter 在 delay 之后删掉一条消息，0 表示马上用动作的 ctx 删。计时不占协程，
+// 到点后交给注册表的延时任务池，同时发出的删除有上限；服务退出时还没到点的删除
+// 随之放弃，已经到点的也随之取消（v2 也一样，任务不落盘）。
+func (s *service) deleteAfter(ctx context.Context, client *bot.Client, peer tg.InputPeerClass, id int, delay time.Duration, logger *slog.Logger) {
+	run := func(ctx context.Context) {
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 		// 已经被别人删掉的消息不算失败。
 		if err := client.Delete(ctx, peer, []int{id}); err != nil && !tgerr.Is(err, "MESSAGE_ID_INVALID") {
@@ -273,7 +274,7 @@ func (s *service) deleteAfter(client *bot.Client, peer tg.InputPeerClass, id int
 		}
 	}
 	if delay <= 0 {
-		run()
+		run(ctx)
 		return
 	}
 	s.later(delay, run)

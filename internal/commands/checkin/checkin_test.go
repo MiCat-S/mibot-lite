@@ -8,16 +8,21 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gotd/td/bin"
+	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"
 
 	"github.com/MiCat-S/mibot-lite/internal/bot"
+	"github.com/MiCat-S/mibot-lite/internal/botapi"
+	"github.com/MiCat-S/mibot-lite/internal/command"
 	"github.com/MiCat-S/mibot-lite/internal/commands/kit"
 	"github.com/MiCat-S/mibot-lite/internal/store"
 )
@@ -315,14 +320,81 @@ func TestPushViaBot(t *testing.T) {
 	botAPI = server.URL
 	defer func() { botAPI = "https://api.telegram.org" }()
 
-	if err := pushViaBot(context.Background(), "123:SECRET", "-1001", []string{"<b>汇总</b>"}); err != nil {
+	if _, err := pushViaBot(context.Background(), "123:SECRET", "-1001", []string{"<b>汇总</b>"}); err != nil {
 		t.Fatal(err)
 	}
 	if got.path != "/bot123:SECRET/sendMessage" || got.body["text"] != "<b>汇总</b>" || got.body["parse_mode"] != "HTML" {
 		t.Errorf("请求不对：%s %v", got.path, got.body)
 	}
-	err := pushViaBot(context.Background(), "123:SECRET", "bad", []string{"x"})
+	_, err := pushViaBot(context.Background(), "123:SECRET", "bad", []string{"x"})
 	if err == nil || strings.Contains(err.Error(), "SECRET") || !strings.Contains(err.Error(), "chat not found") {
 		t.Errorf("失败时的错误：%v", err)
 	}
+}
+
+func TestRemainingPages(t *testing.T) {
+	pages := []string{"一", "二", "三"}
+	for name, c := range map[string]struct {
+		sent      int
+		uncertain bool
+		want      []string
+	}{
+		"一页没发出":   {0, false, pages},
+		"发了一页":    {1, false, []string{"ℹ️ 签到汇总的前 1 页已经发出。以下是其余 2 页。", "二", "三"}},
+		"第一页不确定":  {0, true, []string{"ℹ️ 第 1 页不确定是否送达，为免重复没有在这里重发。以下是其余 2 页。", "二", "三"}},
+		"最后一页不确定": {2, true, []string{"ℹ️ 签到汇总的前 2 页已经发出。第 3 页不确定是否送达，为免重复没有在这里重发。"}},
+	} {
+		if got := remaining(pages, c.sent, c.uncertain); !slices.Equal(got, c.want) {
+			t.Errorf("%s：%q", name, got)
+		}
+	}
+}
+
+// 机器人推送发到一半失败、改发到汇总对话时，已经发出的页不能再发一遍；
+// 第二页返回 5xx（可能已经到了）时也不重发它，只发一条说明。
+func TestDeliverDoesNotResendPushedPages(t *testing.T) {
+	for name, c := range map[string]struct {
+		status int
+		body   string
+		want   int // 汇总对话收到的消息数
+	}{
+		"第二页结果不确定": {500, `{"ok":false,"error_code":500}`, 1},
+		"第二页被明确拒绝": {400, `{"ok":false,"error_code":400,"description":"Bad Request"}`, 2},
+	} {
+		var calls atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if calls.Add(1) == 1 {
+				_, _ = w.Write([]byte(`{"ok":true}`))
+				return
+			}
+			w.WriteHeader(c.status)
+			_, _ = w.Write([]byte(c.body))
+		}))
+		botAPI, botPusher = server.URL, botapi.New()
+		peers := bot.NewPeerCache()
+		peers.SetSelf(100)
+		target := &tg.User{ID: 200}
+		target.SetAccessHash(1)
+		peers.RememberUsers([]tg.UserClass{target})
+		var texts []string
+		fake := telegram.InvokeFunc(func(_ context.Context, input bin.Encoder, output bin.Decoder) error {
+			request, ok := input.(*tg.MessagesSendMessageRequest)
+			if !ok {
+				t.Fatalf("意外的请求：%T", input)
+			}
+			texts = append(texts, request.Message)
+			output.(*tg.UpdatesBox).Updates = &tg.UpdateShortSentMessage{ID: len(texts)}
+			return nil
+		})
+		client := bot.FromAPI(tg.NewClient(fake), peers, &tg.User{ID: 100}, slog.New(slog.DiscardHandler))
+		summary := strings.Repeat("x", command.PageLimit+100)
+		if err := deliver(context.Background(), client, config{BotToken: "TEST", PushChatID: "200", LogChat: "200"}, summary, nil); err != nil {
+			t.Fatal(err)
+		}
+		server.Close()
+		if len(texts) != c.want || !strings.HasPrefix(texts[0], "ℹ️ 签到汇总的前 1 页已经发出") {
+			t.Errorf("%s：汇总对话收到 %d 条：%.60q", name, len(texts), texts)
+		}
+	}
+	botAPI, botPusher = "https://api.telegram.org", botapi.New()
 }

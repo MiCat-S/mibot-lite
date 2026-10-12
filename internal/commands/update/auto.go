@@ -47,6 +47,13 @@ var shanghai = func() *time.Location {
 // .da、.sum 之类掐断。
 const maxWait = 2 * time.Hour
 
+// restartWait 是装好新版本后等手上的工作结束、再重启的最长时间。下载安装要几分钟，
+// 这期间可能又开始了新的任务。等不到就不重启，新版本留到下次重启生效。
+const restartWait = 30 * time.Minute
+
+// idlePoll 是等空闲时多久看一次；测试里改短。
+var idlePoll = 10 * time.Second
+
 type autoAction int
 
 const (
@@ -58,7 +65,8 @@ const (
 
 // decide 看这一分钟该做什么，返回动作和北京时间的今天。过了检查时间才启动（比如服务
 // 停过）的，当天补查一次。
-func decide(cfg autoConfig, now time.Time, running int) (autoAction, string) {
+// busy 是 Registry.Busy：命令、后台任务、长任务和定时任务的执行都算，不只是命令。
+func decide(cfg autoConfig, now time.Time, busy int) (autoAction, string) {
 	local := now.In(shanghai)
 	today := local.Format("2006-01-02")
 	if !cfg.Enabled || cfg.CheckedDate == today {
@@ -72,7 +80,7 @@ func decide(cfg autoConfig, now time.Time, running int) (autoAction, string) {
 	switch {
 	case minute < at:
 		return autoIdle, today
-	case running == 0:
+	case busy == 0:
 		return autoCheck, today
 	case time.Duration(minute-at)*time.Minute >= maxWait:
 		return autoGiveUp, today
@@ -174,7 +182,7 @@ func (u *updater) tick(ctx context.Context, client *bot.Client, now time.Time) {
 	if err != nil {
 		return
 	}
-	action, today := decide(cfg, now, u.a.Registry.Running())
+	action, today := decide(cfg, now, u.a.Registry.Busy())
 	switch action {
 	case autoIdle, autoWait:
 		return
@@ -237,6 +245,12 @@ func (u *updater) autoInstall(ctx context.Context, client *bot.Client, latest *r
 		_ = show("❌ " + command.Escape(reason))
 		return
 	}
+	if !waitIdle(ctx, u.a.Registry.Busy, restartWait) {
+		logger.Info("update.auto_restart_deferred", "latest", latest.TagName, "reason", "work still running")
+		_ = show("⏸ 已安装 " + command.Code(latest.TagName) + "，但还有任务在跑，没有重启；任务结束后用 " +
+			command.Code(u.a.Registry.Prefix()+"restart") + " 重启生效")
+		return
+	}
 	if err := progress("已安装 " + command.Code(latest.TagName) + "，正在重启…"); err != nil {
 		logger.Warn("update.auto_notice_failed", "error", err.Error())
 	}
@@ -244,4 +258,15 @@ func (u *updater) autoInstall(ctx context.Context, client *bot.Client, latest *r
 		logger.Error("update.auto_restart_failed", "error", err.Error())
 		_ = show("❌ 已安装 " + command.Code(latest.TagName) + "，但重启没提交成功，可以手动重启服务\n状态：\n" + u.restarter.Status(ctx))
 	}
+}
+
+// waitIdle 等到 busy 为 0，最多等 limit；ctx 取消或等不到时返回 false。
+func waitIdle(ctx context.Context, busy func() int, limit time.Duration) bool {
+	deadline := time.Now().Add(limit)
+	for busy() > 0 {
+		if !time.Now().Before(deadline) || kit.Sleep(ctx, idlePoll) != nil {
+			return false
+		}
+	}
+	return ctx.Err() == nil
 }
