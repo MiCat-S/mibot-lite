@@ -1,5 +1,5 @@
 // Package command 是命令的注册表和分发器：从发出的消息里解析出前缀和
-// 命令名，在单独的 goroutine 里带超时运行对应的处理函数。
+// 命令名，在有界工作池里带超时运行对应的处理函数。
 package command
 
 import (
@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -183,8 +184,11 @@ type Registry struct {
 	prefixes []string
 	jobs     []Job
 	logger   *slog.Logger
-	sem      chan struct{}
-	inFlight sync.WaitGroup
+	// pool 跑命令；tasks 跑代发这类短后台任务；long 跑 .da 这类按小时计的任务。
+	// 三者分开，长任务占满了也挡不住命令和代发。
+	pool  *scheduler
+	tasks *scheduler
+	long  *scheduler
 	// life 在 Abort 时取消，所有正在跑和排队的命令都挂在它上面。
 	life  context.Context
 	abort context.CancelFunc
@@ -198,14 +202,46 @@ func New(prefixes []string, logger *slog.Logger) *Registry {
 	if len(prefixes) == 0 {
 		prefixes = []string{"."}
 	}
+	if logger == nil {
+		logger = slog.Default()
+	}
 	life, abort := context.WithCancel(context.Background())
-	return &Registry{commands: map[string]*Command{}, prefixes: prefixes, logger: logger, sem: make(chan struct{}, 16),
-		life: life, abort: abort}
+	return &Registry{commands: map[string]*Command{}, prefixes: append([]string(nil), prefixes...), logger: logger,
+		life: life, abort: abort, pool: newScheduler(life, logger, commandWorkers, commandQueue),
+		tasks: newScheduler(life, logger, taskWorkers, taskQueue), long: newScheduler(life, logger, LongTasks, LongTasks)}
 }
 
 // Abort 中断所有正在跑和排队的命令，之后收到的命令也不再执行。进程退出（包括重启）前调用：
 // 重启常常就是为了掐断卡住的命令，不能让它们拖着不退，也不该等它们跑完。
 func (r *Registry) Abort() { r.abort() }
+
+// Lifecycle 是服务的生命周期：比单次更新回调和单个命令活得久，Abort 时取消。
+// 看别人消息的监听者和脱离命令的后台任务都要挂在它上面，不能用 WithoutCancel 脱离。
+func (r *Registry) Lifecycle() context.Context { return r.life }
+
+// Background 把一件短的后台任务（如代发）交给独立的有界池，不占命令的执行名额。
+// 队列满或 ctx 已取消时返回 false 并记日志；接受了的任务算在 Wait 里。
+func (r *Registry) Background(ctx context.Context, run func(context.Context)) bool {
+	if r.tasks.submit(ctx, run) {
+		return true
+	}
+	r.logger.Warn("task.rejected", slog.String("reason", "queue full or context canceled"))
+	return false
+}
+
+// LongTasks 是同时能跑的长任务个数，也是长任务池的排队上限。
+const LongTasks = 4
+
+// LongRunning 把一件按小时计的任务（如 .da）交给长任务池。这个池和 Background 分开：
+// 长任务占满了也不耽误代发。调用方应自己把同时进行的个数限制在 LongTasks 以内，
+// 否则多出来的会排队等前面的跑完，而不是马上开始。
+func (r *Registry) LongRunning(ctx context.Context, run func(context.Context)) bool {
+	if r.long.submit(ctx, run) {
+		return true
+	}
+	r.logger.Warn("task.rejected", slog.String("pool", "long"), slog.String("reason", "queue full or context canceled"))
+	return false
+}
 
 // Register 添加命令，连同它的别名；名字（包括别名）重复属于编程错误。
 func (r *Registry) Register(commands ...*Command) {
@@ -482,20 +518,7 @@ func (r *Registry) run(ctx context.Context, client *bot.Client, message, trigger
 		logger.Info("command.aborted", slog.String("chat", message.ChatID), slog.Int("message", message.ID), slog.String("reason", "shutting down"))
 		return
 	}
-	r.inFlight.Add(1)
-	go func() {
-		defer r.inFlight.Done()
-		// 命令的 ctx 本身不随更新引擎取消（命令要比派发它的那次调用活得久），
-		// 所以另外挂在 life 上，Abort 时一起取消。
-		live, stop := context.WithCancel(ctx)
-		defer stop()
-		defer context.AfterFunc(r.life, stop)()
-		select {
-		case r.sem <- struct{}{}:
-			defer func() { <-r.sem }()
-		case <-live.Done():
-			return
-		}
+	accepted := r.pool.submit(ctx, func(live context.Context) {
 		runCtx, cancel := live, context.CancelFunc(func() {})
 		switch {
 		case command.Timeout == NoTimeout:
@@ -507,8 +530,8 @@ func (r *Registry) run(ctx context.Context, client *bot.Client, message, trigger
 		defer cancel()
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				inv.Log.Error("command.panic", slog.Any("panic", recovered))
-				_ = inv.EditText(context.WithoutCancel(ctx), "❌ 命令执行时发生内部错误")
+				inv.Log.Error("command.panic", slog.Any("panic", recovered), slog.String("stack", string(debug.Stack())))
+				r.reportError(live, inv, "❌ 命令执行时发生内部错误")
 			}
 		}()
 		started := time.Now()
@@ -538,29 +561,64 @@ func (r *Registry) run(ctx context.Context, client *bot.Client, message, trigger
 				attrs = append(attrs, slog.String("error", err.Error()))
 			}
 			inv.Log.Log(context.Background(), level, "command.refused", attrs...)
-			_ = inv.EditText(context.WithoutCancel(ctx), "❌ "+text)
+			r.reportError(live, inv, "❌ "+text)
 		case errors.Is(err, context.DeadlineExceeded):
 			inv.Log.Warn("command.timeout", slog.String("chat", message.ChatID))
-			_ = inv.EditText(context.WithoutCancel(ctx), "❌ 命令执行超时")
+			r.reportError(live, inv, "❌ 命令执行超时")
 		default:
 			inv.Log.Error("command.failed", slog.String("chat", message.ChatID), slog.Int("message", message.ID), slog.String("error", err.Error()))
-			_ = inv.EditText(context.WithoutCancel(ctx), "❌ 命令执行失败："+Brief(err))
+			r.reportError(live, inv, "❌ 命令执行失败："+Brief(err))
 		}
-	}()
+	})
+	if !accepted {
+		logger.Warn("command.rejected", slog.String("chat", message.ChatID), slog.Int("message", message.ID),
+			slog.String("reason", "queue full or context canceled"))
+	}
+}
+
+// reportError 把失败原因写回命令消息。命令可能已经超时，所以另给 5 秒期限，
+// 但仍随服务退出取消：发不出去的提示不能一直占着执行名额。
+func (r *Registry) reportError(ctx context.Context, inv *Invocation, text string) {
+	if inv.Client == nil || r.life.Err() != nil || ctx.Err() != nil {
+		return
+	}
+	feedback, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	_ = inv.EditText(feedback, text)
 }
 
 // Running 是正在执行的命令数（占着执行名额的，不含排队的）。自动更新要重启服务，
 // 等它为 0 时再装，免得把正在跑的命令掐断。
-func (r *Registry) Running() int { return len(r.sem) }
+func (r *Registry) Running() int { return r.pool.count() }
 
-// Wait 阻塞到正在运行的命令全部结束，或者超时为止。
+// Wait 阻塞到三个池都空闲，或者超时为止。Abort 之后不再接受新任务，
+// 这时它等的是所有已经接受的命令和任务，包括还在排队的。
 func (r *Registry) Wait(timeout time.Duration) bool {
-	done := make(chan struct{})
-	go func() { r.inFlight.Wait(); close(done) }()
-	select {
-	case <-done:
-		return true
-	case <-time.After(timeout):
-		return false
+	deadline := time.Now().Add(timeout)
+	pools := []*scheduler{r.long, r.tasks, r.pool}
+	for {
+		for _, pool := range pools {
+			if !pool.wait(max(0, time.Until(deadline))) {
+				return false
+			}
+		}
+		// 代发会提交命令，命令又会启动后台任务：逐个等完之后，前面的池可能又忙了，
+		// 要同时锁住所有池确认都空着才算完。
+		for _, pool := range pools {
+			pool.mu.Lock()
+		}
+		idle := true
+		for _, pool := range pools {
+			idle = idle && pool.workers == 0
+		}
+		for _, pool := range pools {
+			pool.mu.Unlock()
+		}
+		if idle {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
 	}
 }

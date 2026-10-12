@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -26,19 +27,41 @@ var ErrTooLarge = errors.New("response body exceeds the size limit")
 var shared = &http.Client{
 	Transport: &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
-		MaxIdleConns:          4,
-		IdleConnTimeout:       30 * time.Second,
+		DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		MaxIdleConns:          32,
+		MaxIdleConnsPerHost:   8,
+		MaxConnsPerHost:       16,
+		IdleConnTimeout:       90 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: time.Second,
 		ForceAttemptHTTP2:     true,
 	},
-	CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		if len(via) >= 3 {
-			return errors.New("too many redirects")
-		}
-		return nil
-	},
+	CheckRedirect: checkRedirect,
+}
+
+// ErrCredentialRedirect 表示带凭证的请求被重定向到了别的源，已拒绝跟随。
+var ErrCredentialRedirect = errors.New("refusing credential redirect to another origin")
+
+// credentialHeaders 是各家 API 放密钥的请求头。Go 跨域重定向时只会清掉 Authorization、
+// Cookie 等标准头，x-api-key 这类自定义头会原样带到新地址，307/308 还会连正文一起转发。
+var credentialHeaders = []string{"Authorization", "Cookie", "X-Api-Key", "Api-Key", "X-Goog-Api-Key"}
+
+// checkRedirect 最多跟随三次重定向；最初的请求带了凭证（请求头或 URL 里的 key 参数）时，
+// 只允许重定向到同一个源（scheme + host）。
+func checkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 3 {
+		return errors.New("too many redirects")
+	}
+	first := via[0]
+	credential := first.URL.Query().Get("key") != ""
+	for _, name := range credentialHeaders {
+		credential = credential || first.Header.Get(name) != ""
+	}
+	if credential && (!strings.EqualFold(req.URL.Host, first.URL.Host) || req.URL.Scheme != first.URL.Scheme) {
+		return ErrCredentialRedirect
+	}
+	return nil
 }
 
 // Request 描述一次调用。
@@ -47,6 +70,8 @@ type Request struct {
 	URL     string
 	Headers map[string]string
 	Body    []byte
+	// NoRedirect 不跟随重定向，用于 URL 里带凭证、或者正文不能转给别处的请求。
+	NoRedirect bool
 	// Timeout 限制整个调用的时长。零值表示 30 秒。
 	Timeout time.Duration
 	// MaxBytes 限制响应体大小。零值表示 2 MB。
@@ -90,7 +115,13 @@ func Do(ctx context.Context, request Request) (Response, error) {
 	for key, value := range request.Headers {
 		req.Header.Set(key, value)
 	}
-	resp, err := shared.Do(req)
+	client := shared
+	if request.NoRedirect {
+		copy := *shared // 只换重定向策略，Transport 和连接池仍然共用。
+		copy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		client = &copy
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return Response{}, err
 	}

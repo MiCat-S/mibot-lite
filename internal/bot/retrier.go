@@ -3,6 +3,8 @@ package bot
 import (
 	"context"
 	"log/slog"
+	"math/rand/v2"
+	"sync"
 	"time"
 
 	"github.com/gotd/td/bin"
@@ -14,11 +16,11 @@ import (
 // Retrier 是连接中间件，补上 MiBox 所用的 teleproto 对每个请求都做、gotd 不做的两种重试：
 //
 //   - FLOOD_WAIT：要求等的时间不超过 MaxWait 时等够再重试（teleproto 的 floodSleepThreshold，默认 60 秒）。
-//   - Telegram 服务端内部错误（5xx、RPC_CALL_FAIL、RPC_MCGET_FAIL）：等 2 秒重试。
+//   - Telegram 服务端内部错误（5xx、RPC_CALL_FAIL、RPC_MCGET_FAIL）：采用有上限的指数退避和抖动。
 //
 // 两种都最多重试 Attempts 次（teleproto 的 requestRetries，默认 5），之后把错误交给调用方。
-// 这两种错误都表示请求没被执行，重试不会重复操作。从 MiBox 移植来的命令都默认有这层
-// 保护，以前没有时，几秒的限流就会让整条命令失败。
+// FLOOD_WAIT 会让同方法的并发调用共享冷却时间。发送请求重试时保留 RandomID；
+// 5xx 不保证任意写操作都幂等，新增写方法时必须单独评估重试语义。
 //
 // updates.getChannelDifference 例外，见 selfRecovering。
 type Retrier struct {
@@ -26,7 +28,9 @@ type Retrier struct {
 	MaxWait  time.Duration
 	Attempts int
 	// sleep 默认是按 ctx 可取消地等待，测试里换掉。
-	sleep func(ctx context.Context, d time.Duration) error
+	sleep  func(ctx context.Context, d time.Duration) error
+	now    func() time.Time
+	jitter func(time.Duration) time.Duration
 }
 
 // serverFailure 是 teleproto 等 2 秒重试的那类错误。
@@ -63,30 +67,89 @@ func (f Retrier) Handle(next tg.Invoker) telegram.InvokeFunc {
 			}
 		}
 	}
+	now := f.now
+	if now == nil {
+		now = time.Now
+	}
+	jitter := f.jitter
+	if jitter == nil {
+		jitter = func(d time.Duration) time.Duration { return time.Duration(rand.Int64N(int64(d/4) + 1)) }
+	}
+	var mu sync.Mutex
+	type cooldown struct {
+		until time.Time
+		err   error
+	}
+	blocked := make(map[string]cooldown)
 	return func(ctx context.Context, input bin.Encoder, output bin.Decoder) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if selfRecovering(input) {
 			return next.Invoke(ctx, input, output)
 		}
-		for attempt := 1; ; attempt++ {
-			err := next.Invoke(ctx, input, output)
-			if err == nil || attempt > f.Attempts {
-				return err
-			}
-			var wait time.Duration
-			if flood, flooded := tgerr.AsFloodWait(err); flooded {
-				if flood > f.MaxWait {
+		method := methodName(input)
+		serverErrors := 0
+		for attempt := 0; ; attempt++ {
+			// 睡醒后要再查一遍：等的这段时间里别的调用可能又延长了冷却。
+			// 网络调用期间绝不持有 mu。
+			for {
+				if err := ctx.Err(); err != nil {
 					return err
 				}
-				// 多等一秒：Telegram 给的秒数是取整后的，掐着点重试常常又被限。
-				wait = flood + time.Second
-				f.log("rpc.flood_wait", input, flood, attempt)
-			} else if serverFailure(err) {
-				wait = 2 * time.Second
-				f.log("rpc.server_error", input, wait, attempt)
-			} else {
+				mu.Lock()
+				entry := blocked[method]
+				wait := entry.until.Sub(now())
+				if wait <= 0 {
+					delete(blocked, method)
+				}
+				mu.Unlock()
+				if wait <= 0 {
+					break
+				}
+				if wait > f.MaxWait+time.Second {
+					return entry.err
+				}
+				if err := sleep(ctx, wait); err != nil {
+					return err
+				}
+			}
+			err := next.Invoke(ctx, input, output)
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if err == nil {
+				return nil
+			}
+			if flood, flooded := tgerr.AsFloodWait(err); flooded {
+				wait := flood + time.Second
+				mu.Lock()
+				at := now()
+				for name, entry := range blocked {
+					if !entry.until.After(at) {
+						delete(blocked, name)
+					}
+				}
+				until := at.Add(wait)
+				if until.After(blocked[method].until) {
+					blocked[method] = cooldown{until: until, err: err}
+				}
+				mu.Unlock()
+				if attempt >= f.Attempts || flood > f.MaxWait {
+					return err
+				}
+				f.log("rpc.flood_wait", input, wait, attempt+1)
+				continue
+			}
+			if !serverFailure(err) || attempt >= f.Attempts {
 				return err
 			}
-			if sleep(ctx, wait) != nil {
+			// 依次等 2、4、8、16 秒，再加最多 25% 的随机抖动，免得并发失败的请求同时重试。
+			delay := 2 * time.Second << min(serverErrors, 3)
+			serverErrors++
+			wait := delay + jitter(delay)
+			f.log("rpc.server_error", input, wait, attempt+1)
+			if err := sleep(ctx, wait); err != nil {
 				return err
 			}
 		}

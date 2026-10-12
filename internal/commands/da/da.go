@@ -192,21 +192,26 @@ func (s *daService) report(ctx context.Context, inv *command.Invocation, sub str
 }
 
 // start 启动删除任务，返回是否真的启动了；同一个群已经有任务在跑就不启动。
+// 同时在删的群已经有 command.LongTasks 个时报错：再开的话只能排队干等，不如直说。
 //
-// 删除会比命令本身活得久，所以跑在一个脱离了命令超时的 context 上，
+// 删除会比命令本身活得久，所以跑在服务的生命周期上、不受命令超时限制，
 // 只有 .da stop 或者进程退出才会取消它。
-func (s *daService) start(ctx context.Context, inv *command.Invocation) bool {
+func (s *daService) start(inv *command.Invocation) (bool, error) {
 	id, message, client := inv.Message.ChatID, inv.Message, inv.Client
 	s.mu.Lock()
 	if _, running := s.active[id]; running {
 		s.mu.Unlock()
-		return false
+		return false, nil
 	}
-	taskCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	if len(s.active) >= command.LongTasks {
+		s.mu.Unlock()
+		return false, kit.Failf("已经有 %d 个群在删除，等其中一个结束后再开始", command.LongTasks)
+	}
+	taskCtx, cancel := context.WithCancel(s.a.Registry.Lifecycle())
 	slot := &daSlot{cancel: cancel}
 	s.active[id] = slot
 	s.mu.Unlock()
-	go func() {
+	accepted := s.a.Registry.LongRunning(taskCtx, func(taskCtx context.Context) {
 		defer cancel()
 		defer func() {
 			s.mu.Lock()
@@ -214,8 +219,16 @@ func (s *daService) start(ctx context.Context, inv *command.Invocation) bool {
 			s.mu.Unlock()
 		}()
 		s.run(taskCtx, client, slot, id, message)
-	}()
-	return true
+	})
+	if !accepted {
+		// 只有服务正在退出时才会走到这里：个数已经在上面限制过了。
+		cancel()
+		s.mu.Lock()
+		delete(s.active, id)
+		s.mu.Unlock()
+		return false, kit.Fail("服务正在退出，没有开始删除")
+	}
+	return true, nil
 }
 
 // Register 注册 .da。任务存在 data/da.json；启动时把上次没跑完的任务标成暂停。
@@ -237,7 +250,11 @@ func Register(a *app.App) {
 				service.report(ctx, inv, sub)
 			case "true":
 				// 启动了的话，命令消息由任务在查完权限之后自己删。
-				if service.start(ctx, inv) {
+				started, err := service.start(inv)
+				if err != nil {
+					return err
+				}
+				if started {
 					return nil
 				}
 			default:
@@ -292,7 +309,14 @@ func (s *daService) finish(ctx context.Context, client *bot.Client, task *daTask
 	case completed:
 		status = "任务完成"
 	}
-	s.progress(context.WithoutCancel(ctx), client, task, status)
+	// 任务的 ctx 可能已经被 .da stop 取消，报告改挂在服务的生命周期上，另给 5 秒期限。
+	life := context.WithoutCancel(ctx)
+	if s.a != nil && s.a.Registry != nil {
+		life = s.a.Registry.Lifecycle()
+	}
+	feedback, cancel := context.WithTimeout(life, 5*time.Second)
+	defer cancel()
+	s.progress(feedback, client, task, status)
 	if completed && len(task.Errors) == 0 {
 		err := s.store.Update(func(db *daDB) error {
 			var kept []daTask

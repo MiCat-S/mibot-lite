@@ -232,7 +232,7 @@ func relay(ctx context.Context, a *app.App, client *bot.Client, trigger *bot.Mes
 	if !ok {
 		return
 	}
-	a.Registry.DispatchFor(ctx, client, envelope, trigger, delegationAllowed)
+	a.Registry.DispatchFor(a.Registry.Lifecycle(), client, envelope, trigger, delegationAllowed)
 }
 
 // resolveUser 找出要加进名单的用户：参数是数字 ID 或 @用户名，没有参数就取被回复消息的发送者。
@@ -508,8 +508,8 @@ func manageRules(ctx context.Context, inv *command.Invocation, saved *store.Stor
 // sureDelay 是触发消息被删掉前等待的时间，照 MiBox 是 5 秒；测试里改短。
 var sureDelay = 5 * time.Second
 
-// inBackground 让代发在后台进行，不耽误处理后面的更新；测试里换成直接执行。
-var inBackground = func(work func()) { go work() }
+// inBackground 是代发执行钩子；后台调度和生命周期由 Registry.Background 管理。
+var inBackground = func(work func()) { work() }
 
 // Register 注册 .sudo 和 .sure，并在应用里挂上看别人消息的监听者。
 // 先问 sure 再问 sudo：sure 的规则更具体，还可能带重定向。
@@ -530,11 +530,13 @@ func Register(a *app.App) {
 		if !ok {
 			return false
 		}
-		inBackground(func() {
-			relay(ctx, a, client, message, text, nil)
-			if kit.Sleep(ctx, sureDelay) == nil {
-				_ = client.DeleteMessage(ctx, message)
-			}
+		a.Registry.Background(ctx, func(ctx context.Context) {
+			inBackground(func() {
+				relay(ctx, a, client, message, text, nil)
+				if kit.Sleep(ctx, sureDelay) == nil {
+					_ = client.DeleteMessage(ctx, message)
+				}
+			})
 		})
 		return true
 	})
@@ -560,7 +562,9 @@ func Register(a *app.App) {
 		if message.Raw != nil {
 			entities = message.Raw.Entities
 		}
-		inBackground(func() { relay(ctx, a, client, message, message.Text, entities) })
+		a.Registry.Background(ctx, func(ctx context.Context) {
+			inBackground(func() { relay(ctx, a, client, message, message.Text, entities) })
+		})
 		return true
 	})
 

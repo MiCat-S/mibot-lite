@@ -2,8 +2,11 @@ package tgstate
 
 import (
 	"context"
+	"errors"
+	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/gotd/td/telegram/updates"
 )
@@ -106,5 +109,94 @@ func TestForEachChannelsIsOrdered(t *testing.T) {
 	}
 	if len(seen) != 3 || seen[0] != 10 || seen[2] != 30 {
 		t.Fatalf("visited %v, want ascending order", seen)
+	}
+}
+
+func TestContinuousUpdatesReachDisk(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	state, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.Close()
+	ctx := context.Background()
+	_ = state.SetState(ctx, 1, updates.State{})
+	deadline := time.After(2500 * time.Millisecond)
+	tick := time.NewTicker(20 * time.Millisecond)
+	defer tick.Stop()
+	for pts := 1; ; pts++ {
+		select {
+		case <-tick.C:
+			if err := state.SetPts(ctx, 1, pts); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := os.ReadFile(path)
+			if err == nil && len(raw) > 0 {
+				return
+			}
+		case <-deadline:
+			t.Fatal("continuous writes postponed persistence")
+		}
+	}
+}
+
+func TestCloseRejectsWritesAndCanceledContext(t *testing.T) {
+	state, err := Open(filepath.Join(t.TempDir(), "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := state.SetState(ctx, 1, updates.State{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ignored canceled write: %v", err)
+	}
+	if _, _, err := state.GetState(ctx, 1); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ignored canceled read: %v", err)
+	}
+	if err := state.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.SetState(context.Background(), 1, updates.State{}); !errors.Is(err, ErrClosed) {
+		t.Fatalf("write after close: %v", err)
+	}
+}
+
+func TestFailedFlushRetriesAndCallbackMayReadState(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "blocked")
+	if err := os.WriteFile(parent, []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	state := &State{path: filepath.Join(parent, "state.json"), doc: document{Channels: map[string]int{}, Chans: map[string]int64{}, Users: map[string]int64{}}}
+	defer state.Close()
+	failed := make(chan struct{}, 1)
+	state.OnFlushError = func(error) {
+		_, _, _ = state.GetState(context.Background(), 1)
+		select {
+		case failed <- struct{}{}:
+		default:
+		}
+	}
+	_ = state.SetState(context.Background(), 1, updates.State{Pts: 7})
+	select {
+	case <-failed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("callback deadlocked or did not run")
+	}
+	if err := os.Remove(parent); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.After(2 * time.Second)
+	tick := time.NewTicker(20 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case <-tick.C:
+			if _, err := os.Stat(state.path); err == nil {
+				return
+			}
+		case <-deadline:
+			t.Fatal("failed flush was never retried")
+		}
 	}
 }

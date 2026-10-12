@@ -10,8 +10,10 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -140,22 +142,41 @@ func Prepare(ctx context.Context, options Options) (*App, error) {
 	}
 	env := config.ReadEnv(root, os.Environ())
 
-	storage := &gotdsession.FileStorage{Path: filepath.Join(root, config.SessionFile)}
-	if _, err := session.Import(ctx, storage, cfg.Session, false); err != nil {
-		return nil, fmt.Errorf("convert session: %w", err)
-	}
-
 	var lock *os.File
+	prepared := false
 	if !options.ReadOnly {
 		if lock, err = LockRoot(root); err != nil {
 			return nil, err
 		}
+		defer func() {
+			if !prepared {
+				_ = lock.Close()
+			}
+		}()
 	}
-	if err := os.MkdirAll(filepath.Join(root, "data"), 0o700); err != nil {
-		if lock != nil {
-			lock.Close()
+
+	var storage gotdsession.Storage = &gotdsession.FileStorage{Path: filepath.Join(root, config.SessionFile)}
+	if options.ReadOnly {
+		// 只读检查：已有的会话文件照样读出来校验，但导入写进内存，不创建会话文件。
+		data, err := storage.LoadSession(ctx)
+		if err != nil && !errors.Is(err, gotdsession.ErrNotFound) {
+			return nil, fmt.Errorf("inspect session: %w", err)
 		}
-		return nil, err
+		memory := &gotdsession.StorageMemory{}
+		if err == nil {
+			if err := memory.StoreSession(ctx, data); err != nil {
+				return nil, err
+			}
+		}
+		storage = memory
+	}
+	if _, err := session.Import(ctx, storage, cfg.Session, false); err != nil {
+		return nil, fmt.Errorf("convert session: %w", err)
+	}
+	if !options.ReadOnly {
+		if err := os.MkdirAll(filepath.Join(root, "data"), 0o700); err != nil {
+			return nil, err
+		}
 	}
 
 	app := &App{Root: root, Version: options.Version, Logger: logger, Config: cfg, Env: env,
@@ -218,7 +239,6 @@ func Prepare(ctx context.Context, options Options) (*App, error) {
 		}
 		dialer, err := proxy.SOCKS5("tcp", net.JoinHostPort(cfg.Proxy.IP, strconv.Itoa(cfg.Proxy.Port)), auth, &net.Dialer{Timeout: 10 * time.Second})
 		if err != nil {
-			lock.Close()
 			return nil, fmt.Errorf("proxy: %w", err)
 		}
 		clientOptions.Resolver = dcs.Plain(dcs.PlainOptions{Dial: dialer.(proxy.ContextDialer).DialContext})
@@ -227,6 +247,7 @@ func Prepare(ctx context.Context, options Options) (*App, error) {
 	if options.Register != nil {
 		options.Register(app)
 	}
+	prepared = true
 	return app, nil
 }
 
@@ -399,7 +420,7 @@ func (a *App) handle(ctx context.Context, entities tg.Entities, message tg.Messa
 		return
 	case !mine:
 		// 别人的消息：转发的、编辑过的不算，其余交给借用规则看一眼。
-		if !envelope.Edited && !envelope.Forward && a.OfferForeign(context.WithoutCancel(ctx), client, envelope) {
+		if !envelope.Edited && !envelope.Forward && a.OfferForeign(a.Registry.Lifecycle(), client, envelope) {
 			return
 		}
 		drop("not written by this account")
@@ -411,7 +432,7 @@ func (a *App) handle(ctx context.Context, entities tg.Entities, message tg.Messa
 		drop("forwarded")
 		return
 	}
-	if !a.Registry.Dispatch(context.WithoutCancel(ctx), client, envelope) {
+	if !a.Registry.Dispatch(a.Registry.Lifecycle(), client, envelope) {
 		drop("no command matched")
 	}
 }
@@ -468,6 +489,9 @@ func (a *App) DispatchMessage(ctx context.Context, message *tg.Message) bool {
 
 // Close 释放锁并把状态刷写到磁盘。
 func (a *App) Close() error {
+	if a.Registry != nil {
+		a.stopCommands()
+	}
 	if a.state != nil {
 		if err := a.state.Close(); err != nil && a.Logger != nil {
 			a.Logger.Warn("updates.state_flush_failed", slog.String("error", err.Error()))
@@ -499,30 +523,53 @@ func (a *App) Run(ctx context.Context) error {
 		defer client.CloseDataCentres()
 		a.bot.Store(client)
 		a.Logger.Info("runtime.ready", slog.Int64("account", self.ID), slog.Int("commands", len(a.Registry.Commands())), slog.String("version", a.Version))
-		for _, job := range a.Registry.Jobs() {
-			go job(ctx, client)
+		jobsCtx, stopJobs := context.WithCancel(ctx)
+		var jobs sync.WaitGroup
+		for index, job := range a.Registry.Jobs() {
+			jobs.Go(func() {
+				defer func() {
+					if recovered := recover(); recovered != nil {
+						a.Logger.Error("job.panic", slog.Int("job", index), slog.Any("panic", recovered), slog.String("stack", string(debug.Stack())))
+					}
+				}()
+				job(jobsCtx, client)
+			})
 		}
+		defer func() {
+			stopJobs()
+			a.stopCommands()
+			done := make(chan struct{})
+			go func() { jobs.Wait(); close(done) }()
+			timer := time.NewTimer(2 * time.Second)
+			defer timer.Stop()
+			select {
+			case <-done:
+			case <-timer.C:
+				a.Logger.Warn("shutdown.jobs_lingering")
+			}
+			a.bot.Store(nil)
+		}()
 		if a.options.AfterReady != nil {
 			// 更新引擎在运行，命令才会被分发，所以钩子和它并行运行，
 			// 钩子结束时再把它停掉。
 			serving, stop := context.WithCancel(ctx)
 			defer stop()
-			hookErr := make(chan error, 1)
-			go func() {
-				// 发第一条消息之前，给更新引擎一点时间加载状态。
+			jobs.Go(func() {
+				var hookErr error
+				defer func() {
+					if recovered := recover(); recovered != nil {
+						hookErr = fmt.Errorf("ready hook panic: %v", recovered)
+						a.Logger.Error("hook.panic", slog.Any("panic", recovered), slog.String("stack", string(debug.Stack())))
+					}
+					a.hookResult.Store(&hookErr)
+					stop()
+				}()
 				if err := sleepFor(serving, 2*time.Second); err != nil {
-					hookErr <- nil
 					return
 				}
-				hookErr <- a.options.AfterReady(serving, a, client)
-			}()
-			go func() {
-				err := <-hookErr
-				a.hookResult.Store(&err)
-				stop()
-			}()
+				hookErr = a.options.AfterReady(serving, a, client)
+			})
 			err = a.gaps.Run(serving, a.client.API(), self.ID, updates.AuthOptions{IsBot: self.Bot})
-			a.stopCommands()
 			if result := a.hookResult.Load(); result != nil {
 				return *result
 			}
@@ -532,7 +579,6 @@ func (a *App) Run(ctx context.Context) error {
 			return err
 		}
 		err = a.gaps.Run(ctx, a.client.API(), self.ID, updates.AuthOptions{IsBot: self.Bot})
-		a.stopCommands()
 		return err
 	})
 }

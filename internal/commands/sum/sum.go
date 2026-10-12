@@ -673,7 +673,7 @@ func sumHelp(prefix string) string {
 
 // Register 注册 .sum 及其定时任务。
 func Register(a *app.App, models *ai.Service) {
-	service := &sumService{a: a, models: models, store: kit.NewStore(a, "sum.json", sumDefaults), cron: cron.New(cron.WithParser(sumCronParser)),
+	service := &sumService{a: a, models: models, store: kit.NewStore(a, "sum.json", sumDefaults), cron: cron.New(cron.WithParser(sumCronParser), cron.WithChain(cron.Recover(cron.DefaultLogger))),
 		entries: map[string]cron.EntryID{}, running: map[string]bool{}}
 	a.Registry.AddJob(func(ctx context.Context, client *bot.Client) {
 		service.mu.Lock()
@@ -691,7 +691,7 @@ func Register(a *app.App, models *ai.Service) {
 		}
 		service.cron.Start()
 		<-ctx.Done()
-		service.cron.Stop()
+		<-service.cron.Stop().Done()
 	})
 	a.Registry.Register(&command.Command{Name: "sum", Group: command.GroupAI, Description: "生成群组消息摘要", Usage: "[消息数]", Help: sumHelp, Timeout: 10 * time.Minute,
 		Handle: func(ctx context.Context, inv *command.Invocation) error {

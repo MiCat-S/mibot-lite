@@ -2,7 +2,6 @@ package checkin
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -12,9 +11,9 @@ import (
 	"github.com/gotd/td/tgerr"
 
 	"github.com/MiCat-S/mibot-lite/internal/bot"
+	"github.com/MiCat-S/mibot-lite/internal/botapi"
 	"github.com/MiCat-S/mibot-lite/internal/command"
 	"github.com/MiCat-S/mibot-lite/internal/commands/kit"
-	"github.com/MiCat-S/mibot-lite/internal/httpx"
 )
 
 var (
@@ -24,7 +23,8 @@ var (
 	pollEvery = time.Second
 	gap       = 2 * time.Second
 	// botAPI 是 Bot API 的地址，测试里换成本地的假服务。
-	botAPI = "https://api.telegram.org"
+	botAPI    = "https://api.telegram.org"
+	botPusher = botapi.New()
 )
 
 // signOne 签到一个目标：发签到命令，等对方回复；要点按钮的，在回复里找到按钮点一下。
@@ -238,17 +238,8 @@ func sendPages(ctx context.Context, client *bot.Client, chat string, pages []str
 // pushViaBot 用 Bot API 把汇总发到 chat。返回的错误里不带 URL：URL 里有 Token。
 func pushViaBot(ctx context.Context, token, chat string, pages []string) error {
 	for _, page := range pages {
-		response, err := httpx.PostJSON(ctx, botAPI+"/bot"+token+"/sendMessage", nil,
-			map[string]any{"chat_id": chat, "text": page, "parse_mode": "HTML", "disable_web_page_preview": true}, 15*time.Second, 1<<20)
-		if err != nil {
-			return errors.New(httpx.Reason(err))
-		}
-		if !response.OK() {
-			var body struct {
-				Description string `json:"description"`
-			}
-			_ = json.Unmarshal(response.Body, &body)
-			return fmt.Errorf("Bot API 返回 HTTP %d：%s", response.Status, body.Description)
+		if err := botPusher.SendHTML(ctx, botAPI, token, chat, page); err != nil {
+			return err
 		}
 	}
 	return nil

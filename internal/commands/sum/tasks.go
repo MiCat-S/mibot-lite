@@ -452,7 +452,7 @@ func (s *sumService) fire(id string) {
 	if task == nil || task.Disabled {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(s.a.Registry.Lifecycle(), 10*time.Minute)
 	defer cancel()
 	err = s.push(ctx, client, *task)
 	target := pushTarget(db, *task)

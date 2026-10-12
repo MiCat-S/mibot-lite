@@ -20,7 +20,10 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/fsutil"
 )
 
-var errNoState = errors.New("update state does not exist")
+var (
+	errNoState = errors.New("update state does not exist")
+	ErrClosed  = errors.New("update state is closed")
+)
 
 type document struct {
 	UserID   int64            `json:"userId"`
@@ -37,11 +40,12 @@ type document struct {
 // State 基于一个 JSON 文件实现 updates.StateStorage、
 // updates.ChannelAccessHasher 和 updates.UserAccessHasher。
 type State struct {
-	path  string
-	mu    sync.Mutex
-	doc   document
-	dirty bool
-	timer *time.Timer
+	path   string
+	mu     sync.Mutex
+	doc    document
+	dirty  bool
+	timer  *time.Timer
+	closed bool
 	// OnFlushError 在后台写盘失败时调用（Open 之后、开始使用之前设置）。写不进去的话，
 	// 重启后会从旧的 pts 补抓，或者丢掉 access hash，这不能悄悄发生。
 	OnFlushError func(error)
@@ -76,8 +80,10 @@ func Open(path string) (*State, error) {
 func (s *State) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.closed = true
 	if s.timer != nil {
 		s.timer.Stop()
+		s.timer = nil
 	}
 	return s.flushLocked()
 }
@@ -89,19 +95,41 @@ func (s *State) Flush() error {
 	return s.flushLocked()
 }
 
+// markDirty 在第一次改动时定一次一秒后的写盘，期间的改动合并进去；不在每次改动时
+// 重新计时，否则更新不断时就一直不落盘。调用方持有 mu。
 func (s *State) markDirty() {
 	s.dirty = true
-	if s.timer == nil {
-		s.timer = time.AfterFunc(time.Second, func() {
-			s.mu.Lock()
-			defer s.mu.Unlock()
-			if err := s.flushLocked(); err != nil && s.OnFlushError != nil {
-				s.OnFlushError(err)
-			}
-		})
-	} else {
-		s.timer.Reset(time.Second)
+	if s.timer != nil || s.closed {
+		return
 	}
+	s.timer = time.AfterFunc(time.Second, func() {
+		s.mu.Lock()
+		s.timer = nil
+		if s.closed {
+			s.mu.Unlock()
+			return
+		}
+		err := s.flushLocked()
+		if err != nil {
+			// 写失败了就再定一次，即使之后没有新的改动也会重试。
+			s.markDirty()
+		}
+		onError := s.OnFlushError
+		s.mu.Unlock()
+		if err != nil && onError != nil {
+			onError(err)
+		}
+	})
+}
+
+func (s *State) writable(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s.closed {
+		return ErrClosed
+	}
+	return nil
 }
 
 func (s *State) flushLocked() error {
@@ -124,6 +152,9 @@ func key(id int64) string { return strconv.FormatInt(id, 10) }
 func (s *State) GetState(ctx context.Context, userID int64) (updates.State, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return updates.State{}, false, err
+	}
 	if !s.doc.HasState || s.doc.UserID != userID {
 		return updates.State{}, false, nil
 	}
@@ -133,6 +164,9 @@ func (s *State) GetState(ctx context.Context, userID int64) (updates.State, bool
 func (s *State) SetState(ctx context.Context, userID int64, state updates.State) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.writable(ctx); err != nil {
+		return err
+	}
 	s.doc.UserID, s.doc.HasState = userID, true
 	s.doc.Pts, s.doc.Qts, s.doc.Date, s.doc.Seq = state.Pts, state.Qts, state.Date, state.Seq
 	s.doc.Channels = map[string]int{}
@@ -140,9 +174,12 @@ func (s *State) SetState(ctx context.Context, userID int64, state updates.State)
 	return nil
 }
 
-func (s *State) setField(userID int64, set func()) error {
+func (s *State) setField(ctx context.Context, userID int64, set func()) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.writable(ctx); err != nil {
+		return err
+	}
 	if !s.doc.HasState || s.doc.UserID != userID {
 		return errNoState
 	}
@@ -152,24 +189,27 @@ func (s *State) setField(userID int64, set func()) error {
 }
 
 func (s *State) SetPts(ctx context.Context, userID int64, pts int) error {
-	return s.setField(userID, func() { s.doc.Pts = pts })
+	return s.setField(ctx, userID, func() { s.doc.Pts = pts })
 }
 func (s *State) SetQts(ctx context.Context, userID int64, qts int) error {
-	return s.setField(userID, func() { s.doc.Qts = qts })
+	return s.setField(ctx, userID, func() { s.doc.Qts = qts })
 }
 func (s *State) SetDate(ctx context.Context, userID int64, date int) error {
-	return s.setField(userID, func() { s.doc.Date = date })
+	return s.setField(ctx, userID, func() { s.doc.Date = date })
 }
 func (s *State) SetSeq(ctx context.Context, userID int64, seq int) error {
-	return s.setField(userID, func() { s.doc.Seq = seq })
+	return s.setField(ctx, userID, func() { s.doc.Seq = seq })
 }
 func (s *State) SetDateSeq(ctx context.Context, userID int64, date, seq int) error {
-	return s.setField(userID, func() { s.doc.Date, s.doc.Seq = date, seq })
+	return s.setField(ctx, userID, func() { s.doc.Date, s.doc.Seq = date, seq })
 }
 
 func (s *State) GetChannelPts(ctx context.Context, userID, channelID int64) (int, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return 0, false, err
+	}
 	if s.doc.UserID != userID {
 		return 0, false, nil
 	}
@@ -178,7 +218,7 @@ func (s *State) GetChannelPts(ctx context.Context, userID, channelID int64) (int
 }
 
 func (s *State) SetChannelPts(ctx context.Context, userID, channelID int64, pts int) error {
-	return s.setField(userID, func() { s.doc.Channels[key(channelID)] = pts })
+	return s.setField(ctx, userID, func() { s.doc.Channels[key(channelID)] = pts })
 }
 
 func (s *State) ForEachChannels(ctx context.Context, userID int64, visit func(ctx context.Context, channelID int64, pts int) error) error {
@@ -199,6 +239,9 @@ func (s *State) ForEachChannels(ctx context.Context, userID int64, visit func(ct
 	s.mu.Unlock()
 	sort.Slice(entries, func(a, b int) bool { return entries[a].id < entries[b].id })
 	for _, item := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err := visit(ctx, item.id, item.pts); err != nil {
 			return err
 		}
@@ -209,6 +252,9 @@ func (s *State) ForEachChannels(ctx context.Context, userID int64, visit func(ct
 func (s *State) SetChannelAccessHash(ctx context.Context, userID, channelID, accessHash int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.writable(ctx); err != nil {
+		return err
+	}
 	if s.doc.Chans[key(channelID)] != accessHash {
 		s.doc.Chans[key(channelID)] = accessHash
 		s.markDirty()
@@ -219,6 +265,9 @@ func (s *State) SetChannelAccessHash(ctx context.Context, userID, channelID, acc
 func (s *State) GetChannelAccessHash(ctx context.Context, userID, channelID int64) (int64, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return 0, false, err
+	}
 	hash, ok := s.doc.Chans[key(channelID)]
 	return hash, ok, nil
 }
@@ -226,6 +275,9 @@ func (s *State) GetChannelAccessHash(ctx context.Context, userID, channelID int6
 func (s *State) SetUserAccessHash(ctx context.Context, userID, targetUserID, accessHash int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.writable(ctx); err != nil {
+		return err
+	}
 	if s.doc.Users[key(targetUserID)] != accessHash {
 		s.doc.Users[key(targetUserID)] = accessHash
 		s.markDirty()
@@ -236,6 +288,9 @@ func (s *State) SetUserAccessHash(ctx context.Context, userID, targetUserID, acc
 func (s *State) GetUserAccessHash(ctx context.Context, userID, targetUserID int64) (int64, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return 0, false, err
+	}
 	hash, ok := s.doc.Users[key(targetUserID)]
 	return hash, ok, nil
 }

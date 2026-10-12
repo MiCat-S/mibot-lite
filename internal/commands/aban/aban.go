@@ -83,7 +83,16 @@ func eachGroupLimit(ctx context.Context, groups []managedGroup, limit int, work 
 		if ctx.Err() != nil {
 			break
 		}
-		slots <- struct{}{}
+		select {
+		case slots <- struct{}{}:
+		case <-ctx.Done():
+			wait.Wait()
+			return
+		}
+		if ctx.Err() != nil {
+			<-slots
+			break
+		}
 		wait.Add(1)
 		go func() {
 			defer func() { <-slots; wait.Done() }()
