@@ -3,6 +3,7 @@ package keyword
 import (
 	"context"
 	"log/slog"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -83,14 +84,29 @@ type service struct {
 	background func(func())
 	// later 安排延时删除，正式运行时是 Registry.After，测试里换成立即记录。
 	later func(time.Duration, func(context.Context))
+	// track 把一次动作算进 Registry.Busy，正式运行时是 Registry.Track；维护或退出期间
+	// 返回 false，这次动作就不做了。
+	track func() (func(), bool)
 	now   func() time.Time
 }
 
-func newService(saved *store.Store[document], logger *slog.Logger, later func(time.Duration, func(context.Context))) *service {
+func newService(saved *store.Store[document], logger *slog.Logger, later func(time.Duration, func(context.Context)),
+	track func() (func(), bool)) *service {
 	return &service{store: saved, logger: logger, slots: make(chan struct{}, 4), warned: map[string]time.Time{},
-		background: func(work func()) { go work() },
-		later:      later,
-		now:        time.Now}
+		background: func(work func()) {
+			go func() {
+				// 单独开的协程里 panic 没人接住会带倒整个进程。
+				defer func() {
+					if recovered := recover(); recovered != nil {
+						logger.Error("keyword.panic", slog.Any("panic", recovered), slog.String("stack", string(debug.Stack())))
+					}
+				}()
+				work()
+			}()
+		},
+		later: later,
+		track: track,
+		now:   time.Now}
 }
 
 // current 返回任务表，第一次用到时从文件读。文件读不了就当没有任务，记一条错误：
@@ -160,8 +176,13 @@ func (s *service) offer(ctx context.Context, client *bot.Client, message *bot.Me
 		s.warnDropped(message.ChatID)
 		return false
 	}
+	done, ok := s.track()
+	if !ok {
+		<-s.slots
+		return false
+	}
 	s.background(func() {
-		defer func() { <-s.slots }()
+		defer func() { <-s.slots; done() }()
 		// 同一条消息命中几条就做几次，和 v2 一样。
 		for _, t := range hits {
 			applyCtx, cancel := context.WithTimeout(ctx, applyTimeout)

@@ -398,3 +398,27 @@ func TestDeliverDoesNotResendPushedPages(t *testing.T) {
 	}
 	botAPI, botPusher = "https://api.telegram.org", botapi.New()
 }
+
+// 汇总对话（这里是收藏夹）的 MTProto 发送已被接受、只是读响应时断了：最后的回退也是收藏夹，
+// 不能换个 RandomID 把同一页再发一遍，只发一条说明。
+func TestDeliverDoesNotReplayUncertainMTProtoSend(t *testing.T) {
+	var texts []string
+	fake := telegram.InvokeFunc(func(_ context.Context, input bin.Encoder, output bin.Decoder) error {
+		request := input.(*tg.MessagesSendMessageRequest)
+		texts = append(texts, request.Message)
+		if len(texts) == 1 {
+			return io.ErrUnexpectedEOF
+		}
+		output.(*tg.UpdatesBox).Updates = &tg.UpdateShortSentMessage{ID: len(texts)}
+		return nil
+	})
+	peers := bot.NewPeerCache()
+	peers.SetSelf(100)
+	client := bot.FromAPI(tg.NewClient(fake), peers, &tg.User{ID: 100}, slog.New(slog.DiscardHandler))
+	if err := deliver(context.Background(), client, config{LogChat: "me"}, "test summary", nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(texts) != 2 || texts[1] == texts[0] || !strings.Contains(texts[1], "不确定是否送达") {
+		t.Fatalf("收藏夹收到：%q", texts)
+	}
+}

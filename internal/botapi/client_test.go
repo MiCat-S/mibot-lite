@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MiCat-S/mibot-lite/internal/delivery"
 	"github.com/MiCat-S/mibot-lite/internal/httpx"
 )
 
@@ -120,7 +121,7 @@ func TestDoesNotReplayAmbiguousSend(t *testing.T) {
 		calls++
 		return httpx.Response{Status: 500, Body: []byte(`{"ok":false,"error_code":500}`)}, nil
 	}
-	if err := c.SendHTML(context.Background(), "https://example.test", "T", "1", "x"); !Uncertain(err) || calls != 1 {
+	if err := c.SendHTML(context.Background(), "https://example.test", "T", "1", "x"); !delivery.Uncertain(err) || calls != 1 {
 		t.Fatalf("ambiguous send retried or not marked uncertain: calls=%d err=%v", calls, err)
 	}
 }
@@ -131,19 +132,19 @@ func TestDefiniteFailuresAreNotUncertain(t *testing.T) {
 	c.post = func(context.Context, string, map[string]string, any, time.Duration, int64) (httpx.Response, error) {
 		return httpx.Response{Status: 400, Body: []byte(`{"ok":false,"error_code":400,"description":"Bad Request: chat not found"}`)}, nil
 	}
-	if err := c.SendHTML(context.Background(), "https://example.test", "T", "1", "x"); err == nil || Uncertain(err) {
+	if err := c.SendHTML(context.Background(), "https://example.test", "T", "1", "x"); err == nil || delivery.Uncertain(err) {
 		t.Fatalf("400 marked uncertain: %v", err)
 	}
 	c.post = func(context.Context, string, map[string]string, any, time.Duration, int64) (httpx.Response, error) {
 		return httpx.Response{}, &net.OpError{Op: "dial", Err: errors.New("connection refused")}
 	}
-	if err := c.SendHTML(context.Background(), "https://example.test", "T", "1", "x"); err == nil || Uncertain(err) {
+	if err := c.SendHTML(context.Background(), "https://example.test", "T", "1", "x"); err == nil || delivery.Uncertain(err) {
 		t.Fatalf("dial failure marked uncertain: %v", err)
 	}
 	c.post = func(context.Context, string, map[string]string, any, time.Duration, int64) (httpx.Response, error) {
 		return httpx.Response{}, &net.OpError{Op: "read", Err: errors.New("connection reset")}
 	}
-	if err := c.SendHTML(context.Background(), "https://example.test", "T", "1", "x"); !Uncertain(err) {
+	if err := c.SendHTML(context.Background(), "https://example.test", "T", "1", "x"); !delivery.Uncertain(err) {
 		t.Fatalf("read failure not marked uncertain: %v", err)
 	}
 }

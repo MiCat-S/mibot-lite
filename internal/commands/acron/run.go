@@ -178,9 +178,15 @@ func (s *service) fire(id string) {
 
 // execute 执行一次任务，把结果或错误记进任务，列表里能看到。
 func (s *service) execute(ctx context.Context, client *bot.Client, id string) {
-	// 算进 Registry.Busy：自动更新不在任务执行到一半时重启。
+	// 算进 Registry.Busy：自动更新不在任务执行到一半时重启。服务正要重启时就不开始了，
+	// 这次执行算错过。
 	if s.registry != nil {
-		defer s.registry.Track()()
+		done, ok := s.registry.Track()
+		if !ok {
+			s.log.Info("acron.skipped", "task", id, "reason", "maintenance or shutting down")
+			return
+		}
+		defer done()
 	}
 	st, err := s.read()
 	if err != nil {
@@ -352,7 +358,7 @@ func (s *service) runCommand(ctx context.Context, client *bot.Client, peer tg.In
 		// 命令异步执行，这里等不到它的结果，只能说交出去了。
 		return "已提交执行命令", nil
 	case command.Rejected:
-		return "", kit.Fail("命令已发出，但当时同时执行的命令太多（或服务正在退出），没有执行")
+		return "", kit.Fail("命令已发出，但当时同时执行的命令太多（或服务正在更新、退出），没有执行")
 	}
 	return "已发送命令（未执行：不是可用的命令，检查前缀和命令名）", nil
 }

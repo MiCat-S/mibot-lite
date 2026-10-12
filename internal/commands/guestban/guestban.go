@@ -192,7 +192,13 @@ func (s *service) work(ctx context.Context, client *bot.Client) {
 		case <-ctx.Done():
 			return
 		case item := <-s.queue:
-			s.process(ctx, client, item)
+			// 算进 Registry.Busy；服务正要重启时这条就不处理了。
+			if done, ok := s.a.Registry.Track(); ok {
+				func() {
+					defer done()
+					s.process(ctx, client, item)
+				}()
+			}
 		}
 	}
 }

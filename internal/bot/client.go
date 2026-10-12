@@ -20,6 +20,8 @@ import (
 	"github.com/gotd/td/telegram/uploader"
 	"github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"
+
+	"github.com/MiCat-S/mibot-lite/internal/delivery"
 )
 
 // ErrUnaddressablePeer 表示不知道某个 peer 的 access hash。客户端从不
@@ -242,9 +244,21 @@ func (c *Client) send(ctx context.Context, peer tg.InputPeerClass, text string, 
 	}
 	updates, err := c.api.MessagesSendMessage(ctx, request)
 	if err != nil {
-		return 0, err
+		return 0, sendFailure(err)
 	}
-	return unpack.MessageID(updates, nil)
+	id, err := unpack.MessageID(updates, nil)
+	// 拿到了结果却认不出消息 ID：消息其实已经发出去了。
+	return id, delivery.Unknown(err)
+}
+
+// sendFailure 区分发送失败的两种情况。Telegram 明确回了 4xx 类的 RPC 错误（包括限流）
+// 说明没有执行；内部错误（5xx）、连接断开、读响应失败、等待中被取消，消息都可能已经发出，
+// 标成 delivery.Unknown。错误文字不变，tgerr.Is 之类的判断照常可用。
+func sendFailure(err error) error {
+	if rpcErr, ok := tgerr.As(err); ok && rpcErr.Code < 500 {
+		return err
+	}
+	return delivery.Unknown(err)
 }
 
 // SendSelf 发到收藏夹。

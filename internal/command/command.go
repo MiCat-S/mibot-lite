@@ -195,6 +195,8 @@ type Registry struct {
 	timers  atomic.Int32
 	// tracked 是 Track 记下的、不在这几个池里的业务工作（如定时任务的一次执行）。
 	tracked atomic.Int32
+	// gate 是维护闸门，见 Quiesce。
+	gate *gate
 	// life 在 Abort 时取消，所有正在跑和排队的命令都挂在它上面。
 	life  context.Context
 	abort context.CancelFunc
@@ -212,10 +214,14 @@ func New(prefixes []string, logger *slog.Logger) *Registry {
 		logger = slog.Default()
 	}
 	life, abort := context.WithCancel(context.Background())
-	return &Registry{commands: map[string]*Command{}, prefixes: append([]string(nil), prefixes...), logger: logger,
+	r := &Registry{commands: map[string]*Command{}, prefixes: append([]string(nil), prefixes...), logger: logger,
 		life: life, abort: abort, pool: newScheduler(life, logger, commandWorkers, commandQueue),
 		tasks: newScheduler(life, logger, taskWorkers, taskQueue), long: newScheduler(life, logger, LongTasks, LongTasks),
-		delayed: newScheduler(life, logger, delayedWorkers, delayedQueue)}
+		delayed: newScheduler(life, logger, delayedWorkers, delayedQueue), gate: &gate{}}
+	for _, pool := range []*scheduler{r.pool, r.tasks, r.long, r.delayed} {
+		pool.gate = r.gate
+	}
+	return r
 }
 
 // Abort 中断所有正在跑和排队的命令，之后收到的命令也不再执行。进程退出（包括重启）前调用：
@@ -232,7 +238,7 @@ func (r *Registry) Background(ctx context.Context, run func(context.Context)) bo
 	if r.tasks.submit(ctx, run) {
 		return true
 	}
-	r.logger.Warn("task.rejected", slog.String("reason", "queue full or context canceled"))
+	r.logger.Warn("task.rejected", slog.String("reason", "queue full, maintenance or shutting down"))
 	return false
 }
 
@@ -249,7 +255,7 @@ func (r *Registry) LongRunning(ctx context.Context, run func(context.Context), r
 	if r.long.admit(ctx, run, release) {
 		return true
 	}
-	r.logger.Warn("task.rejected", slog.String("pool", "long"), slog.String("reason", "queue full or context canceled"))
+	r.logger.Warn("task.rejected", slog.String("pool", "long"), slog.String("reason", "queue full, maintenance or shutting down"))
 	return false
 }
 
@@ -260,9 +266,12 @@ const MaxTimers = 4096
 // 计时期间不占协程和名额；Abort 时还没到点的直接放弃，到点后的 ctx 也随服务退出取消。
 // 计时器已满或服务正在退出时返回 false 并记日志；到点时池满了也只记日志、放弃这一次。
 func (r *Registry) After(delay time.Duration, run func(context.Context)) bool {
-	if r.life.Err() != nil || r.timers.Add(1) > MaxTimers {
+	if r.life.Err() != nil {
+		return false
+	}
+	if r.timers.Add(1) > MaxTimers {
 		r.timers.Add(-1)
-		r.logger.Warn("task.rejected", slog.String("pool", "delayed"), slog.String("reason", "too many timers or shutting down"))
+		r.logger.Warn("task.rejected", slog.String("pool", "delayed"), slog.String("reason", "too many timers"))
 		return false
 	}
 	// stop 要在计时器回调用到之前赋好值，ready 关闭之前回调只能等着。
@@ -276,7 +285,7 @@ func (r *Registry) After(delay time.Duration, run func(context.Context)) bool {
 			return // 服务正在退出
 		}
 		if !r.delayed.submit(r.life, run) && r.life.Err() == nil {
-			r.logger.Warn("task.rejected", slog.String("pool", "delayed"), slog.String("reason", "queue full"))
+			r.logger.Warn("task.rejected", slog.String("pool", "delayed"), slog.String("reason", "queue full or maintenance"))
 		}
 	})
 	stop = context.AfterFunc(r.life, func() {
@@ -288,17 +297,63 @@ func (r *Registry) After(delay time.Duration, run func(context.Context)) bool {
 	return true
 }
 
-// Track 记下一件不在命令池、后台池里跑的业务工作（如 .sum、.acron 的一次定时执行），
-// 让 Busy 把它算进去；工作结束时调用返回的函数。
-func (r *Registry) Track() (done func()) {
+// Track 记下一件不在这几个池里跑的业务工作（如 .sum、.acron 的一次定时执行、关键词动作），
+// 让 Busy 把它算进去；工作结束时调用返回的 done。维护或退出期间返回 ok=false，
+// 调用方应放弃这次工作：服务马上要重启，开始了也会被掐断。
+func (r *Registry) Track() (done func(), ok bool) {
+	r.gate.mu.RLock()
+	defer r.gate.mu.RUnlock()
+	if r.gate.closed || r.life.Err() != nil {
+		return func() {}, false
+	}
 	r.tracked.Add(1)
 	var once sync.Once
-	return func() { once.Do(func() { r.tracked.Add(-1) }) }
+	return func() { once.Do(func() { r.tracked.Add(-1) }) }, true
+}
+
+// Quiesce 进入维护状态：先关上准入闸门（之后提交的命令、后台任务、长任务、到点的延时任务
+// 和 Track 一律拒绝），再等已经接受的工作全部结束，最多等 timeout。等到了返回 true，闸门
+// 保持关着，直到 Resume；等不到或 ctx 取消就重新打开闸门，返回 false。
+//
+// 闸门关上后工作只减不增，所以这时读到的 Busy 为 0 是可靠的；闸门开着时的 Busy 只能当参考。
+func (r *Registry) Quiesce(ctx context.Context, timeout time.Duration) bool {
+	r.gate.mu.Lock()
+	r.gate.closed = true
+	r.gate.mu.Unlock()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	tick := time.NewTicker(20 * time.Millisecond)
+	defer tick.Stop()
+	for r.Busy() > 0 {
+		select {
+		case <-tick.C:
+		case <-timer.C:
+			r.Resume()
+			return false
+		case <-ctx.Done():
+			r.Resume()
+			return false
+		}
+	}
+	if ctx.Err() != nil {
+		r.Resume()
+		return false
+	}
+	return true
+}
+
+// Resume 重新打开 Quiesce 关上的准入闸门。
+func (r *Registry) Resume() {
+	r.gate.mu.Lock()
+	r.gate.closed = false
+	r.gate.mu.Unlock()
 }
 
 // Busy 是正在跑和排队的工作总数：命令、后台任务、长任务、到点的延时任务，加上 Track
-// 记下的。自动更新要它为 0 才重启，免得掐断 .da 这类命令早已返回、工作还在跑的任务。
-// 还没到点的延时任务不算：一条一天后才删的消息不该挡住更新。
+// 记下的。还没到点的延时任务不算：一条一天后才删的消息不该挡住更新。
+//
+// 各个池分别读取，闸门开着时不是一致的快照（代发把命令交给命令池的那一刻可能两边都读到 0），
+// 只能用来观察和粗略判断；要可靠地确认空闲，用 Quiesce。
 func (r *Registry) Busy() int {
 	return r.pool.pending() + r.tasks.pending() + r.long.pending() + r.delayed.pending() + int(r.tracked.Load())
 }
@@ -647,7 +702,7 @@ func (r *Registry) run(ctx context.Context, client *bot.Client, message, trigger
 	})
 	if !accepted {
 		logger.Warn("command.rejected", slog.String("chat", message.ChatID), slog.Int("message", message.ID),
-			slog.String("reason", "queue full or context canceled"))
+			slog.String("reason", "queue full, maintenance or shutting down"))
 		return Rejected
 	}
 	return Queued

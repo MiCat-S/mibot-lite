@@ -20,7 +20,7 @@ import (
 // Register 注册 .keyword，并挂上看别人消息的监听者。
 func Register(a *app.App) {
 	s := newService(kit.NewStore(a, "keyword.json", defaults), a.Logger,
-		func(delay time.Duration, run func(context.Context)) { a.Registry.After(delay, run) })
+		func(delay time.Duration, run func(context.Context)) { a.Registry.After(delay, run) }, a.Registry.Track)
 	a.OnForeign(s.offer)
 	a.Registry.Register(&command.Command{Name: "keyword", Group: command.GroupAdmin, Description: "设置关键词自动回复",
 		Usage: "[任务|list|rm|alias]", Help: help, FreeText: true, Handle: s.command})

@@ -200,3 +200,19 @@ func TestWaitIdle(t *testing.T) {
 		t.Fatal("ctx 取消了还说等到了")
 	}
 }
+
+// quiesce 成功时闸门关着：确认空闲之后新来的长任务进不来，重启前不会再冒出要保护的工作。
+func TestQuiesceBlocksWorkAfterIdleCheck(t *testing.T) {
+	r := command.New([]string{"."}, slog.New(slog.DiscardHandler))
+	defer r.Abort()
+	if !quiesce(context.Background(), r, time.Second) {
+		t.Fatal("空闲时没能进入维护")
+	}
+	if r.LongRunning(r.Lifecycle(), func(context.Context) {}, nil) || r.Busy() != 0 {
+		t.Fatal("维护期间仍接受了长任务")
+	}
+	r.Resume()
+	if !r.LongRunning(r.Lifecycle(), func(context.Context) {}, nil) {
+		t.Fatal("Resume 后没有恢复准入")
+	}
+}

@@ -14,6 +14,7 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/botapi"
 	"github.com/MiCat-S/mibot-lite/internal/command"
 	"github.com/MiCat-S/mibot-lite/internal/commands/kit"
+	"github.com/MiCat-S/mibot-lite/internal/delivery"
 )
 
 var (
@@ -194,7 +195,8 @@ func brief(reply string) string {
 // deliver 发汇总：设了机器人推送先用它，其次汇总对话；都没有或者都发不出去时，手动签到改写
 // 命令消息，定时签到发到收藏夹。汇总发到了别处的话，手动签到的命令消息删掉，和原插件一样。
 //
-// 前一个途径发到一半失败时，下一个途径只发剩下的页，见 remaining：已经发出的不重发。
+// 前一个途径发到一半失败时，下一个途径只发剩下的页，见 remaining：已经发出的不重发，
+// 不确定有没有送达的那页（delivery.Uncertain）也不重发。
 func deliver(ctx context.Context, client *bot.Client, cfg config, summary string, inv *command.Invocation) error {
 	pages := command.HTMLPages(summary, command.PageLimit)
 	if cfg.BotToken != "" && cfg.PushChatID != "" {
@@ -203,7 +205,7 @@ func deliver(ctx context.Context, client *bot.Client, cfg config, summary string
 			return removeCommand(ctx, inv)
 		}
 		client.Logger().Warn("checkin.bot_push_failed", "sent", sent, "pages", len(pages), "error", err.Error())
-		pages = remaining(pages, sent, botapi.Uncertain(err))
+		pages = remaining(pages, sent, delivery.Uncertain(err))
 	}
 	if cfg.LogChat != "" {
 		sent, err := sendPages(ctx, client, cfg.LogChat, pages)
@@ -211,7 +213,7 @@ func deliver(ctx context.Context, client *bot.Client, cfg config, summary string
 			return removeCommand(ctx, inv)
 		}
 		client.Logger().Warn("checkin.log_chat_failed", "chat", cfg.LogChat, "sent", sent, "pages", len(pages), "error", err.Error())
-		pages = remaining(pages, sent, false)
+		pages = remaining(pages, sent, delivery.Uncertain(err))
 	}
 	if inv != nil {
 		return inv.EditPages(ctx, pages)

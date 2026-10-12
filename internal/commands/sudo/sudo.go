@@ -234,7 +234,7 @@ func relay(ctx context.Context, a *app.App, client *bot.Client, trigger *bot.Mes
 	}
 	if a.Registry.DispatchFor(a.Registry.Lifecycle(), client, envelope, trigger, delegationAllowed) == command.Rejected {
 		// 命令消息已经代发出去了，不说一声的话，对方只会看到一条没反应的命令。
-		_, _ = client.SendPlain(ctx, peer, "⏳ 同时执行的命令太多，这条没有执行，稍后再试", nil, bot.SendOptions{ReplyTo: id, Topic: trigger.TopicID})
+		_, _ = client.SendPlain(ctx, peer, "⏳ 同时执行的命令太多或服务正在更新，这条没有执行，稍后再试", nil, bot.SendOptions{ReplyTo: id, Topic: trigger.TopicID})
 	}
 }
 

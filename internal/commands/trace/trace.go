@@ -223,11 +223,19 @@ func (s *service) work(ctx context.Context, client *bot.Client) {
 		case <-ctx.Done():
 			return
 		case item := <-s.queue:
-			callCtx, cancel := context.WithTimeout(ctx, time.Minute)
-			if err := react(callCtx, client, item); err != nil && ctx.Err() == nil {
-				client.Logger().Debug("trace.reaction_failed", slog.String("error", err.Error()))
+			// 算进 Registry.Busy；服务正要重启时这条就不处理了。
+			done, ok := s.a.Registry.Track()
+			if !ok {
+				continue
 			}
-			cancel()
+			func() {
+				defer done()
+				callCtx, cancel := context.WithTimeout(ctx, time.Minute)
+				defer cancel()
+				if err := react(callCtx, client, item); err != nil && ctx.Err() == nil {
+					client.Logger().Debug("trace.reaction_failed", slog.String("error", err.Error()))
+				}
+			}()
 		}
 	}
 }

@@ -54,6 +54,14 @@ const restartWait = 30 * time.Minute
 // idlePoll 是等空闲时多久看一次；测试里改短。
 var idlePoll = 10 * time.Second
 
+// quiesceWait 是关上准入闸门后等已接受的工作结束的最长时间。闸门关着时新命令都会被拒，
+// 所以只在看起来已经空闲之后才关，而且不能关太久。
+var quiesceWait = 30 * time.Second
+
+// restartGrace 是提交重启后还没退出时，多久重新打开准入闸门：重启没真正发生的话，
+// 不能让服务一直拒绝所有命令。
+const restartGrace = 2 * time.Minute
+
 type autoAction int
 
 const (
@@ -245,7 +253,8 @@ func (u *updater) autoInstall(ctx context.Context, client *bot.Client, latest *r
 		_ = show("❌ " + command.Escape(reason))
 		return
 	}
-	if !waitIdle(ctx, u.a.Registry.Busy, restartWait) {
+	registry := u.a.Registry
+	if !quiesce(ctx, registry, restartWait) {
 		logger.Info("update.auto_restart_deferred", "latest", latest.TagName, "reason", "work still running")
 		_ = show("⏸ 已安装 " + command.Code(latest.TagName) + "，但还有任务在跑，没有重启；任务结束后用 " +
 			command.Code(u.a.Registry.Prefix()+"restart") + " 重启生效")
@@ -255,8 +264,32 @@ func (u *updater) autoInstall(ctx context.Context, client *bot.Client, latest *r
 		logger.Warn("update.auto_notice_failed", "error", err.Error())
 	}
 	if err := u.restarter.Schedule(ctx, self, strconv.FormatInt(client.SelfID(), 10), id, "auto-update"); err != nil {
+		registry.Resume()
 		logger.Error("update.auto_restart_failed", "error", err.Error())
 		_ = show("❌ 已安装 " + command.Code(latest.TagName) + "，但重启没提交成功，可以手动重启服务\n状态：\n" + u.restarter.Status(ctx))
+		return
+	}
+	time.AfterFunc(restartGrace, func() {
+		logger.Warn("update.auto_restart_not_observed", "waited", restartGrace.String())
+		registry.Resume()
+	})
+}
+
+// quiesce 确认可以安全重启：先在准入开着时等空闲（不挡命令），看起来空了再用
+// Registry.Quiesce 关上闸门确认。关上后 quiesceWait 内没等到（刚好有工作在检查后进来），
+// 就重新打开、接着等，总共最多等 limit。返回 true 时闸门关着，调用方重启失败要 Resume。
+func quiesce(ctx context.Context, registry *command.Registry, limit time.Duration) bool {
+	deadline := time.Now().Add(limit)
+	for {
+		if !waitIdle(ctx, registry.Busy, time.Until(deadline)) {
+			return false
+		}
+		if registry.Quiesce(ctx, quiesceWait) {
+			return true
+		}
+		if ctx.Err() != nil || !time.Now().Before(deadline) {
+			return false
+		}
 	}
 }
 

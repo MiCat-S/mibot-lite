@@ -225,9 +225,9 @@ func (s *daService) start(inv *command.Invocation) (bool, error) {
 		s.run(taskCtx, client, slot, id, message)
 	}, release)
 	if !accepted {
-		// 只有服务正在退出时才会走到这里：个数已经在上面限制过了。
+		// 只有服务正在更新或退出时才会走到这里：个数已经在上面限制过了。
 		release()
-		return false, kit.Fail("服务正在退出，没有开始删除")
+		return false, kit.Fail("服务正在更新或退出，没有开始删除")
 	}
 	return true, nil
 }

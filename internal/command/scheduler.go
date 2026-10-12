@@ -28,6 +28,13 @@ type scheduledWork struct {
 	release func()
 }
 
+// gate 是所有池和 Track 共用的准入闸门。维护（自动更新准备重启）时关上，之后提交的
+// 工作一律拒绝，已经接受的照常跑完；这样等到的空闲才可靠，不会被检查之后才进来的工作打破。
+type gate struct {
+	mu     sync.RWMutex
+	closed bool
+}
+
 // scheduler 是按需启动的有界工作池：最多 limit 个 worker，队列空了 worker 就退出，
 // 闲着时不留常驻协程。提交从不阻塞更新回调，排队中的任务也不占协程；队列满了直接拒绝。
 type scheduler struct {
@@ -40,6 +47,8 @@ type scheduler struct {
 	idle   chan struct{}
 	life   context.Context
 	logger *slog.Logger
+	// gate 为 nil 时不受维护闸门限制（只有单独测试调度器时如此）。
+	gate *gate
 }
 
 func newScheduler(life context.Context, logger *slog.Logger, workers, queued int) *scheduler {
@@ -56,6 +65,14 @@ func (s *scheduler) submit(ctx context.Context, run func(context.Context)) bool 
 // 结束时都会调用一次 release（可以为 nil）；没接受的不调用，由调用方自己收拾。
 // 调用方在提交前占下的资源（如 .da 的群名额）应在 release 里释放，不能只放在 run 里。
 func (s *scheduler) admit(ctx context.Context, run func(context.Context), release func()) bool {
+	// 持着闸门的读锁入队：Quiesce 关闸门要等进行中的提交都完成，关上之后不会再有工作漏进来。
+	if s.gate != nil {
+		s.gate.mu.RLock()
+		defer s.gate.mu.RUnlock()
+		if s.gate.closed {
+			return false
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.life.Err() != nil || ctx.Err() != nil {

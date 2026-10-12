@@ -452,8 +452,13 @@ func (s *sumService) fire(id string) {
 	if task == nil || task.Disabled {
 		return
 	}
-	// 算进 Registry.Busy：自动更新不在摘要生成、推送到一半时重启。
-	defer s.a.Registry.Track()()
+	// 算进 Registry.Busy：自动更新不在摘要生成、推送到一半时重启。服务正要重启时就不开始了。
+	done, ok := s.a.Registry.Track()
+	if !ok {
+		s.a.Logger.Info("sum.scheduled_skipped", "task", id, "reason", "maintenance or shutting down")
+		return
+	}
+	defer done()
 	ctx, cancel := context.WithTimeout(s.a.Registry.Lifecycle(), 10*time.Minute)
 	defer cancel()
 	err = s.push(ctx, client, *task)

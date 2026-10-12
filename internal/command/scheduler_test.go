@@ -209,7 +209,7 @@ func TestBusyCountsLongTasksAndTracked(t *testing.T) {
 	if r.Running() != 0 || r.Busy() != 1 {
 		t.Fatalf("Running=%d Busy=%d", r.Running(), r.Busy())
 	}
-	done := r.Track()
+	done, _ := r.Track()
 	if r.Busy() != 2 {
 		t.Fatalf("Busy with tracked = %d", r.Busy())
 	}
@@ -255,4 +255,74 @@ func TestAfterRunsAndStopsOnAbort(t *testing.T) {
 	if r.After(0, func(context.Context) { late.Add(1) }) {
 		t.Fatal("After accepted work after Abort")
 	}
+	// 退出后被拒的调用没占名额，也不能把计数减成负数。
+	if r.timers.Load() != 0 {
+		t.Fatalf("timers after rejected After = %d", r.timers.Load())
+	}
+}
+
+// 维护闸门关上后，命令、后台任务、长任务和 Track 都要被拒；Resume 后恢复。
+func TestQuiesceClosesAdmission(t *testing.T) {
+	r := registry()
+	defer r.Abort()
+	r.Register(&Command{Name: "fast", Handle: func(context.Context, *Invocation) error { return nil }})
+	if !r.Quiesce(context.Background(), time.Second) {
+		t.Fatal("idle registry did not quiesce")
+	}
+	if r.LongRunning(r.Lifecycle(), func(context.Context) {}, nil) || r.Background(r.Lifecycle(), func(context.Context) {}) {
+		t.Fatal("task admitted during maintenance")
+	}
+	if got := r.Submit(r.Lifecycle(), nil, &bot.Message{Text: ".fast", ChatID: "1"}); got != Rejected {
+		t.Fatalf("command during maintenance = %v", got)
+	}
+	if _, ok := r.Track(); ok {
+		t.Fatal("Track accepted during maintenance")
+	}
+	r.Resume()
+	done, ok := r.Track()
+	if !ok || !r.Background(r.Lifecycle(), func(context.Context) {}) {
+		t.Fatal("admission not restored by Resume")
+	}
+	done()
+}
+
+// 关闸门之前接受的工作要等它结束；代发这类「后台任务交给命令池」的交接在闸门关着时被拒，
+// 不会出现「两边都读到 0、其实还有命令」的情况。
+func TestQuiesceWaitsForAcceptedWork(t *testing.T) {
+	r := registry()
+	defer r.Abort()
+	var handed atomic.Int32
+	r.Register(&Command{Name: "nested", Handle: func(context.Context, *Invocation) error { handed.Add(1); return nil }})
+	release := make(chan struct{})
+	started := make(chan struct{})
+	r.Background(r.Lifecycle(), func(context.Context) {
+		close(started)
+		<-release
+		r.Submit(r.Lifecycle(), nil, &bot.Message{Text: ".nested", ChatID: "1"})
+	})
+	<-started
+	result := make(chan bool, 1)
+	go func() { result <- r.Quiesce(context.Background(), time.Second) }()
+	time.Sleep(20 * time.Millisecond)
+	close(release)
+	if !<-result {
+		t.Fatal("did not quiesce after work finished")
+	}
+	if r.Busy() != 0 || handed.Load() != 0 {
+		t.Fatalf("Busy=%d handed=%d", r.Busy(), handed.Load())
+	}
+}
+
+// 等不到空闲时要重新打开闸门，不能让服务一直拒绝命令。
+func TestQuiesceTimeoutReopens(t *testing.T) {
+	r := registry()
+	done, _ := r.Track()
+	if r.Quiesce(context.Background(), 30*time.Millisecond) {
+		t.Fatal("quiesced while tracked work was running")
+	}
+	if !r.Background(r.Lifecycle(), func(context.Context) {}) {
+		t.Fatal("gate stayed closed after timeout")
+	}
+	done()
+	r.Abort()
 }

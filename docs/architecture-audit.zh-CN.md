@@ -1,5 +1,7 @@
 # mibot-lite 架构审查与核心重构报告
 
+> 最新复查：提交 `6fa3b34` 的验证见 [第三轮复查报告](architecture-review-6fa3b34.zh-CN.md)。上一轮直接修复已生效，自动更新维护边界与 MTProto 回退仍有 P2 缺口，另有 After 计数 P3 问题。下文保留对应版本的历史审查记录。
+
 > 更新：对提交 `0e59afa` 的第二轮复查已完成，确认 5 个可复现的 P2 边界问题。详见 [第二轮复查报告](architecture-review-0e59afa.zh-CN.md)。本文件保留第一轮诊断与实现记录。
 
 审查日期：2026-10-12（Asia/Taipei）。基线：`d3309cf`，`github.com/MiCat-S/mibot-lite`，Go 1.26，gotd/td v0.162.0。本报告对应的重构已提交为 `0e59afa`，附录代码与该提交的源文件一致；之后的修复见第二轮复查报告。

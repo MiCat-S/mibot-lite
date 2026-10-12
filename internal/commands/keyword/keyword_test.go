@@ -256,7 +256,7 @@ func newFixture(t *testing.T) (*service, *fakeTelegram, *bot.Client, *[]string) 
 	s := newService(store.New(filepath.Join(t.TempDir(), "keyword.json"), defaults), logger, func(delay time.Duration, run func(context.Context)) {
 		delayed = append(delayed, delay.String())
 		run(context.Background())
-	})
+	}, func() (func(), bool) { return func() {}, true })
 	s.background = func(work func()) { work() }
 	s.now = func() time.Time { return time.Unix(1000, 0) }
 	return s, fake, client, &delayed
