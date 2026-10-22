@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gotd/td/tg"
+	"github.com/gotd/td/tgerr"
 
 	"github.com/MiCat-S/mibot-lite/internal/app"
 	"github.com/MiCat-S/mibot-lite/internal/bot"
@@ -124,6 +125,10 @@ type dmeRun struct {
 	offsetID int
 	empty    int
 	seen     map[int]bool
+
+	// placeholder 是第一次把媒体换成占位图后服务器存下的那张照片，后面的消息直接引用它，
+	// 不再每条都上传一遍。
+	placeholder tg.InputPhotoClass
 
 	matched, deleted, failed, edited, failedEdits int
 }
@@ -238,19 +243,71 @@ func (r *dmeRun) scrub(m *tg.Message) {
 			}
 		}
 	}
+	request := &tg.MessagesEditMessageRequest{Peer: r.peer, ID: m.ID}
+	request.SetMessage("")
+	if r.placeholder != nil {
+		request.SetMedia(&tg.InputMediaPhoto{ID: r.placeholder})
+		_, err := r.api.MessagesEditMessage(r.ctx, request)
+		if err == nil {
+			r.edited++
+			return
+		}
+		if !fileReferenceExpired(err) {
+			r.failedEdits++
+			return
+		}
+		// 删得久了照片的 file reference 会过期，丢掉它，这一条重新上传。
+		r.placeholder = nil
+	}
 	file, err := r.client.Uploader().FromBytes(r.ctx, "dme.png", placeholderPNG())
 	if err != nil {
 		r.failedEdits++
 		return
 	}
-	request := &tg.MessagesEditMessageRequest{Peer: r.peer, ID: m.ID}
-	request.SetMessage("")
 	request.SetMedia(&tg.InputMediaUploadedPhoto{File: file})
-	if _, err := r.api.MessagesEditMessage(r.ctx, request); err != nil {
+	result, err := r.api.MessagesEditMessage(r.ctx, request)
+	if err != nil {
 		r.failedEdits++
 		return
 	}
+	r.placeholder = editedPhoto(result)
 	r.edited++
+}
+
+// editedPhoto 从编辑消息的应答里取出换上去的照片，取不到返回 nil（下一条照旧上传）。
+func editedPhoto(result tg.UpdatesClass) tg.InputPhotoClass {
+	var list []tg.UpdateClass
+	switch value := result.(type) {
+	case *tg.Updates:
+		list = value.Updates
+	case *tg.UpdatesCombined:
+		list = value.Updates
+	}
+	for _, update := range list {
+		var message tg.MessageClass
+		switch value := update.(type) {
+		case *tg.UpdateEditMessage:
+			message = value.Message
+		case *tg.UpdateEditChannelMessage:
+			message = value.Message
+		}
+		plain, ok := message.(*tg.Message)
+		if !ok {
+			continue
+		}
+		if media, ok := plain.Media.(*tg.MessageMediaPhoto); ok {
+			if photo, ok := media.Photo.(*tg.Photo); ok {
+				return photo.AsInput()
+			}
+		}
+	}
+	return nil
+}
+
+// fileReferenceExpired 判断编辑失败是不是因为引用的照片 file reference 失效了。
+func fileReferenceExpired(err error) bool {
+	rpcErr, ok := tgerr.As(err)
+	return ok && strings.HasPrefix(rpcErr.Type, "FILE_REFERENCE_")
 }
 
 // deleteBatch 分批删除。一批删失败就对半拆开再试，拆到只剩一条还删不掉，就记为失败跳过；
