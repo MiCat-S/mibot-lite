@@ -212,11 +212,15 @@ func Prepare(ctx context.Context, options Options) (*App, error) {
 	}
 	app.gaps = updates.New(gapsConfig)
 
+	subscribe := &subscribeGuard{logger: logger}
 	clientOptions := telegram.Options{
 		SessionStorage: storage,
 		Device:         telegram.DeviceConfig{DeviceModel: cfg.DeviceModel},
 		Logger:         protocol,
 		UpdateHandler:  liveHandler{live: app.liveDispatcher(), next: app.gaps},
+		// 重连后订阅更新失败时断开重连，不让连接挂着收不到更新，见 subscribeGuard。
+		OnSelfError:   subscribe.onError,
+		OnSelfSuccess: subscribe.onSuccess,
 		// 补上 MiBox 所用的 teleproto 对每个请求都做、gotd 不做的事：60 秒以内的限流和
 		// 服务端内部错误自动重试（最多 5 次），每个应答里的用户和群都记进缓存。
 		// 从 MiBox 移植来的命令都默认有这层保护。发出去的消息里的 IP 按 .privacy 的设置打码，
