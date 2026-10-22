@@ -116,7 +116,7 @@ owner; blank means owner only.
 | `.so <keyword>` `.search` | Search videos in your channel sources and send one here | |
 | `.aff [number]` | Save affiliate texts and send them with one command | |
 | `.save <link>` | Save or forward messages, even where forwarding is restricted | |
-| `.dme <count>` | Delete your own messages | |
+| `.dme <count>` | Delete your own messages, or set trigger words that do it when someone else sends them | |
 | `.da` | Delete group messages in bulk | |
 | `.acron <type> <cron> <chat>` | Scheduled (6-field cron with seconds) sending, copying, forwarding, deleting or pinning of messages, or running a command | |
 | `.trace [emoji…]` | Auto-react to messages from chosen users or containing keywords | |

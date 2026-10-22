@@ -109,7 +109,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 | `.so 关键词` `.search` | 在添加的频道里搜视频并发到当前对话 | |
 | `.aff [序号]` | 保存并一键发出机场 Aff 推广文字 | |
 | `.save 链接` | 保存或转发消息，禁止转发的也行 | |
-| `.dme 数量` | 删除自己的消息 | |
+| `.dme 数量` | 删除自己的消息，也可以设触发词：别人发出时自动删 | |
 | `.da` | 批量删除群消息 | |
 | `.acron 类型 Cron 对话` | 按带秒的六段 Cron 定时发送、复制、转发、删除、置顶消息或执行命令 | |
 | `.trace [表情…]` | 追踪指定用户或关键词，自动给他们的消息点表情 | |

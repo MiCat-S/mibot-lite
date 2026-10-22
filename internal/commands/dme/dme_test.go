@@ -25,7 +25,7 @@ type fakeTelegram struct {
 	refuse error
 }
 
-func respond(output bin.Decoder, value bin.Encoder) error {
+func encodeReply(output bin.Decoder, value bin.Encoder) error {
 	var buffer bin.Buffer
 	if err := value.Encode(&buffer); err != nil {
 		return err
@@ -39,7 +39,7 @@ func (f *fakeTelegram) Invoke(_ context.Context, input bin.Encoder, output bin.D
 	switch request := input.(type) {
 	case *tg.UploadSaveFilePartRequest:
 		f.parts++
-		return respond(output, &tg.BoolTrue{})
+		return encodeReply(output, &tg.BoolTrue{})
 	case *tg.MessagesEditMessageRequest:
 		f.media = append(f.media, request.Media)
 		if _, reused := request.Media.(*tg.InputMediaPhoto); reused && f.refuse != nil {
@@ -48,7 +48,7 @@ func (f *fakeTelegram) Invoke(_ context.Context, input bin.Encoder, output bin.D
 			return err
 		}
 		photo := &tg.Photo{ID: 77, AccessHash: 5, FileReference: []byte{1}}
-		return respond(output, &tg.Updates{Updates: []tg.UpdateClass{&tg.UpdateEditMessage{
+		return encodeReply(output, &tg.Updates{Updates: []tg.UpdateClass{&tg.UpdateEditMessage{
 			Message: &tg.Message{ID: request.ID, PeerID: &tg.PeerUser{UserID: 1}, Media: &tg.MessageMediaPhoto{Photo: photo}},
 		}}})
 	}

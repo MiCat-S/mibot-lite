@@ -27,6 +27,8 @@ type dmeConfig struct {
 	BatchSize     int `json:"batchSize"`
 	SearchLimit   int `json:"searchLimit"`
 	RetryAttempts int `json:"retryAttempts"`
+	// Triggers 是各个对话的触发词，见 trigger.go。MiBox 的设置里没有这一项。
+	Triggers []dmeTrigger `json:"triggers,omitempty"`
 }
 
 func dmeDefaults() dmeConfig { return dmeConfig{BatchSize: 50, SearchLimit: 100, RetryAttempts: 3} }
@@ -46,66 +48,70 @@ var placeholderPNG = sync.OnceValue(func() []byte {
 
 func dmeHelp(prefix string) string {
 	p := command.Escape(prefix)
-	return "🗑️ <b>智能防撤回删除</b>\n\n<code>" + p + "dme 数量</code> 快速删除自己的消息\n<code>" + p + "dme -f 数量</code> 替换文本和媒体后删除\n<code>" + p +
-		"dme 999999</code> 删除全部可见的自己的消息\n普通数量单次最多 2000 条；仅处理命令之前的消息及当前话题。\n收藏夹直接删除；-f 模式下广播频道主直接按数量删除。\n防撤回编辑可能因消息类型、编辑时限或权限失败，不保证第三方副本被删除。"
+	c := func(text string) string { return "<code>" + p + "dme" + text + "</code>" }
+	return "🗑️ <b>智能防撤回删除</b>\n\n" + c(" 数量") + " 快速删除自己的消息\n" + c(" -f 数量") + " 替换文本和媒体后删除\n" + c(" 999999") +
+		" 删除全部可见的自己的消息\n普通数量单次最多 2000 条；仅处理命令之前的消息及当前话题。\n收藏夹直接删除；-f 模式下广播频道主直接按数量删除。\n防撤回编辑可能因消息类型、编辑时限或权限失败，不保证第三方副本被删除。\n\n" +
+		"<b>触发词</b>\n" +
+		"别人在对话里发的消息包含这个对话的触发词时，自动删掉自己在这里、那条消息之前的消息。\n" +
+		"• " + c(" kw 条数 关键词") + " 在当前对话添加触发词，同一个词再加一次就改成新的条数\n" +
+		"• " + c(" kw -f 条数 关键词") + " 触发时先替换内容再删\n" +
+		"• " + c(" kw") + " 当前对话的触发词（在收藏夹里发就列出全部）\n" +
+		"• " + c(" kw all") + " 所有对话的触发词\n" +
+		"• " + c(" kw rm 关键词") + " 删除当前对话的触发词\n" +
+		"触发词只在添加它的对话里生效，不区分大小写；对话里任何人发出都会触发，自己发的不算。" +
+		"设置和查看触发词时，结果发到收藏夹，命令消息随即删掉，免得对话里的人看到触发词。" +
+		"每次触发删除之后，收藏夹里会收到一条说明。"
 }
 
-// Register 注册 .dme。设置存在 data/dme.json；同一个对话同时只跑一个。
+// Register 注册 .dme，并挂上看别人消息的监听者（触发词，见 trigger.go）。设置和触发词存在
+// data/dme.json；同一个对话同时只跑一个删除，命令和触发词都算。
 func Register(a *app.App) {
-	cfgStore := kit.NewStore(a, "dme.json", dmeDefaults)
-	var mu sync.Mutex
-	active := map[string]bool{}
-	a.Registry.Register(&command.Command{Name: "dme", Group: command.GroupMedia, Description: "删除自己最近的消息", Usage: "[-f] 条数", Help: dmeHelp, Timeout: command.NoTimeout,
-		Handle: func(ctx context.Context, inv *command.Invocation) error {
-			sub := strings.ToLower(inv.Arg(0))
-			if sub == "" {
-				return inv.Edit(ctx, dmeHelp(inv.Prefix))
-			}
-			anti := sub == "-f"
-			token := inv.Arg(0)
-			if anti {
-				token = inv.Arg(1)
-			}
-			count, err := strconv.Atoi(token)
-			if !kit.IsDigits(token) || err != nil || count <= 0 {
-				return kit.Usage(inv.Prefix, "dme [-f] 条数（正整数）")
-			}
-			mu.Lock()
-			if active[inv.Message.ChatID] {
-				mu.Unlock()
-				return kit.Fail("这个对话已有一个删除任务在执行，请等它完成")
-			}
-			active[inv.Message.ChatID] = true
-			mu.Unlock()
-			defer func() { mu.Lock(); delete(active, inv.Message.ChatID); mu.Unlock() }()
-			cfg, err := cfgStore.Read()
-			if err != nil {
-				return err
-			}
-			if cfg.BatchSize < 5 || cfg.BatchSize > 100 {
-				cfg.BatchSize = 50
-			}
-			if cfg.SearchLimit < 10 || cfg.SearchLimit > 500 {
-				cfg.SearchLimit = 100
-			}
-			if cfg.RetryAttempts < 0 || cfg.RetryAttempts > 10 {
-				cfg.RetryAttempts = 3
-			}
-			if err := dmeExecute(ctx, inv, count, anti, cfg); err != nil {
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-				inv.Log.Error("dme.failed", slog.String("error", err.Error()))
-				_, _ = inv.Client.SendSelf(context.WithoutCancel(ctx), command.Escape("❌ 在「"+inv.Client.Peers().Title(inv.Message.Peer)+"」删除自己的消息失败，请检查权限、网络和 Telegram 限制后重试"))
-			}
-			return nil
-		}})
+	s := newService(kit.NewStore(a, "dme.json", dmeDefaults), a.Logger, a.Registry.Track)
+	a.OnForeign(s.offer)
+	a.Registry.Register(&command.Command{Name: "dme", Group: command.GroupMedia, Description: "删除自己最近的消息", Usage: "[-f] 条数|kw", Help: dmeHelp, Timeout: command.NoTimeout,
+		Handle: s.command})
 }
 
-// dmeRun 是一次 .dme 的全部状态：要删哪里、谁算自己、翻到了哪一页、删了多少。
+func (s *service) command(ctx context.Context, inv *command.Invocation) error {
+	sub := strings.ToLower(inv.Arg(0))
+	switch sub {
+	case "":
+		return inv.Edit(ctx, dmeHelp(inv.Prefix))
+	case "kw":
+		return s.keywordCommand(ctx, inv)
+	}
+	anti := sub == "-f"
+	token := inv.Arg(0)
+	if anti {
+		token = inv.Arg(1)
+	}
+	count, err := strconv.Atoi(token)
+	if !kit.IsDigits(token) || err != nil || count <= 0 {
+		return kit.Usage(inv.Prefix, "dme [-f] 条数（正整数）")
+	}
+	if !s.claim(inv.Message.ChatID) {
+		return kit.Fail("这个对话已有一个删除任务在执行，请等它完成")
+	}
+	defer s.release(inv.Message.ChatID)
+	cfg, err := s.config()
+	if err != nil {
+		return err
+	}
+	if err := dmeExecute(ctx, inv, count, anti, cfg); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		inv.Log.Error("dme.failed", slog.String("error", err.Error()))
+		_, _ = inv.Client.SendSelf(context.WithoutCancel(ctx), command.Escape("❌ 在「"+inv.Client.Peers().Title(inv.Message.Peer)+"」删除自己的消息失败，请检查权限、网络和 Telegram 限制后重试"))
+	}
+	return nil
+}
+
+// dmeRun 是一次删除的全部状态：要删哪里、谁算自己、翻到了哪一页、删了多少。
+// message 是边界：只删它之前的消息。手动删时是命令消息，触发时是别人发的那条。
 type dmeRun struct {
 	ctx     context.Context
-	inv     *command.Invocation
+	log     *slog.Logger
 	client  *bot.Client
 	api     *tg.Client
 	message *bot.Message
@@ -134,13 +140,12 @@ type dmeRun struct {
 }
 
 // newDmeRun 弄清楚在哪删、哪些消息算自己的、从哪种翻页方式开始。
-func newDmeRun(ctx context.Context, inv *command.Invocation, anti bool, cfg dmeConfig) (*dmeRun, error) {
-	client, message := inv.Client, inv.Message
+func newDmeRun(ctx context.Context, client *bot.Client, message *bot.Message, log *slog.Logger, anti bool, cfg dmeConfig) (*dmeRun, error) {
 	peer, err := client.InputPeer(message.Peer)
 	if err != nil {
 		return nil, err
 	}
-	run := &dmeRun{ctx: ctx, inv: inv, client: client, api: client.API(), message: message, peer: peer, cfg: cfg, anti: anti,
+	run := &dmeRun{ctx: ctx, log: log, client: client, api: client.API(), message: message, peer: peer, cfg: cfg, anti: anti,
 		identities: map[string]bool{}, topicID: message.TopicID, offsetID: message.ID, seen: map[int]bool{}}
 	channelID, isChannel := message.Channel()
 	run.isChannel = isChannel
@@ -482,30 +487,36 @@ func (r *dmeRun) forgetPassed() {
 
 // report 写日志；有删不掉或改不了的，再给收藏夹发一条说明。
 func (r *dmeRun) report(requested int) {
-	r.inv.Log.Info("dme.complete", slog.Int("requested", requested), slog.Int("matched", r.matched), slog.Int("deleted", r.deleted), slog.Int("edited", r.edited), slog.Int("failed", r.failed), slog.Int("failed_edits", r.failedEdits))
+	r.log.Info("dme.complete", slog.Int("requested", requested), slog.Int("matched", r.matched), slog.Int("deleted", r.deleted), slog.Int("edited", r.edited), slog.Int("failed", r.failed), slog.Int("failed_edits", r.failedEdits))
 	if r.failed > 0 || r.failedEdits > 0 {
 		_, _ = r.client.SendSelf(r.ctx, command.Escape(fmt.Sprintf("⚠️ 在「%s」删除自己的消息：已删除 %d 条，删除失败 %d 条，防撤回编辑失败 %d 条", r.client.Peers().Title(r.message.Peer), r.deleted, r.failed, r.failedEdits)))
 	}
 }
 
-// dmeExecute 删掉命令之前自己的 count 条消息。999999 表示全部，其余最多 2000。
+// dmeExecute 删掉命令消息，再删命令之前自己的 count 条消息。
 func dmeExecute(ctx context.Context, inv *command.Invocation, count int, anti bool, cfg dmeConfig) error {
-	run, err := newDmeRun(ctx, inv, anti, cfg)
+	run, err := newDmeRun(ctx, inv.Client, inv.Message, inv.Log, anti, cfg)
 	if err != nil {
 		return err
 	}
 	if err := run.retry(func() error { return run.client.Delete(ctx, run.peer, []int{run.message.ID}) }); err != nil {
 		inv.Log.Warn("dme.command_delete", slog.String("error", err.Error()))
 	}
+	return run.sweep(count)
+}
+
+// sweep 删掉边界消息之前自己的 count 条消息。999999 表示全部，其余最多 2000。
+func (r *dmeRun) sweep(count int) error {
+	ctx := r.ctx
 	target, unlimited := count, count == 999999
 	if !unlimited && target > 2000 {
 		target = 2000
 	}
-	for unlimited || run.matched < target {
+	for unlimited || r.matched < target {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		page, outcome, err := run.nextPage(run.pageLimit(target, unlimited))
+		page, outcome, err := r.nextPage(r.pageLimit(target, unlimited))
 		if err != nil {
 			return err
 		}
@@ -515,18 +526,18 @@ func dmeExecute(ctx context.Context, inv *command.Invocation, count int, anti bo
 		if outcome == pageExhausted {
 			break
 		}
-		if batch := run.pick(page, target, unlimited); len(batch) == 0 {
-			if run.giveUp() {
+		if batch := r.pick(page, target, unlimited); len(batch) == 0 {
+			if r.giveUp() {
 				break
 			}
-		} else if err := run.process(batch); err != nil {
+		} else if err := r.process(batch); err != nil {
 			return err
 		}
-		run.forgetPassed()
+		r.forgetPassed()
 		if err := kit.Sleep(ctx, 100*time.Millisecond); err != nil {
 			return err
 		}
 	}
-	run.report(count)
+	r.report(count)
 	return nil
 }
