@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gotd/td/tg"
+	"github.com/gotd/td/tgerr"
 
 	"github.com/MiCat-S/mibot-lite/internal/app"
 	"github.com/MiCat-S/mibot-lite/internal/bot"
@@ -36,6 +37,9 @@ type receipt struct {
 	// 靠缓存或 updates.json 认出对话。旧格式的回执没有这两个字段。
 	PeerType   string `json:"peerType,omitempty"`
 	AccessHash int64  `json:"accessHash,omitempty"`
+	// TopicID 是那条消息所在的论坛话题，不在话题里是 0。那条消息改不了、要另发时发回
+	// 这个话题：不带话题就会落到 General，General 关了还发不出去。
+	TopicID int `json:"topicId,omitempty"`
 }
 
 type receiptDocument struct {
@@ -90,8 +94,9 @@ func (e triggerError) Unwrap() error { return e.err }
 // Schedule 留下回执再向 systemd 提交重启。回执让重启回来的进程把 chatID 对话里的
 // messageID 那条消息改成结果；kind 决定改成什么（restart、update、rollback、auto-update）。
 // peer 是那条消息的对话，连同 access hash 一起存进回执；拿不到就传 nil，只存 chatID。
+// topicID 是那条消息所在的论坛话题，不在话题里传 0。
 // 没有命令消息的调用方（自动更新）先自己发一条，再把它交给这里。
-func (r *Restarter) Schedule(ctx context.Context, peer tg.InputPeerClass, chatID string, messageID int, kind string) error {
+func (r *Restarter) Schedule(ctx context.Context, peer tg.InputPeerClass, chatID string, messageID, topicID int, kind string) error {
 	r.mu.Lock()
 	if r.pending {
 		r.mu.Unlock()
@@ -101,7 +106,7 @@ func (r *Restarter) Schedule(ctx context.Context, peer tg.InputPeerClass, chatID
 	r.mu.Unlock()
 	release := func() { r.mu.Lock(); r.pending = false; r.mu.Unlock() }
 
-	note := receipt{ChatID: chatID, MessageID: messageID, RequestedAt: time.Now().UnixMilli(), BootID: r.a.BootID, Kind: kind}
+	note := receipt{ChatID: chatID, MessageID: messageID, RequestedAt: time.Now().UnixMilli(), BootID: r.a.BootID, Kind: kind, TopicID: topicID}
 	note.PeerType, note.AccessHash = receiptPeer(peer)
 	if err := r.store.Update(func(doc *receiptDocument) error { doc.Pending = &note; return nil }); err != nil {
 		release()
@@ -217,7 +222,7 @@ func (r *Restarter) command(ctx context.Context, inv *command.Invocation, kind, 
 		return err
 	}
 	peer, _ := inv.Client.InputPeer(inv.Message.Peer)
-	err := r.Schedule(ctx, peer, inv.Message.ChatID, inv.Message.ID, kind)
+	err := r.Schedule(ctx, peer, inv.Message.ChatID, inv.Message.ID, inv.Message.TopicID, kind)
 	var failed triggerError
 	switch {
 	case errors.Is(err, ErrPending):
@@ -297,8 +302,21 @@ func (r *Restarter) notifyReady(ctx context.Context, client *bot.Client) {
 	}
 	if err := client.EditMessage(ctx, peer, note.MessageID, text, false); err != nil {
 		client.Logger().Warn("restart.receipt_failed", slog.String("error", err.Error()))
+		// 那条消息被删了或者改不了，就另发一条，不然没人知道已经回来了。连接出错时不发：
+		// 编辑可能已经生效，再发就重复了。
+		if editRejected(err) {
+			if _, err := client.SendHTML(ctx, peer, text, bot.SendOptions{Topic: note.TopicID}); err != nil {
+				client.Logger().Warn("restart.receipt_send_failed", slog.String("error", err.Error()))
+			}
+		}
 	}
 	forget()
+}
+
+// editRejected 判断编辑是不是被 Telegram 明确拒绝、没有执行（4xx 类的 RPC 错误）。
+func editRejected(err error) bool {
+	rpcErr, ok := tgerr.As(err)
+	return ok && rpcErr.Code < 500
 }
 
 func restartHelp(prefix string) string {

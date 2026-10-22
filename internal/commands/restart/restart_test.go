@@ -8,12 +8,14 @@ import (
 	"log/slog"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/gotd/td/bin"
 	"github.com/gotd/td/tg"
+	"github.com/gotd/td/tgerr"
 
 	"github.com/MiCat-S/mibot-lite/internal/app"
 	"github.com/MiCat-S/mibot-lite/internal/bot"
@@ -51,7 +53,7 @@ func TestScheduleKeepsReceiptWhenInterrupted(t *testing.T) {
 		if c.canceled {
 			cancel()
 		}
-		err := r.Schedule(ctx, nil, "812473405", 309529, "update")
+		err := r.Schedule(ctx, nil, "812473405", 309529, 0, "update")
 		cancel()
 		doc, _ := r.store.Read()
 		var failure triggerError
@@ -60,9 +62,9 @@ func TestScheduleKeepsReceiptWhenInterrupted(t *testing.T) {
 			t.Errorf("%s：回执应留着，得到 %v %+v", name, err, doc.Pending)
 		case !c.keep && (!errors.As(err, &failure) || doc.Pending != nil):
 			t.Errorf("%s：应报失败并撤掉回执，得到 %v %+v", name, err, doc.Pending)
-		case !c.keep && errors.Is(r.Schedule(context.Background(), nil, "1", 1, "restart"), ErrPending):
+		case !c.keep && errors.Is(r.Schedule(context.Background(), nil, "1", 1, 0, "restart"), ErrPending):
 			t.Errorf("%s：失败之后应该可以再试", name)
-		case c.keep && !errors.Is(r.Schedule(context.Background(), nil, "1", 1, "restart"), ErrPending):
+		case c.keep && !errors.Is(r.Schedule(context.Background(), nil, "1", 1, 0, "restart"), ErrPending):
 			t.Errorf("%s：重启已经提交，再来一次应回 ErrPending", name)
 		}
 	}
@@ -76,7 +78,7 @@ func newReceiptRestarter(t *testing.T, bootID string) *Restarter {
 }
 
 // 回执要连同 access hash 一起存，重启回来的进程才能直接寻址。普通群和 self 没有 hash，
-// 认不出的 peer（含 nil）只存 chatID。
+// 认不出的 peer（含 nil）只存 chatID。论坛话题照样存下。
 func TestScheduleStoresPeer(t *testing.T) {
 	previous := triggerRestart
 	t.Cleanup(func() { triggerRestart = previous })
@@ -93,7 +95,7 @@ func TestScheduleStoresPeer(t *testing.T) {
 		"nil":     {peer: nil},
 	} {
 		r := newReceiptRestarter(t, "old")
-		if err := r.Schedule(context.Background(), c.peer, "812473405", 309529, "restart"); err != nil {
+		if err := r.Schedule(context.Background(), c.peer, "812473405", 309529, 42, "restart"); err != nil {
 			t.Fatalf("%s：%v", name, err)
 		}
 		doc, _ := r.store.Read()
@@ -103,20 +105,30 @@ func TestScheduleStoresPeer(t *testing.T) {
 		if doc.Pending.PeerType != c.wantType || doc.Pending.AccessHash != c.wantHash {
 			t.Errorf("%s：存了 %q/%d，应为 %q/%d", name, doc.Pending.PeerType, doc.Pending.AccessHash, c.wantType, c.wantHash)
 		}
+		if doc.Pending.TopicID != 42 {
+			t.Errorf("%s：存的话题是 %d，应为 42", name, doc.Pending.TopicID)
+		}
 	}
 }
 
-// editRecorder 冒充 Telegram，记下 restart 回执改的那条消息。
+// editRecorder 冒充 Telegram，记下 restart 回执改的那条消息和另发的消息。
 type editRecorder struct {
 	mu    sync.Mutex
 	edits []*tg.MessagesEditMessageRequest
+	sends []*tg.MessagesSendMessageRequest
+	// refuse 不为空时，编辑一律回这个错误。
+	refuse error
 }
 
 func (r *editRecorder) Invoke(_ context.Context, input bin.Encoder, _ bin.Decoder) error {
-	if edit, ok := input.(*tg.MessagesEditMessageRequest); ok {
-		r.mu.Lock()
-		r.edits = append(r.edits, edit)
-		r.mu.Unlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	switch request := input.(type) {
+	case *tg.MessagesEditMessageRequest:
+		r.edits = append(r.edits, request)
+		return r.refuse
+	case *tg.MessagesSendMessageRequest:
+		r.sends = append(r.sends, request)
 	}
 	return nil
 }
@@ -160,6 +172,83 @@ func TestNotifyReadyUsesReceiptPeer(t *testing.T) {
 	}
 	if doc, _ := r.store.Read(); doc.Pending != nil {
 		t.Errorf("回执应该清掉：%+v", doc.Pending)
+	}
+}
+
+// pendingUpdateReceipt 写下一张带 access hash、等着重启回来处理的回执。
+func pendingUpdateReceipt(t *testing.T, r *Restarter) {
+	t.Helper()
+	if err := r.store.Update(func(doc *receiptDocument) error {
+		doc.Pending = &receipt{ChatID: "812473405", MessageID: 309529, RequestedAt: time.Now().UnixMilli(),
+			BootID: "old", Kind: "update", PeerType: "user", AccessHash: 7}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// 那条消息被删了、改不了时另发一条，同一个对话、同样的内容；回执照样清掉。
+func TestNotifyReadySendsWhenEditRefused(t *testing.T) {
+	recorder := &editRecorder{refuse: tgerr.New(400, "MESSAGE_ID_INVALID")}
+	r := newReceiptRestarter(t, "new")
+	pendingUpdateReceipt(t, r)
+	r.notifyReady(context.Background(), receiptClient(recorder))
+	if len(recorder.sends) != 1 {
+		t.Fatalf("另发了 %d 条，应为 1 条", len(recorder.sends))
+	}
+	sent := recorder.sends[0]
+	if peer, ok := sent.Peer.(*tg.InputPeerUser); !ok || peer.UserID != 812473405 || peer.AccessHash != 7 {
+		t.Errorf("另发用的 peer：%+v", sent.Peer)
+	}
+	if !strings.Contains(sent.Message, "更新完成") {
+		t.Errorf("另发的内容：%q", sent.Message)
+	}
+	if doc, _ := r.store.Read(); doc.Pending != nil {
+		t.Errorf("回执应该清掉：%+v", doc.Pending)
+	}
+	if sent.ReplyTo != nil {
+		t.Errorf("私聊不在话题里，另发不该带回复目标：%+v", sent.ReplyTo)
+	}
+}
+
+// 在论坛话题里发的命令，另发的那条要回到同一个话题，不能落到 General。
+func TestNotifyReadySendsIntoTopic(t *testing.T) {
+	recorder := &editRecorder{refuse: tgerr.New(400, "MESSAGE_ID_INVALID")}
+	r := newReceiptRestarter(t, "new")
+	if err := r.store.Update(func(doc *receiptDocument) error {
+		doc.Pending = &receipt{ChatID: "-1001234", MessageID: 500, RequestedAt: time.Now().UnixMilli(),
+			BootID: "old", Kind: "restart", PeerType: "channel", AccessHash: 11, TopicID: 42}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.notifyReady(context.Background(), receiptClient(recorder))
+	if len(recorder.sends) != 1 {
+		t.Fatalf("另发了 %d 条，应为 1 条", len(recorder.sends))
+	}
+	sent := recorder.sends[0]
+	if peer, ok := sent.Peer.(*tg.InputPeerChannel); !ok || peer.ChannelID != 1234 || peer.AccessHash != 11 {
+		t.Errorf("另发用的 peer：%+v", sent.Peer)
+	}
+	reply, ok := sent.ReplyTo.(*tg.InputReplyToMessage)
+	if !ok {
+		t.Fatalf("另发的回复目标是 %T，应为发回话题的 InputReplyToMessage", sent.ReplyTo)
+	}
+	if top, _ := reply.GetTopMsgID(); reply.ReplyToMsgID != 42 || top != 42 {
+		t.Errorf("另发进了话题 %d（top %d），应为 42", reply.ReplyToMsgID, top)
+	}
+}
+
+// 编辑成功、或者连接出错（编辑可能已经生效）时都不另发。
+func TestNotifyReadyDoesNotSendTwice(t *testing.T) {
+	for name, refuse := range map[string]error{"edited": nil, "connection lost": errors.New("connection reset")} {
+		recorder := &editRecorder{refuse: refuse}
+		r := newReceiptRestarter(t, "new")
+		pendingUpdateReceipt(t, r)
+		r.notifyReady(context.Background(), receiptClient(recorder))
+		if len(recorder.edits) != 1 || len(recorder.sends) != 0 {
+			t.Errorf("%s：编辑 %d 次、另发 %d 条，应为 1、0", name, len(recorder.edits), len(recorder.sends))
+		}
 	}
 }
 
