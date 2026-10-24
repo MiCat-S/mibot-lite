@@ -31,6 +31,20 @@ func TestMarkdownToHTML(t *testing.T) {
 		{"rule", "上\n\n---\n\n下", "上\n\n────────────────\n\n下"},
 		{"paragraph lines", "第一行\n  缩进行", "第一行\n\u00a0\u00a0缩进行"},
 		{"cite removed", "结论<cite>1</cite>", "结论1"},
+		{"table", "| A | B |\n|:--|--:|\n| `x` | **y** |", "<b>A | B</b>\n<code>x</code> | <b>y</b>"},
+		{"table after paragraph", "表：\n| a | b |\n|---|---|\n| 1 |", "表：\n\n<b>a | b</b>\n1 | "},
+		{"display math", "$$\nE = mc^2\n$$", `<pre><code class="language-latex">E = mc^2</code></pre>`},
+		{"inline math", "面积 $\\pi r^2$，价钱 $5 和 $10", "面积 <code>\\pi r^2</code>，价钱 $5 和 $10"},
+		{"paren math", `设 \(a+b\) 和 \[c\]`, "设 <code>a+b</code> 和 <code>c</code>"},
+		{"escapes", `\*不是斜体\* 和 \$5`, "*不是斜体* 和 $5"},
+		{"task list", "- [ ] 待办\n- [x] 完成", "• ☐ 待办\n• ☑ 完成"},
+		{"html inline", `<b>粗</b> <a href="https://e.com/?a=1&amp;b=2">链</a> <code>a &lt; b</code> <span class="tg-spoiler">藏</span> <x>未知</x>`,
+			`<b>粗</b> <a href="https://e.com/?a=1&amp;b=2">链</a> <code>a &lt; b</code> <tg-spoiler>藏</tg-spoiler> &lt;x&gt;未知&lt;/x&gt;`},
+		{"html unsafe link", `<a href="javascript:x">文字</a>`, "文字"},
+		{"html nested markdown", "<u>下 **粗**</u><br>换行", "<u>下 <b>粗</b></u>\n换行"},
+		{"entities", "a &amp; b &lt;c&gt; &bogus;", "a &amp; b &lt;c&gt; &amp;bogus;"},
+		{"html quote", "<b>标题</b>\n<blockquote expandable>• 一 <a href=\"https://t.me/c/1/2\">来源</a>\n• 二</blockquote>\n尾",
+			"<b>标题</b>\n\n<blockquote expandable>• 一 <a href=\"https://t.me/c/1/2\">来源</a>\n• 二</blockquote>\n\n尾"},
 	}
 	for _, test := range cases {
 		if got := markdownToHTML(test.markdown, false); got != test.want {
@@ -42,9 +56,21 @@ func TestMarkdownToHTML(t *testing.T) {
 	}
 }
 
+// TestMarkdownHTMLStyle 检查 .sum 用的版式：标题只加粗、列表折进可展开的引用，外层整体折叠时不再嵌套。
+func TestMarkdownHTMLStyle(t *testing.T) {
+	source := "### 💬 话题\n- 一\n- 二"
+	if got := MarkdownHTML(source, HTMLStyle{PlainHeadings: true, FoldLists: true}); got != "<b>💬 话题</b>\n\n<blockquote expandable>• 一\n• 二</blockquote>" {
+		t.Errorf("got %q", got)
+	}
+	if got := MarkdownHTML(source, HTMLStyle{PlainHeadings: true, FoldLists: true, CollapseSafe: true}); got != "<b>💬 话题</b>\n\n• 一\n• 二" {
+		t.Errorf("外层折叠时不该再包引用：%q", got)
+	}
+}
+
 // TestMarkdownHTMLParses 确认生成的 HTML 能被发送时用的解析器接受。
 func TestMarkdownHTMLParses(t *testing.T) {
-	source := "# 标题\n\n**粗 [链接](https://example.com) `code`**\n\n```js\nlet a = 1 < 2\n```\n\n> 引用\n\n- 列表 ||剧透||"
+	source := "# 标题\n\n**粗 [链接](https://example.com) `code`**\n\n```js\nlet a = 1 < 2\n```\n\n> 引用\n\n- 列表 ||剧透||\n\n" +
+		"| **A** | `B` |\n|---|---|\n| 1 | $x$ |\n\n<blockquote expandable><i>折</i></blockquote>"
 	html := markdownToHTML(source, false)
 	plain, entities, err := bot.ParseHTML(html)
 	if err != nil {

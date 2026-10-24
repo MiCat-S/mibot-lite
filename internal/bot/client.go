@@ -235,13 +235,24 @@ func (c *Client) SendPlain(ctx context.Context, peer tg.InputPeerClass, text str
 }
 
 func (c *Client) send(ctx context.Context, peer tg.InputPeerClass, text string, entities []tg.MessageEntityClass, options SendOptions) (int, error) {
-	request := &tg.MessagesSendMessageRequest{Peer: peer, Message: text, RandomID: rand.Int64(), NoWebpage: !options.LinkPreview, Silent: options.Silent}
+	request := sendRequest(peer, options)
+	request.Message = text
 	if len(entities) > 0 {
 		request.SetEntities(entities)
 	}
+	return c.sendMessage(ctx, request)
+}
+
+// sendRequest 是按 options 填好对话、回复和开关的发送请求，正文由调用方填。
+func sendRequest(peer tg.InputPeerClass, options SendOptions) *tg.MessagesSendMessageRequest {
+	request := &tg.MessagesSendMessageRequest{Peer: peer, RandomID: rand.Int64(), NoWebpage: !options.LinkPreview, Silent: options.Silent}
 	if reply := options.replyTo(); reply != nil {
 		request.SetReplyTo(reply)
 	}
+	return request
+}
+
+func (c *Client) sendMessage(ctx context.Context, request *tg.MessagesSendMessageRequest) (int, error) {
 	updates, err := c.api.MessagesSendMessage(ctx, request)
 	if err != nil {
 		return 0, sendFailure(err)

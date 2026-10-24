@@ -7,6 +7,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gotd/td/bin"
+	"github.com/gotd/td/tg"
+
+	"github.com/MiCat-S/mibot-lite/internal/bot"
 	"github.com/MiCat-S/mibot-lite/internal/command"
 )
 
@@ -78,4 +82,48 @@ func TestHelpListAndGroups(t *testing.T) {
 	if _, ok := findGroup("与"); ok {
 		t.Error("落在两个组名里的一段不该算找到")
 	}
+}
+
+// Rich Message 版的总览和分组列表：总览露出组名和命令名，说明是详情块里的一张表格，
+// 组名占一整行；分组列表直接是表格。都要能按 MTProto 编码、在上限之内。
+func TestHelpRich(t *testing.T) {
+	registry := command.New([]string{".", "$"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	registry.Register(
+		&command.Command{Name: "ping", Group: command.GroupSystem, Description: "测试网络延迟"},
+		&command.Command{Name: "speedtest", Aliases: []string{"st"}, Group: command.GroupTools, Description: "测量主机网络速度"},
+	)
+	list := helpListRich(registry, ".")
+	if len(list) != 5 {
+		t.Fatalf("总览应是标题、两组、提示和详情块：%d 块", len(list))
+	}
+	if got := bot.RichMessageText(richMessage(list[:4])); got != "📖 命令列表\n运行与维护\n.ping\n查询与工具\n.speedtest\n.help 命令 看用法 · 前缀：. $" {
+		t.Errorf("总览的文字不对：%q", got)
+	}
+	details, ok := list[4].(*tg.PageBlockDetails)
+	if !ok || details.Open {
+		t.Fatalf("说明应收在收起的详情块里：%T", list[4])
+	}
+	table := details.Blocks[0].(*tg.PageBlockTable)
+	if len(table.Rows) != 5 || !table.Rows[1].Cells[0].Header || table.Rows[1].Cells[0].Colspan != 2 {
+		t.Fatalf("表格应是表头、组名行和命令行：%+v", table.Rows)
+	}
+	if got := bot.RichMessageText(richMessage([]tg.PageBlockClass{table})); !strings.Contains(got, ".speedtest（.st） | 测量主机网络速度") {
+		t.Errorf("命令行不对：%q", got)
+	}
+	group := groupHelpRich(registry, ".", command.GroupTools)
+	if got := bot.RichMessageText(richMessage(group)); got != "📖 查询与工具\n命令 | 说明\n.speedtest（.st） | 测量主机网络速度\n.help 命令 看用法" {
+		t.Errorf("分组列表不对：%q", got)
+	}
+	for _, blocks := range [][]tg.PageBlockClass{list, group} {
+		var buffer bin.Buffer
+		if err := (&tg.InputRichMessage{Blocks: blocks}).Encode(&buffer); err != nil || !bot.RichFits(blocks) {
+			t.Fatalf("编码失败或超限：%v", err)
+		}
+	}
+}
+
+func richMessage(blocks []tg.PageBlockClass) *tg.Message {
+	message := &tg.Message{}
+	message.SetRichMessage(tg.RichMessage{Blocks: blocks})
+	return message
 }

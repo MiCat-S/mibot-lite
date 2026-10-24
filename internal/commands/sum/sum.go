@@ -30,8 +30,6 @@ import (
 // （aiConfig.aiMigrated，任务的 aiProvider 改成 ai 的标签），这种数据走 ai 的
 // 统一配置；sum 自己仍有服务商时优先用自己的。
 
-const sumDefaultPrompt = "你是 Telegram 群聊摘要助手。根据以下聊天记录，只输出 Telegram HTML 格式的中文总结。\n\n允许使用 <b>、<code>、<a href=\"...\">、<blockquote expandable>；禁止使用 Markdown、#、**、```、[文字](链接)、裸 URL、<https://...>。聊天记录中每条消息末尾都有“来源”链接。每条摘要、资源、结论、互动、零散信息或时间线条目都必须附带最对应的 Telegram 原消息链接，格式为 <a href=\"Telegram消息链接\">来源</a>；不要编造链接。\n\n只记录聊天中明确出现的事实、反馈、决定和计划。只有存在明确完成反馈、验证结果或维护者确认时，才可使用“已确认”“已解决”“已完成”等表达；个人测试、成员讨论或推测使用“有人反馈”“初步判断”“可能”“尚待复测”“未见最终确认”等表述。不要把“计划支持”“准备测试”“正在修改”写成已经实现或可用。合并重复消息，忽略纯寒暄、表情、广告、机器人状态和无结论闲聊。\n\n总长度控制在 900-1600 个中文字符；重要讨论较多时可接近上限。信息应完整、可回溯，但不要逐条复述聊天记录。\n\n固定输出：\n<b>📌 本次摘要</b>\n用 2-3 句话概括本次聊天背景、关键结果和当前状态；末尾附 1-2 个 <a href=\"Telegram消息链接\">来源</a>。\n\n随后按实际内容选择下列栏目，不相关的栏目完全不要输出：\n<b>💬 主要话题</b>：日常交流、综合讨论、一般观点或群内共识。\n<b>🧩 技术与项目</b>：技术方案、配置、开发、排障、版本更新、命令和实现细节。\n<b>📰 资源分享</b>：重要外部链接、文件、工具、新闻或可复用资源。\n<b>👥 重要互动</b>：明确的求助、答复、邀请、提醒、分工、争议或值得关注的人际互动。\n<b>🗂 零散信息</b>：无法归入其他栏目但值得保留的版本、环境、数据、状态、背景或简短结论。\n<b>🕒 时间线梳理</b>：仅在同一轮聊天出现多个明确时间点，且时间顺序有助于理解事件进展时输出。\n\n不要输出“待处理事项”“行动项”“下一步”这类面向管理者的栏目；群成员未必负责跟进。若聊天中存在未解决问题、风险或后续计划，将其放入最相关的上述栏目，并使用“仍待确认”“尚待复测”“计划继续”等中性表述。\n\n每个栏目使用以下格式：\n<b>栏目标题</b>\n<blockquote expandable>• 要点：说明结论、必要背景、明确分歧、风险或计划 <a href=\"Telegram消息链接\">来源</a>\n• 要点：说明结论、必要背景、明确分歧、风险或计划 <a href=\"Telegram消息链接\">来源</a></blockquote>\n\n规则：\n1. 每个栏目 1-3 条；每条建议 35-90 个中文字符。内容多时优先压缩重复过程，保留结论、关键依据、数据、风险和计划。\n2. 技术内容较多时，可在 <b>🧩 技术与项目</b> 内使用 <b>1. 小标题</b> 分组；最多 3 个小标题，每个小标题只保留 1-2 条。\n3. 时间线每条使用“<code>HH:MM</code>：事件概述 <a href=\"Telegram消息链接\">来源</a>”；最多 4 条，只保留转折、决定、故障、修复或重要更新。\n4. 命令、模型名、插件名、配置名、版本号、错误码使用 <code>...</code>。\n5. 外部链接仅在确实影响后续操作时保留，格式为 <a href=\"完整URL\">名称</a>，并在同一条末尾保留 Telegram <a href=\"Telegram消息链接\">来源</a>。\n6. 不输出空栏目、“无”“暂无”“未发现”或处理过程。每个栏目之间空一行，只输出最终总结。"
-
 type sumProvider struct {
 	Name    string `json:"name"`
 	BaseURL string `json:"base_url"`
@@ -96,6 +94,15 @@ func (db *sumDB) normalize() {
 	}
 	if db.Seq == "" {
 		db.Seq = "0"
+	}
+	// 内置提示词改成了 Markdown 版，存着旧的内置提示词就换成新的，自定义的不动。
+	if db.AIConfig.DefaultPrompt == sumLegacyPrompt {
+		db.AIConfig.DefaultPrompt = sumDefaultPrompt
+	}
+	for index := range db.Tasks {
+		if db.Tasks[index].AIPrompt == sumLegacyPrompt {
+			db.Tasks[index].AIPrompt = ""
+		}
 	}
 }
 
@@ -548,6 +555,9 @@ func (s *sumService) readMessages(ctx context.Context, client *bot.Client, chatI
 				break
 			}
 			content := strings.TrimSpace(message.Message)
+			if content == "" {
+				content = bot.RichMessageText(message)
+			}
 			fileName := sumFileName(message.Media)
 			if content == "" && fileName == "" {
 				continue
@@ -587,21 +597,71 @@ type sumJob struct {
 	beforeID  int
 }
 
-func (s *sumService) summarize(ctx context.Context, client *bot.Client, job sumJob) (string, error) {
+// sumResult 是一次摘要：对话标题、生成时间和模型写的正文。正文是 Markdown，
+// 旧提示词让模型写的 Telegram HTML 也认（见 ai.MarkdownRich）。
+type sumResult struct {
+	title   string
+	at      time.Time
+	output  string
+	spoiler bool
+}
+
+func (r sumResult) heading() string {
+	return r.title + " · " + r.at.Format("2006-01-02 15:04")
+}
+
+// html 是普通消息版：栏目标题只加粗，要点照旧版式折进可展开的引用；spoiler 时整段折起来。
+func (r sumResult) html() string {
+	body := ai.MarkdownHTML(r.output, ai.HTMLStyle{CollapseSafe: r.spoiler, PlainHeadings: true, FoldLists: true})
+	if r.spoiler && strings.TrimSpace(body) != "" {
+		body = "<blockquote expandable>" + body + "</blockquote>"
+	}
+	return "🧾 <b>群组消息摘要</b>\n" + command.Escape(r.heading()) + "\n\n" + body
+}
+
+// rich 是 Rich Message 版：栏目是真正的标题，要点是真正的列表；spoiler 时每个栏目折成收起的详情块。
+// 能发（有 Premium、没超上限）时第二个返回值为真。
+func (r sumResult) rich(client *bot.Client) ([]tg.PageBlockClass, bool) {
+	if !client.CanSendRich() {
+		return nil, false
+	}
+	header := bot.RichConcat(bot.RichPlain("🧾 "), &tg.TextBold{Text: bot.RichPlain("群组消息摘要")}, bot.RichPlain("\n"+r.heading()))
+	blocks := append([]tg.PageBlockClass{&tg.PageBlockParagraph{Text: header}}, ai.MarkdownRich(r.output, r.spoiler)...)
+	return blocks, bot.RichFits(blocks)
+}
+
+// sendSummary 把摘要作为新消息发到 peer：能发 Rich Message 时发一条，否则（或被拒收时）分页发 HTML。
+func sendSummary(ctx context.Context, client *bot.Client, peer tg.InputPeerClass, result sumResult, options bot.SendOptions, log *slog.Logger) error {
+	if blocks, ok := result.rich(client); ok {
+		_, err := client.SendRich(ctx, peer, blocks, options)
+		if !bot.RichRejected(err) {
+			return err
+		}
+		log.Warn("sum.rich_rejected", "error", err.Error())
+	}
+	for _, page := range command.HTMLPages(result.html(), command.PageLimit) {
+		if _, err := client.SendHTML(ctx, peer, page, options); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *sumService) summarize(ctx context.Context, client *bot.Client, job sumJob) (sumResult, error) {
 	db, err := s.read()
 	if err != nil {
-		return "", err
+		return sumResult{}, err
 	}
 	backend, err := s.backend(db, job.provider)
 	if err != nil {
-		return "", err
+		return sumResult{}, err
 	}
 	rows, title, err := s.readMessages(ctx, client, job.chatID, job.beforeID, job.count, job.timeRange)
 	if err != nil {
-		return "", err
+		return sumResult{}, err
 	}
 	if len(rows) == 0 {
-		return "", kit.Fail("没有可以摘要的消息")
+		return sumResult{}, kit.Fail("没有可以摘要的消息")
 	}
 	prompt := job.prompt
 	if prompt == "" {
@@ -612,16 +672,13 @@ func (s *sumService) summarize(ctx context.Context, client *bot.Client, job sumJ
 	}
 	output, err := backend.call(ctx, db, sumFormatMessages(rows), prompt)
 	if err != nil {
-		return "", err
+		return sumResult{}, err
 	}
 	output = strings.TrimSpace(sumThinkPattern.ReplaceAllString(output, ""))
 	if limit := db.AIConfig.MaxOutputLength; limit > 0 && kit.UTF16Len(output) > limit {
 		output = kit.TruncateRunes(output, limit) + "\n\n内容已按配置长度截断。"
 	}
-	if job.spoiler && !strings.Contains(output, "<blockquote expandable>") {
-		output = "<blockquote expandable>" + output + "</blockquote>"
-	}
-	return "🧾 <b>群组消息摘要</b>\n" + command.Escape(title) + " · " + time.Now().Format("2006-01-02 15:04") + "\n\n" + output, nil
+	return sumResult{title: title, at: time.Now(), output: output, spoiler: job.spoiler}, nil
 }
 
 // pushTarget 是任务的推送目标：任务自己的，否则默认推送目标，都没有就是收藏夹。
@@ -636,7 +693,7 @@ func pushTarget(db sumDB, task sumTask) string {
 }
 
 func (s *sumService) push(ctx context.Context, client *bot.Client, task sumTask) error {
-	html, err := s.summarize(ctx, client, sumJob{chatID: task.ChatID, count: task.MessageCount, timeRange: task.TimeRange,
+	result, err := s.summarize(ctx, client, sumJob{chatID: task.ChatID, count: task.MessageCount, timeRange: task.TimeRange,
 		provider: task.AIProvider, prompt: task.AIPrompt, spoiler: task.UseSpoiler})
 	if err != nil {
 		return err
@@ -649,12 +706,7 @@ func (s *sumService) push(ctx context.Context, client *bot.Client, task sumTask)
 	if err != nil {
 		return kit.Fail("无法定位推送目标：" + pushTarget(db, task))
 	}
-	for _, page := range command.HTMLPages(html, command.PageLimit) {
-		if _, err := client.SendHTML(ctx, peer, page, bot.SendOptions{LinkPreview: db.AIConfig.LinkPreview}); err != nil {
-			return err
-		}
-	}
-	return nil
+	return sendSummary(ctx, client, peer, result, bot.SendOptions{LinkPreview: db.AIConfig.LinkPreview}, s.a.Logger)
 }
 
 func sumHelp(prefix string) string {
@@ -746,25 +798,30 @@ func (s *sumService) instant(ctx context.Context, inv *command.Invocation, sub s
 	if err != nil {
 		return err
 	}
-	html, err := s.summarize(ctx, inv.Client, sumJob{chatID: inv.Message.ChatID, count: count, provider: provider,
+	result, err := s.summarize(ctx, inv.Client, sumJob{chatID: inv.Message.ChatID, count: count, provider: provider,
 		spoiler: db.AIConfig.DefaultSpoiler, beforeID: inv.Message.ID})
 	if err != nil {
 		return err
 	}
-	pages := command.HTMLPages(html, command.PageLimit)
-	if !db.AIConfig.ReplyMode {
-		return inv.EditPages(ctx, pages)
-	}
-	// 回复模式：摘要作为新消息发出（回复命令所回复的那条），再删掉命令消息，
-	// 这样耗时较长的摘要不会被新消息顶到上面去。
 	peer, err := inv.Client.InputPeer(inv.Message.Peer)
 	if err != nil {
 		return err
 	}
-	for _, page := range pages {
-		if _, err := inv.Client.SendHTML(ctx, peer, page, bot.SendOptions{ReplyTo: inv.Message.ReplyToID, LinkPreview: db.AIConfig.LinkPreview}); err != nil {
-			return err
+	if !db.AIConfig.ReplyMode {
+		if blocks, ok := result.rich(inv.Client); ok {
+			err := inv.Client.EditRich(ctx, peer, inv.Message.ID, blocks)
+			if !bot.RichRejected(err) {
+				return err
+			}
+			inv.Log.Warn("sum.rich_rejected", "error", err.Error())
 		}
+		return inv.EditPages(ctx, command.HTMLPages(result.html(), command.PageLimit))
+	}
+	// 回复模式：摘要作为新消息发出（回复命令所回复的那条），再删掉命令消息，
+	// 这样耗时较长的摘要不会被新消息顶到上面去。
+	options := bot.SendOptions{ReplyTo: inv.Message.ReplyToID, LinkPreview: db.AIConfig.LinkPreview}
+	if err := sendSummary(ctx, inv.Client, peer, result, options, inv.Log); err != nil {
+		return err
 	}
 	if err := inv.Client.DeleteMessage(ctx, inv.Message); err != nil {
 		inv.Log.Warn("sum.delete_command_failed", "error", err.Error())

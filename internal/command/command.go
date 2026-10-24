@@ -17,6 +17,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/gotd/td/tg"
+
 	"github.com/MiCat-S/mibot-lite/internal/bot"
 )
 
@@ -70,6 +72,23 @@ func (inv *Invocation) EditText(ctx context.Context, text string) error {
 func (inv *Invocation) Reply(ctx context.Context, html string) error {
 	_, err := inv.Client.Reply(ctx, inv.Message, html)
 	return err
+}
+
+// EditRich 有 Premium 时把命令消息改成 Rich Message；发不了、超出上限或者被拒收时
+// 改成 fallback 这段 HTML。
+func (inv *Invocation) EditRich(ctx context.Context, blocks []tg.PageBlockClass, fallback string) error {
+	if inv.Client.CanSendRich() && bot.RichFits(blocks) {
+		peer, err := inv.Client.InputPeer(inv.Message.Peer)
+		if err != nil {
+			return err
+		}
+		err = inv.Client.EditRich(ctx, peer, inv.Message.ID, blocks)
+		if !bot.RichRejected(err) {
+			return err
+		}
+		inv.Log.Warn("command.rich_rejected", "error", err.Error())
+	}
+	return inv.Edit(ctx, fallback)
 }
 
 // EditPages 把第一页改进命令消息，其余各页作为回复接着发。

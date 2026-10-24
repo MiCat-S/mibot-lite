@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"html"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -11,10 +12,13 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/command"
 )
 
-// 这里把模型回答的 Markdown 转成两种输出：Telegram 的 HTML（聊天消息）和
-// Telegraph 的节点（长文页面）。块级规则沿用 MiBox ai 插件的 TelegramFormatter：
-// 标题转粗体、列表用「• / 1.」加缩进模拟、代码块转 <pre>、引用转 <blockquote>，
-// 其余文本一律转义。
+// 这里把模型回答的 Markdown 转成三种输出：Rich Message 的块（rich.go，有 Premium 时用）、
+// Telegram 的 HTML（普通聊天消息）和 Telegraph 的节点（长文页面）。HTML 的块级规则沿用
+// MiBox ai 插件的 TelegramFormatter：标题转粗体、列表用「• / 1.」加缩进模拟、代码块转 <pre>、
+// 引用转 <blockquote>，其余文本一律转义。
+//
+// 和 Telegram 的 Rich Markdown 一样，正文里可以夹 Telegram HTML 的行内标签（<b>、<a href> 等）
+// 和 <blockquote expandable>，所以按旧格式输出 HTML 的提示词照样能用。
 
 type mdBlockKind int
 
@@ -25,9 +29,11 @@ const (
 	mdQuote
 	mdList
 	mdRule
+	mdTable
+	mdMathBlock
 )
 
-// mdBlock 是一个块：段落、标题、代码块、引用、列表或分隔线。
+// mdBlock 是一个块：段落、标题、代码块、引用、列表、分隔线、表格或公式。
 type mdBlock struct {
 	kind  mdBlockKind
 	level int
@@ -35,13 +41,22 @@ type mdBlock struct {
 	text  string
 	lines []string
 	items []*mdItem
+	// rows 是表格的格子，第一行是表头；align 是每列的对齐：0 靠左、1 居中、2 靠右。
+	rows  [][]string
+	align []int
+	// html 为真时引用来自 <blockquote> 标签，lines 是标签里的原文，不再按 Markdown 分块；
+	// expandable 是标签带不带 expandable。
+	html       bool
+	expandable bool
 }
 
-// mdItem 是列表的一项，children 是缩进更深的子项。
+// mdItem 是列表的一项，children 是缩进更深的子项。task 为真时是任务列表项（- [ ] / - [x]）。
 type mdItem struct {
 	ordered  bool
 	number   int
 	indent   int
+	task     bool
+	checked  bool
 	lines    []string
 	children []*mdItem
 }
@@ -55,7 +70,17 @@ var (
 	mdCitePattern    = regexp.MustCompile(`(?i)<\s*/?\s*cite\s*>|<\s*cite\s*/\s*>|&lt;\s*/?\s*cite\s*&gt;|&lt;\s*cite\s*/\s*&gt;`)
 	mdLanguage       = regexp.MustCompile(`^[a-z0-9_+-]+$`)
 	mdLeadingSpaces  = regexp.MustCompile(`^( {2,})(.*)$`)
+	mdTaskPattern    = regexp.MustCompile(`^\[([ xX])\]\s+`)
+	mdTableDelimiter = regexp.MustCompile(`^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*$`)
+	mdQuoteOpen      = regexp.MustCompile(`(?i)^\s*<blockquote(\s+expandable)?\s*>`)
+	mdQuoteClose     = regexp.MustCompile(`(?i)</blockquote\s*>`)
+	mdTagPattern     = regexp.MustCompile(`^<(/?)([a-zA-Z][a-zA-Z0-9-]*)((?:\s+[a-zA-Z-]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'>]+))?)*)\s*(/?)>`)
+	mdAttrPattern    = regexp.MustCompile(`([a-zA-Z-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?`)
+	mdEntityPattern  = regexp.MustCompile(`^&(?:#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6}|[a-zA-Z][a-zA-Z0-9]{1,31});`)
 )
+
+// mdEscapable 是反斜杠能转义的字符（CommonMark 的 ASCII 标点）。
+const mdEscapable = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
 
 const mdMaxListDepth = 3
 
@@ -116,6 +141,21 @@ func parseMarkdown(source string) []mdBlock {
 				index++
 			}
 			blocks = append(blocks, mdBlock{kind: mdCode, lang: lang, text: strings.Join(code, "\n")})
+		case mdDisplayMathStart(line):
+			source, next, ok := parseDisplayMath(lines, index)
+			if !ok {
+				paragraph = append(paragraph, line)
+				index++
+				continue
+			}
+			flush()
+			blocks = append(blocks, mdBlock{kind: mdMathBlock, text: source})
+			index = next
+		case mdQuoteOpen.MatchString(line):
+			flush()
+			var block mdBlock
+			block, index = parseHTMLQuote(lines, index)
+			blocks = append(blocks, block)
 		case len(paragraph) == 0 && mdIndentedCode.MatchString(line) && !mdIsMarker(line):
 			var code []string
 			for index < len(lines) && (mdIndentedCode.MatchString(lines[index]) || mdBlank(lines[index])) {
@@ -143,6 +183,11 @@ func parseMarkdown(source string) []mdBlock {
 			match := mdHeadingPattern.FindStringSubmatch(line)
 			blocks = append(blocks, mdBlock{kind: mdHeading, level: len(match[1]), text: strings.TrimSpace(match[2])})
 			index++
+		case mdTableStart(lines, index):
+			flush()
+			var block mdBlock
+			block, index = parseTable(lines, index)
+			blocks = append(blocks, block)
 		case mdIsMarker(line):
 			flush()
 			var items []*mdItem
@@ -162,6 +207,142 @@ func mdIsMarker(line string) bool {
 	return ok
 }
 
+func mdDisplayMathStart(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	return strings.HasPrefix(trimmed, "$$") || strings.HasPrefix(trimmed, `\[`)
+}
+
+// parseDisplayMath 读 $$…$$ 或 \[…\] 包住的公式块，可以写在一行里，也可以跨行，但不跨空行。
+// 没有闭合、闭合后面还有别的字时不算公式块，交给段落按行内公式处理。
+func parseDisplayMath(lines []string, start int) (string, int, bool) {
+	trimmed := strings.TrimSpace(lines[start])
+	open, close := "$$", "$$"
+	if strings.HasPrefix(trimmed, `\[`) {
+		open, close = `\[`, `\]`
+	}
+	parts := []string{strings.TrimPrefix(trimmed, open)}
+	for index := start; index < len(lines); index++ {
+		if index > start {
+			if mdBlank(lines[index]) {
+				break
+			}
+			parts = append(parts, strings.TrimSpace(lines[index]))
+		}
+		last := parts[len(parts)-1]
+		end := strings.Index(last, close)
+		if end < 0 {
+			continue
+		}
+		if strings.TrimSpace(last[end+len(close):]) != "" {
+			return "", start, false
+		}
+		parts[len(parts)-1] = last[:end]
+		source := strings.TrimSpace(strings.Join(parts, "\n"))
+		return source, index + 1, source != ""
+	}
+	return "", start, false
+}
+
+// parseHTMLQuote 读 <blockquote> 或 <blockquote expandable> 到 </blockquote> 为止的内容，
+// 中间的空行也算在里面。闭合标签后面还有字时，那些字留给下一个块。
+func parseHTMLQuote(lines []string, start int) (mdBlock, int) {
+	match := mdQuoteOpen.FindStringSubmatch(lines[start])
+	block := mdBlock{kind: mdQuote, html: true, expandable: match[1] != ""}
+	rest := lines[start][len(match[0]):]
+	index := start
+	for {
+		if loc := mdQuoteClose.FindStringIndex(rest); loc != nil {
+			block.lines = append(block.lines, rest[:loc[0]])
+			if after := rest[loc[1]:]; strings.TrimSpace(after) != "" {
+				lines[index] = after
+			} else {
+				index++
+			}
+			break
+		}
+		block.lines = append(block.lines, rest)
+		index++
+		if index >= len(lines) {
+			break
+		}
+		rest = lines[index]
+	}
+	for len(block.lines) > 0 && mdBlank(block.lines[0]) {
+		block.lines = block.lines[1:]
+	}
+	for len(block.lines) > 0 && mdBlank(block.lines[len(block.lines)-1]) {
+		block.lines = block.lines[:len(block.lines)-1]
+	}
+	return block, index
+}
+
+// mdTableStart 判断 lines[index] 是不是 GFM 表格的表头：带竖线，下一行是同样列数的分隔行。
+func mdTableStart(lines []string, index int) bool {
+	if index+1 >= len(lines) || !strings.Contains(lines[index], "|") || !strings.Contains(lines[index+1], "|") ||
+		!mdTableDelimiter.MatchString(lines[index+1]) {
+		return false
+	}
+	return len(mdTableCells(lines[index])) == len(mdTableCells(lines[index+1]))
+}
+
+// parseTable 读一张表格：表头、分隔行和其后带竖线的行，遇到空行或别的块为止。
+// 每行的格子数补齐或截断成表头的列数。
+func parseTable(lines []string, start int) (mdBlock, int) {
+	header := mdTableCells(lines[start])
+	block := mdBlock{kind: mdTable, rows: [][]string{header}}
+	for _, cell := range mdTableCells(lines[start+1]) {
+		align := 0
+		switch {
+		case strings.HasPrefix(cell, ":") && strings.HasSuffix(cell, ":"):
+			align = 1
+		case strings.HasSuffix(cell, ":"):
+			align = 2
+		}
+		block.align = append(block.align, align)
+	}
+	index := start + 2
+	for ; index < len(lines); index++ {
+		line := lines[index]
+		if mdBlank(line) || !strings.Contains(line, "|") || mdQuoteLine(line) || mdFence(line) || mdHeadingPattern.MatchString(line) {
+			break
+		}
+		cells := mdTableCells(line)
+		row := make([]string, len(header))
+		copy(row, cells)
+		block.rows = append(block.rows, row)
+	}
+	return block, index
+}
+
+// mdTableCells 把一行表格切成格子：去掉两头的竖线，按没有转义、不在行内代码里的竖线切开，
+// 格子里的 \| 还原成竖线。
+func mdTableCells(line string) []string {
+	line = strings.TrimSpace(line)
+	line = strings.TrimPrefix(line, "|")
+	if strings.HasSuffix(line, "|") && !strings.HasSuffix(line, `\|`) {
+		line = line[:len(line)-1]
+	}
+	var cells []string
+	var cell strings.Builder
+	inCode := false
+	for index := 0; index < len(line); index++ {
+		switch char := line[index]; {
+		case char == '\\' && index+1 < len(line) && line[index+1] == '|':
+			cell.WriteByte('|')
+			index++
+		case char == '`':
+			inCode = !inCode
+			cell.WriteByte(char)
+		case char == '|' && !inCode:
+			cells = append(cells, strings.TrimSpace(cell.String()))
+			cell.Reset()
+		default:
+			cell.WriteByte(char)
+		}
+	}
+	return append(cells, strings.TrimSpace(cell.String()))
+}
+
 // parseMarkdownList 读取从 start 开始的连续列表区域，遇到空行或其他块的开头为止；
 // 按缩进建成最多三层的树，更深的标记并入当前项作为续行。
 func parseMarkdownList(lines []string, start int) ([]*mdItem, int) {
@@ -171,7 +352,8 @@ func parseMarkdownList(lines []string, start int) ([]*mdItem, int) {
 	index := start
 	for ; index < len(lines); index++ {
 		line := lines[index]
-		if mdBlank(line) || mdRulePattern.MatchString(line) || mdQuoteLine(line) || mdFence(line) || mdHeadingPattern.MatchString(line) {
+		if mdBlank(line) || mdRulePattern.MatchString(line) || mdQuoteLine(line) || mdFence(line) || mdHeadingPattern.MatchString(line) ||
+			mdQuoteOpen.MatchString(line) {
 			break
 		}
 		indent, ordered, number, text, ok := mdMarker(line)
@@ -188,7 +370,12 @@ func parseMarkdownList(lines []string, start int) ([]*mdItem, int) {
 			current.lines = append(current.lines, text)
 			continue
 		}
-		item := &mdItem{ordered: ordered, number: number, indent: indent, lines: []string{text}}
+		item := &mdItem{ordered: ordered, number: number, indent: indent}
+		if match := mdTaskPattern.FindStringSubmatch(text); match != nil {
+			item.task, item.checked = true, match[1] != " "
+			text = text[len(match[0]):]
+		}
+		item.lines = []string{text}
 		parent := stack[len(stack)-1]
 		parent.children = append(parent.children, item)
 		stack = append(stack, item)
@@ -197,25 +384,67 @@ func parseMarkdownList(lines []string, start int) ([]*mdItem, int) {
 	return root.children, index
 }
 
-// markdownToHTML 把 Markdown 转成 Telegram 的 HTML。collapseSafe 为真时外层会整体
-// 包进 <blockquote expandable>，引用块就不再输出 <blockquote>，以免嵌套。
-func markdownToHTML(markdown string, collapseSafe bool) string {
+// HTMLStyle 是 Markdown 转 Telegram HTML 时的版式。
+type HTMLStyle struct {
+	// CollapseSafe 为真时外层会整体包进 <blockquote expandable>，引用块和 FoldLists
+	// 就不再输出 <blockquote>，以免嵌套。
+	CollapseSafe bool
+	// PlainHeadings 为真时各级标题都只加粗，不加「▌」「•」。
+	PlainHeadings bool
+	// FoldLists 为真时每个列表都包进可展开的引用，这是 .sum 的旧版式：栏目标题下面是折起来的要点。
+	FoldLists bool
+}
+
+// MarkdownHTML 把 Markdown 转成 Telegram 的 HTML，给发不了 Rich Message 的时候用。
+func MarkdownHTML(markdown string, style HTMLStyle) string {
 	markdown = mdCitePattern.ReplaceAllString(markdown, "")
 	var rendered []string
 	for _, block := range parseMarkdown(markdown) {
-		if html := renderBlockHTML(block, collapseSafe); html != "" {
+		if html := renderBlockHTML(block, style); html != "" {
 			rendered = append(rendered, html)
 		}
 	}
 	return strings.Join(rendered, "\n\n")
 }
 
-func renderBlockHTML(block mdBlock, collapseSafe bool) string {
+// markdownToHTML 是 .ai 回答用的版式，collapseSafe 见 HTMLStyle.CollapseSafe。
+func markdownToHTML(markdown string, collapseSafe bool) string {
+	return MarkdownHTML(markdown, HTMLStyle{CollapseSafe: collapseSafe})
+}
+
+// wrapQuote 把 body 包进引用；外层已经整体折叠（collapseSafe）或内容为空时原样返回。
+func wrapQuote(body string, expandable, collapseSafe bool) string {
+	switch {
+	case collapseSafe || strings.TrimSpace(body) == "":
+		return body
+	case expandable:
+		return "<blockquote expandable>" + body + "</blockquote>"
+	}
+	return "<blockquote>" + body + "</blockquote>"
+}
+
+func renderBlockHTML(block mdBlock, style HTMLStyle) string {
 	switch block.kind {
 	case mdRule:
 		return "────────────────"
 	case mdHeading:
-		return headingHTML(block.text, block.level)
+		return headingHTML(block.text, block.level, style.PlainHeadings)
+	case mdMathBlock:
+		return `<pre><code class="language-latex">` + command.Escape(block.text) + "</code></pre>"
+	case mdTable:
+		out := make([]string, 0, len(block.rows))
+		for index, row := range block.rows {
+			cells := make([]string, len(row))
+			for column, cell := range row {
+				cells[column] = inlineHTML(parseInline(cell, false))
+			}
+			line := strings.Join(cells, " | ")
+			if index == 0 {
+				line = "<b>" + line + "</b>"
+			}
+			out = append(out, line)
+		}
+		return strings.Join(out, "\n")
 	case mdCode:
 		if strings.TrimSpace(block.text) == "" {
 			return ""
@@ -227,12 +456,19 @@ func renderBlockHTML(block mdBlock, collapseSafe bool) string {
 		return "<pre><code>" + command.Escape(block.text) + "</code></pre>"
 	case mdQuote:
 		var out []string
+		if block.html {
+			for _, line := range block.lines {
+				indent, rest := leadingIndent(line)
+				out = append(out, indent+inlineHTML(parseInline(rest, false)))
+			}
+			return wrapQuote(strings.Join(out, "\n"), block.expandable, style.CollapseSafe)
+		}
 		for _, line := range block.lines {
 			depth, rest := quoteDepth(line)
 			rest = strings.TrimRight(rest, " \t")
 			var html string
 			if match := mdHeadingPattern.FindStringSubmatch(rest); match != nil {
-				html = headingHTML(strings.TrimSpace(match[2]), len(match[1]))
+				html = headingHTML(strings.TrimSpace(match[2]), len(match[1]), style.PlainHeadings)
 			} else {
 				html = inlineHTML(parseInline(rest, false))
 			}
@@ -242,15 +478,15 @@ func renderBlockHTML(block mdBlock, collapseSafe bool) string {
 			}
 			out = append(out, prefix+html)
 		}
-		body := strings.Join(out, "\n")
-		if collapseSafe || strings.TrimSpace(body) == "" {
-			return body
-		}
-		return "<blockquote>" + body + "</blockquote>"
+		return wrapQuote(strings.Join(out, "\n"), false, style.CollapseSafe)
 	case mdList:
 		var out []string
 		renderListHTML(block.items, 1, &out)
-		return strings.Join(out, "\n")
+		body := strings.Join(out, "\n")
+		if style.FoldLists {
+			return wrapQuote(body, true, style.CollapseSafe)
+		}
+		return body
 	}
 	var out []string
 	for _, line := range block.lines {
@@ -260,12 +496,13 @@ func renderBlockHTML(block mdBlock, collapseSafe bool) string {
 	return strings.TrimRight(strings.Join(out, "\n"), " \n")
 }
 
-func headingHTML(text string, level int) string {
+func headingHTML(text string, level int, plain bool) string {
 	body := inlineHTML(parseInline(strings.TrimSpace(text), false))
-	switch level {
-	case 2:
+	switch {
+	case plain:
+	case level == 2:
 		return "<b>▌" + body + "</b>"
-	case 3:
+	case level == 3:
 		return "<b>• " + body + "</b>"
 	}
 	return "<b>" + body + "</b>"
@@ -308,6 +545,12 @@ func renderListHTML(items []*mdItem, depth int, out *[]string) {
 		if item.ordered {
 			marker = strconv.Itoa(item.number) + ". "
 		}
+		switch {
+		case item.task && item.checked:
+			marker += "☑ "
+		case item.task:
+			marker += "☐ "
+		}
 		*out = append(*out, indent+marker+inlineHTML(parseInline(item.lines[0], false)))
 		for _, line := range item.lines[1:] {
 			*out = append(*out, strings.Repeat(" ", (depth-1)*2+2)+inlineHTML(parseInline(line, false)))
@@ -328,9 +571,24 @@ const (
 	mdSpoiler
 	mdLink
 	mdImage
+	mdMath
+	mdBreak
+	mdMarked
+	mdSub
+	mdSup
+	// mdSpan 只是把 children 包在一起，比如链接不安全的 <a> 只留下文字。
+	mdSpan
 )
 
-// mdInline 是行内的一段：纯文本、行内代码、各种强调、链接或图片。
+// mdInlineTags 是行内认得的 HTML 标签：Telegram HTML 和 Rich Message 的写法。
+// <span> 只认 class="tg-spoiler"。
+var mdInlineTags = map[string]mdInlineKind{
+	"b": mdBold, "strong": mdBold, "i": mdItalic, "em": mdItalic, "u": mdUnderline, "ins": mdUnderline,
+	"s": mdStrike, "strike": mdStrike, "del": mdStrike, "tg-spoiler": mdSpoiler, "span": mdSpoiler,
+	"code": mdCodeSpan, "a": mdLink, "mark": mdMarked, "sub": mdSub, "sup": mdSup, "tg-emoji": mdSpan,
+}
+
+// mdInline 是行内的一段：纯文本、行内代码、各种强调、链接、图片、公式或换行。
 type mdInline struct {
 	kind     mdInlineKind
 	text     string
@@ -385,6 +643,45 @@ func parseInline(text string, inLink bool) []mdInline {
 			plain.WriteString(fence)
 			index += run
 			continue
+		case strings.HasPrefix(rest, `\(`) || strings.HasPrefix(rest, `\[`):
+			close := `\)`
+			if rest[1] == '[' {
+				close = `\]`
+			}
+			if end := strings.Index(rest[2:], close); end > 0 {
+				if source := strings.TrimSpace(rest[2 : 2+end]); source != "" {
+					emit(mdInline{kind: mdMath, text: source})
+					index += 2 + end + len(close)
+					continue
+				}
+			}
+			plain.WriteByte(rest[1])
+			index += 2
+			continue
+		case rest[0] == '\\' && len(rest) > 1 && strings.IndexByte(mdEscapable, rest[1]) >= 0:
+			plain.WriteByte(rest[1])
+			index += 2
+			continue
+		case rest[0] == '$':
+			if source, size, ok := dollarMath(rest); ok {
+				emit(mdInline{kind: mdMath, text: source})
+				index += size
+				continue
+			}
+		case rest[0] == '<':
+			if node, size, ok := inlineTag(rest, inLink); ok {
+				emit(node)
+				index += size
+				continue
+			}
+		case rest[0] == '&':
+			if entity := mdEntityPattern.FindString(rest); entity != "" {
+				if decoded := html.UnescapeString(entity); decoded != entity {
+					plain.WriteString(decoded)
+					index += len(entity)
+					continue
+				}
+			}
 		case !inLink && strings.HasPrefix(rest, "!["):
 			if label, target, size, ok := linkAt(rest[1:]); ok {
 				emit(mdInline{kind: mdImage, text: label, url: safeURL(target)})
@@ -461,6 +758,104 @@ func parseInline(text string, inLink bool) []mdInline {
 	return nodes
 }
 
+// dollarMath 认行内公式：$$…$$，或者按 Pandoc 的规则认 $…$：开头的 $ 后面紧跟非空白，
+// 结尾的 $ 前面紧跟非空白、后面不跟数字。这样「$5 和 $10」这种价钱不会被当成公式。
+func dollarMath(text string) (string, int, bool) {
+	if strings.HasPrefix(text, "$$") {
+		end := strings.Index(text[2:], "$$")
+		if end < 0 {
+			return "", 0, false
+		}
+		source := strings.TrimSpace(text[2 : 2+end])
+		return source, 2 + end + 2, source != ""
+	}
+	if len(text) < 3 || text[1] == ' ' || text[1] == '\t' {
+		return "", 0, false
+	}
+	end := strings.IndexByte(text[1:], '$') + 1
+	if end <= 1 || text[end-1] == ' ' || text[end-1] == '\t' || end+1 < len(text) && text[end+1] >= '0' && text[end+1] <= '9' {
+		return "", 0, false
+	}
+	return text[1:end], end + 1, true
+}
+
+// inlineTag 解析 text 开头的一个行内 HTML 标签连同它的内容。标签里的 Markdown 照样解析
+// （和 Telegram 的 Rich Markdown 一样），<code> 里的不解析。认不得的标签、没有闭合的标签不算，
+// 原样当文字显示。
+func inlineTag(text string, inLink bool) (mdInline, int, bool) {
+	match := mdTagPattern.FindStringSubmatch(text)
+	if match == nil || match[1] != "" {
+		return mdInline{}, 0, false
+	}
+	name := strings.ToLower(match[2])
+	if name == "br" {
+		return mdInline{kind: mdBreak}, len(match[0]), true
+	}
+	kind, known := mdInlineTags[name]
+	attrs := tagAttrs(match[3])
+	if !known || match[4] != "" || name == "span" && attrs["class"] != "tg-spoiler" || name == "a" && inLink {
+		return mdInline{}, 0, false
+	}
+	inner, size, ok := tagContent(text, name, len(match[0]))
+	if !ok {
+		return mdInline{}, 0, false
+	}
+	switch kind {
+	case mdCodeSpan:
+		return mdInline{kind: mdCodeSpan, text: html.UnescapeString(inner)}, size, true
+	case mdLink:
+		node := mdInline{kind: mdSpan, children: parseInline(inner, true)}
+		if safe := safeURL(html.UnescapeString(attrs["href"])); safe != "" {
+			node.kind, node.url = mdLink, safe
+		}
+		return node, size, true
+	}
+	return mdInline{kind: kind, children: parseInline(inner, inLink)}, size, true
+}
+
+// tagAttrs 读出标签的属性，名字转成小写。
+func tagAttrs(raw string) map[string]string {
+	attrs := map[string]string{}
+	for _, match := range mdAttrPattern.FindAllStringSubmatch(raw, -1) {
+		attrs[strings.ToLower(match[1])] = match[2] + match[3] + match[4]
+	}
+	return attrs
+}
+
+// mdMaxTagDepth 是同名标签最多嵌套几层，和 Rich Message 的嵌套上限一样。
+const mdMaxTagDepth = 16
+
+// tagContent 从 start 往后找 name 的闭合标签，同名标签嵌套时配对，返回中间的内容和
+// 从开头到闭合标签末尾的长度。同名标签嵌套超过 mdMaxTagDepth 层就不找了，
+// 免得一长串没闭合的 <b> 让每个都扫到结尾。
+func tagContent(text, name string, start int) (string, int, bool) {
+	depth := 1
+	for offset := start; offset < len(text); offset++ {
+		if text[offset] != '<' {
+			continue
+		}
+		// 先比对标签名，对上了再跑正则：没闭合的标签很多时，不至于每个 < 都跑一遍。
+		rest := strings.TrimPrefix(text[offset+1:], "/")
+		if len(rest) <= len(name) || !strings.EqualFold(rest[:len(name)], name) || !strings.ContainsRune(" \t\n/>", rune(rest[len(name)])) {
+			continue
+		}
+		match := mdTagPattern.FindStringSubmatch(text[offset:])
+		if match == nil || !strings.EqualFold(match[2], name) || match[4] != "" {
+			continue
+		}
+		if match[1] == "" {
+			if depth++; depth > mdMaxTagDepth {
+				return "", 0, false
+			}
+			continue
+		}
+		if depth--; depth == 0 {
+			return text[start:offset], offset + len(match[0]), true
+		}
+	}
+	return "", 0, false
+}
+
 func hasPrefixFold(text, prefix string) bool {
 	return len(text) >= len(prefix) && strings.EqualFold(text[:len(prefix)], prefix)
 }
@@ -528,6 +923,12 @@ func inlineHTML(nodes []mdInline) string {
 			b.WriteString("<tg-spoiler>" + inlineHTML(node.children) + "</tg-spoiler>")
 		case mdLink:
 			b.WriteString(`<a href="` + command.Escape(node.url) + `">` + inlineHTML(node.children) + "</a>")
+		case mdMath:
+			b.WriteString("<code>" + command.Escape(node.text) + "</code>")
+		case mdBreak:
+			b.WriteString("\n")
+		case mdMarked, mdSub, mdSup, mdSpan:
+			b.WriteString(inlineHTML(node.children))
 		case mdImage:
 			label := node.text
 			if label == "" {
@@ -569,34 +970,68 @@ func blocksToTelegraph(blocks []mdBlock) []any {
 				tag = "h3"
 			}
 			nodes = append(nodes, telegraphNode(tag, inlineTelegraph(parseInline(block.text, false))))
-		case mdCode:
+		case mdCode, mdMathBlock:
 			nodes = append(nodes, telegraphNode("pre", []any{telegraphNode("code", []any{block.text})}))
 		case mdQuote:
-			inner := make([]string, len(block.lines))
-			for index, line := range block.lines {
-				trimmed := strings.TrimLeft(line, " \t")
-				trimmed = strings.TrimPrefix(trimmed, ">")
-				inner[index] = strings.TrimPrefix(trimmed, " ")
+			if block.html {
+				nodes = append(nodes, telegraphNode("blockquote", []any{telegraphNode("p", linesTelegraph(block.lines))}))
+				continue
 			}
-			nodes = append(nodes, telegraphNode("blockquote", blocksToTelegraph(parseMarkdown(strings.Join(inner, "\n")))))
+			nodes = append(nodes, telegraphNode("blockquote", blocksToTelegraph(parseMarkdown(quoteInner(block.lines)))))
 		case mdList:
 			nodes = append(nodes, listTelegraph(block.items)...)
-		default:
+		case mdTable:
+			// Telegraph 没有表格，一行一行地写，格子之间用竖线隔开，表头加粗。
 			var children []any
-			for index, line := range block.lines {
+			for index, row := range block.rows {
 				if index > 0 {
 					children = append(children, telegraphNode("br", nil))
 				}
-				indent, rest := leadingIndent(line)
-				if indent != "" {
-					children = append(children, indent)
+				var cells []any
+				for column, cell := range row {
+					if column > 0 {
+						cells = append(cells, " | ")
+					}
+					cells = append(cells, inlineTelegraph(parseInline(cell, false))...)
 				}
-				children = append(children, inlineTelegraph(parseInline(rest, false))...)
+				if index == 0 {
+					cells = []any{telegraphNode("strong", compactTelegraph(cells))}
+				}
+				children = append(children, cells...)
 			}
 			nodes = append(nodes, telegraphNode("p", compactTelegraph(children)))
+		default:
+			nodes = append(nodes, telegraphNode("p", linesTelegraph(block.lines)))
 		}
 	}
 	return nodes
+}
+
+// linesTelegraph 把几行文字排成一段，行间用 br 隔开，行首缩进换成不换行空格。
+func linesTelegraph(lines []string) []any {
+	var children []any
+	for index, line := range lines {
+		if index > 0 {
+			children = append(children, telegraphNode("br", nil))
+		}
+		indent, rest := leadingIndent(line)
+		if indent != "" {
+			children = append(children, indent)
+		}
+		children = append(children, inlineTelegraph(parseInline(rest, false))...)
+	}
+	return compactTelegraph(children)
+}
+
+// quoteInner 去掉引用每行开头的一层 >，剩下的可以再按 Markdown 分块。
+func quoteInner(lines []string) string {
+	inner := make([]string, len(lines))
+	for index, line := range lines {
+		trimmed := strings.TrimLeft(line, " \t")
+		trimmed = strings.TrimPrefix(trimmed, ">")
+		inner[index] = strings.TrimPrefix(trimmed, " ")
+	}
+	return strings.Join(inner, "\n")
 }
 
 // listTelegraph 把相邻的同类项合成一个 ul 或 ol。
@@ -614,6 +1049,12 @@ func listTelegraph(items []*mdItem) []any {
 		var children []any
 		for _, item := range items[start:end] {
 			var content []any
+			switch {
+			case item.task && item.checked:
+				content = append(content, "☑ ")
+			case item.task:
+				content = append(content, "☐ ")
+			}
 			for index, line := range item.lines {
 				if index > 0 {
 					content = append(content, telegraphNode("br", nil))
@@ -645,8 +1086,12 @@ func inlineTelegraph(nodes []mdInline) []any {
 			out = append(out, telegraphNode("s", inlineTelegraph(node.children)))
 		case mdUnderline:
 			out = append(out, telegraphNode("u", inlineTelegraph(node.children)))
-		case mdSpoiler:
+		case mdSpoiler, mdMarked, mdSub, mdSup, mdSpan:
 			out = append(out, inlineTelegraph(node.children)...)
+		case mdMath:
+			out = append(out, telegraphNode("code", []any{node.text}))
+		case mdBreak:
+			out = append(out, telegraphNode("br", nil))
 		case mdLink:
 			link := telegraphNode("a", inlineTelegraph(node.children))
 			link["attrs"] = map[string]any{"href": node.url}

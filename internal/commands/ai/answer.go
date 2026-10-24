@@ -7,6 +7,9 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
+
+	"github.com/gotd/td/tg"
 
 	"github.com/MiCat-S/mibot-lite/internal/bot"
 	"github.com/MiCat-S/mibot-lite/internal/command"
@@ -71,6 +74,68 @@ func answerPages(question, answerHTML, model string, collapse bool) []string {
 	return pages
 }
 
+// answerFoldLength 是开启折叠时回答多长（按字符算）才折起来，短回答直接显示。
+const answerFoldLength = 400
+
+// answerRich 是 Rich Message 版的回答，一条最多 32768 个字符，不用分页。版式和 answerPages
+// 一样是「问：」问题、「答：」回答：开启折叠时问题是可展开的引用，长回答只露出开头，其余收进
+// 「展开全文」详情块，和 HTML 版可展开的引用一样先给个预览。来源收进详情块，模型名写在页脚。
+func answerRich(question, answer string, sources []aiSource, model string, collapse bool) []tg.PageBlockClass {
+	blocks := []tg.PageBlockClass{&tg.PageBlockParagraph{Text: bot.RichPlain("问：")}}
+	switch {
+	case question == "":
+	case collapse:
+		blocks = append(blocks, &tg.PageBlockBlockquote{Collapsed: true, Text: bot.RichPlain(question), Caption: &tg.TextEmpty{}})
+	default:
+		blocks = append(blocks, &tg.PageBlockParagraph{Text: bot.RichPlain(question)})
+	}
+	blocks = append(blocks, &tg.PageBlockParagraph{Text: bot.RichPlain("答：")})
+	body := MarkdownRich(answer, false)
+	if collapse && utf8.RuneCountInString(answer) > answerFoldLength {
+		// 露出开头直到第一个不是标题的块，免得预览里只有一个标题。
+		shown := 0
+		for shown < len(body) {
+			_, _, heading := richHeadingOf(body[shown])
+			shown++
+			if !heading {
+				break
+			}
+		}
+		if shown < len(body) {
+			body = append(body[:shown:shown], &tg.PageBlockDetails{Title: bot.RichPlain("展开全文"), Blocks: body[shown:]})
+		}
+	}
+	blocks = append(blocks, body...)
+	if len(sources) > 0 {
+		sources = sources[:min(8, len(sources))]
+		list := &tg.PageBlockOrderedList{Start: 1}
+		for index, item := range sources {
+			title := item.Title
+			if title == "" {
+				title = item.URL
+			}
+			list.Items = append(list.Items, &tg.PageListOrderedItemBlocks{Value: index + 1,
+				Blocks: []tg.PageBlockClass{&tg.PageBlockParagraph{Text: &tg.TextURL{Text: bot.RichPlain(title), URL: item.URL}}}})
+		}
+		blocks = append(blocks, &tg.PageBlockDetails{Title: bot.RichPlain(fmt.Sprintf("来源（%d）", len(sources))), Blocks: []tg.PageBlockClass{list}})
+	}
+	if model != "" {
+		blocks = append(blocks, &tg.PageBlockFooter{Text: &tg.TextItalic{Text: bot.RichPlain("🍀 由 " + model + " 生成")}})
+	}
+	return blocks
+}
+
+// replyText 是被回复消息的文字；对方发的是 Rich Message 时正文是空的，从块里取。
+func replyText(reply *bot.Message) string {
+	if reply == nil {
+		return ""
+	}
+	if reply.Text != "" {
+		return reply.Text
+	}
+	return bot.RichMessageText(reply.Raw)
+}
+
 // replyAnchor 是回答要回复的消息：命令回复了同一对话里的某条消息就回复那条，
 // 在论坛话题里就回复话题，否则不回复。
 func replyAnchor(command, reply *bot.Message) int {
@@ -108,6 +173,25 @@ func deliverAnswer(ctx context.Context, inv *command.Invocation, pages []string,
 			first = id
 		}
 	}
+	deleteCommand(ctx, inv, peer)
+	return nil
+}
+
+// deliverRich 和 deliverAnswer 一样把回答作为新消息发出、再删掉命令，只是整个回答是一条 Rich Message。
+func deliverRich(ctx context.Context, inv *command.Invocation, blocks []tg.PageBlockClass, anchor int) error {
+	peer, err := inv.Client.InputPeer(inv.Message.Peer)
+	if err != nil {
+		return err
+	}
+	if _, err := inv.Client.SendRich(ctx, peer, blocks, bot.SendOptions{ReplyTo: anchor}); err != nil {
+		return err
+	}
+	deleteCommand(ctx, inv, peer)
+	return nil
+}
+
+// deleteCommand 删掉命令消息，属于相册时连同整组。删不掉只记日志：回答已经发出去了。
+func deleteCommand(ctx context.Context, inv *command.Invocation, peer tg.InputPeerClass) {
 	ids := []int{inv.Message.ID}
 	if inv.Message.Raw != nil {
 		if grouped, ok := inv.Message.Raw.GetGroupedID(); ok && grouped != 0 {
@@ -120,7 +204,6 @@ func deliverAnswer(ctx context.Context, inv *command.Invocation, pages []string,
 	if err := inv.Client.Delete(ctx, peer, ids); err != nil {
 		inv.Log.Warn("ai.delete_command_failed", "error", err.Error())
 	}
-	return nil
 }
 
 // searchText 用搜索模型回答，返回回答、引用的来源和实际用的模型名（写进回答末尾的「由 … 生成」）。

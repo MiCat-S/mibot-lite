@@ -11,6 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gotd/td/bin"
+	"github.com/gotd/td/tg"
+
+	"github.com/MiCat-S/mibot-lite/internal/bot"
 	"github.com/MiCat-S/mibot-lite/internal/command"
 	"github.com/MiCat-S/mibot-lite/internal/commands/kit"
 	"github.com/MiCat-S/mibot-lite/internal/store"
@@ -260,5 +264,76 @@ func TestSumTimeout(t *testing.T) {
 	db.DefaultPushTarget = "@channel"
 	if pushTarget(db, sumTask{}) != "@channel" || pushTarget(db, sumTask{PushTarget: "-100"}) != "-100" {
 		t.Fatal("推送目标的优先级不对")
+	}
+}
+
+// TestSumLegacyPrompt 检查存着的旧内置提示词换成新的 Markdown 版，自定义的不动。
+func TestSumLegacyPrompt(t *testing.T) {
+	db := sumDefaults()
+	db.AIConfig.DefaultPrompt = sumLegacyPrompt
+	db.Tasks = []sumTask{{ID: "1", AIPrompt: sumLegacyPrompt}, {ID: "2", AIPrompt: "自定义"}}
+	db.normalize()
+	if db.AIConfig.DefaultPrompt != sumDefaultPrompt || db.Tasks[0].AIPrompt != "" || db.Tasks[1].AIPrompt != "自定义" {
+		t.Fatalf("迁移不对：%q %+v", db.AIConfig.DefaultPrompt[:20], db.Tasks)
+	}
+}
+
+// TestSumResultHTML 检查普通消息版：Markdown 的栏目标题只加粗、要点折进可展开的引用；
+// 旧提示词写的 Telegram HTML 原样保留；spoiler 时整段折起来，不嵌套引用。
+func TestSumResultHTML(t *testing.T) {
+	at := time.Date(2026, 10, 24, 9, 30, 0, 0, time.Local)
+	markdown := sumResult{title: "群<1>", at: at, output: "### 📌 本次摘要\n概括 [来源](https://t.me/c/1/2)\n\n### 💬 主要话题\n- 要点 `v1.2` [来源](https://t.me/c/1/3)"}
+	want := "🧾 <b>群组消息摘要</b>\n群&lt;1&gt; · 2026-10-24 09:30\n\n<b>📌 本次摘要</b>\n\n概括 <a href=\"https://t.me/c/1/2\">来源</a>\n\n" +
+		"<b>💬 主要话题</b>\n\n<blockquote expandable>• 要点 <code>v1.2</code> <a href=\"https://t.me/c/1/3\">来源</a></blockquote>"
+	if got := markdown.html(); got != want {
+		t.Fatalf("got  %q\nwant %q", got, want)
+	}
+	legacy := sumResult{title: "群", at: at, output: "<b>💬 主要话题</b>\n<blockquote expandable>• 要点 <a href=\"https://t.me/c/1/3\">来源</a></blockquote>"}
+	if got := legacy.html(); !strings.HasSuffix(got, "<b>💬 主要话题</b>\n\n<blockquote expandable>• 要点 <a href=\"https://t.me/c/1/3\">来源</a></blockquote>") {
+		t.Fatalf("旧版 HTML 输出没保留：%q", got)
+	}
+	markdown.spoiler = true
+	folded := markdown.html()
+	if strings.Count(folded, "<blockquote") != 1 || !strings.HasSuffix(folded, "</blockquote>") {
+		t.Fatalf("spoiler 时应整段折起来且不嵌套：%q", folded)
+	}
+	for _, html := range []string{want, legacy.html(), folded} {
+		if _, _, err := bot.ParseHTML(html); err != nil {
+			t.Fatalf("HTML 无效：%v\n%s", err, html)
+		}
+	}
+}
+
+// TestSumResultRich 检查 Rich Message 版：没有 Premium 时不发；有时栏目是真正的标题和列表，
+// spoiler 时每个栏目折成详情块。
+func TestSumResultRich(t *testing.T) {
+	result := sumResult{title: "群", at: time.Now(), output: "### 📌 本次摘要\n概括\n\n### 💬 主要话题\n- 要点"}
+	if _, ok := result.rich(bot.FromAPI(nil, bot.NewPeerCache(), &tg.User{ID: 1}, nil)); ok {
+		t.Fatal("没有 Premium 不该发 Rich Message")
+	}
+	premium := bot.FromAPI(nil, bot.NewPeerCache(), &tg.User{ID: 1, Premium: true}, nil)
+	blocks, ok := result.rich(premium)
+	if !ok || len(blocks) != 5 {
+		t.Fatalf("块数不对：%d %v", len(blocks), ok)
+	}
+	if _, isHeading := blocks[3].(*tg.PageBlockHeading3); !isHeading {
+		t.Fatalf("栏目应该是三级标题：%T", blocks[3])
+	}
+	if _, isList := blocks[4].(*tg.PageBlockList); !isList {
+		t.Fatalf("要点应该是列表：%T", blocks[4])
+	}
+	result.spoiler = true
+	folded, _ := result.rich(premium)
+	if len(folded) != 3 {
+		t.Fatalf("spoiler 时应是标题段落加两个详情块：%d", len(folded))
+	}
+	for _, block := range folded[1:] {
+		if _, isDetails := block.(*tg.PageBlockDetails); !isDetails {
+			t.Fatalf("栏目没有折起来：%T", block)
+		}
+	}
+	var buffer bin.Buffer
+	if err := (&tg.InputRichMessage{Blocks: folded}).Encode(&buffer); err != nil {
+		t.Fatalf("编码失败：%v", err)
 	}
 }

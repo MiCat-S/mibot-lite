@@ -10,7 +10,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gotd/td/tg"
+
 	"github.com/MiCat-S/mibot-lite/internal/app"
+	"github.com/MiCat-S/mibot-lite/internal/bot"
 	"github.com/MiCat-S/mibot-lite/internal/command"
 	"github.com/MiCat-S/mibot-lite/internal/commands/kit"
 	"github.com/MiCat-S/mibot-lite/internal/httpx"
@@ -67,10 +70,17 @@ func Register(a *app.App) {
 			return inv.Edit(ctx, strings.Join(lines, "\n"))
 		}},
 		&command.Command{Name: "help", Aliases: []string{"h"}, Group: command.GroupSystem, Description: "查看命令列表或说明", Usage: "[命令|分组]", Help: helpHelp, Handle: func(ctx context.Context, inv *command.Invocation) error {
-			if name := inv.Arg(0); name != "" {
-				return inv.Edit(ctx, renderCommandHelp(registry, inv.Prefix, name))
+			name := inv.Arg(0)
+			if name == "" {
+				return inv.EditRich(ctx, helpListRich(registry, inv.Prefix), renderHelpList(registry, inv.Prefix))
 			}
-			return inv.Edit(ctx, renderHelpList(registry, inv.Prefix))
+			// 单条命令的帮助是各命令自己写的几行 HTML，Rich Message 显示出来也一样，照旧发 HTML。
+			if _, ok := lookupForHelp(registry, name); !ok {
+				if group, ok := findGroup(name); ok {
+					return inv.EditRich(ctx, groupHelpRich(registry, inv.Prefix, group), renderGroupHelp(registry, inv.Prefix, group))
+				}
+			}
+			return inv.Edit(ctx, renderCommandHelp(registry, inv.Prefix, name))
 		}},
 	)
 }
@@ -138,6 +148,78 @@ func renderGroupHelp(registry *command.Registry, prefix, group string) string {
 	lines := append([]string{"📖 <b>" + command.Escape(group) + "</b>", ""}, groupLines(commandsByGroup(registry)[group], prefix)...)
 	lines = append(lines, "", command.Code(prefix+"help 命令")+" 看用法")
 	return strings.Join(lines, "\n")
+}
+
+// helpListRich 是 Rich Message 版的总览：和 renderHelpList 一样每组一行组名、一行命令名，
+// 说明收进最后的详情块，是一张「命令 | 说明」的表格，组名占一整行。
+func helpListRich(registry *command.Registry, prefix string) []tg.PageBlockClass {
+	byGroup := commandsByGroup(registry)
+	blocks := []tg.PageBlockClass{richTitle("命令列表")}
+	table := commandTable()
+	for _, group := range command.Groups {
+		if len(byGroup[group]) == 0 {
+			continue
+		}
+		parts := []tg.RichTextClass{&tg.TextBold{Text: bot.RichPlain(group)}, bot.RichPlain("\n")}
+		for index, cmd := range byGroup[group] {
+			if index > 0 {
+				parts = append(parts, bot.RichPlain(" "))
+			}
+			parts = append(parts, bot.RichCode(prefix+cmd.Name))
+		}
+		blocks = append(blocks, &tg.PageBlockParagraph{Text: bot.RichConcat(parts...)})
+		table.Rows = append(table.Rows, tg.PageTableRow{Cells: []tg.PageTableCell{{Header: true, Colspan: 2, Text: bot.RichPlain(group)}}})
+		table.Rows = append(table.Rows, commandRows(byGroup[group], prefix)...)
+	}
+	hint := []tg.RichTextClass{bot.RichCode(prefix + "help 命令"), bot.RichPlain(" 看用法 · 前缀：")}
+	for index, value := range registry.Prefixes() {
+		if index > 0 {
+			hint = append(hint, bot.RichPlain(" "))
+		}
+		hint = append(hint, bot.RichCode(value))
+	}
+	return append(blocks, &tg.PageBlockParagraph{Text: bot.RichConcat(hint...)},
+		&tg.PageBlockDetails{Title: bot.RichPlain("各命令的说明"), Blocks: []tg.PageBlockClass{table}})
+}
+
+// groupHelpRich 是 Rich Message 版的分组列表：一张「命令 | 说明」的表格，不折叠。
+func groupHelpRich(registry *command.Registry, prefix, group string) []tg.PageBlockClass {
+	table := commandTable()
+	table.Rows = append(table.Rows, commandRows(commandsByGroup(registry)[group], prefix)...)
+	return []tg.PageBlockClass{richTitle(group), table,
+		&tg.PageBlockParagraph{Text: bot.RichConcat(bot.RichCode(prefix+"help 命令"), bot.RichPlain(" 看用法"))}}
+}
+
+// richTitle 是消息的顶层标题，和 HTML 版一样是 📖 加上加粗的标题。
+func richTitle(title string) tg.PageBlockClass {
+	return &tg.PageBlockParagraph{Text: bot.RichConcat(bot.RichPlain("📖 "), &tg.TextBold{Text: bot.RichPlain(title)})}
+}
+
+// commandTable 是带边框、表头为「命令 | 说明」的空表格。
+func commandTable() *tg.PageBlockTable {
+	return &tg.PageBlockTable{Bordered: true, Title: &tg.TextEmpty{}, Rows: []tg.PageTableRow{{Cells: []tg.PageTableCell{
+		{Header: true, Text: bot.RichPlain("命令")}, {Header: true, Text: bot.RichPlain("说明")},
+	}}}}
+}
+
+// commandRows 是一组命令在表格里的行，命令那一格带上简写，和 groupLines 同一套写法。
+func commandRows(commands []*command.Command, prefix string) []tg.PageTableRow {
+	rows := make([]tg.PageTableRow, 0, len(commands))
+	for _, cmd := range commands {
+		name := []tg.RichTextClass{bot.RichCode(prefix + cmd.Name)}
+		if len(cmd.Aliases) > 0 {
+			name = append(name, bot.RichPlain("（"))
+			for index, alias := range cmd.Aliases {
+				if index > 0 {
+					name = append(name, bot.RichPlain(" "))
+				}
+				name = append(name, bot.RichCode(prefix+alias))
+			}
+			name = append(name, bot.RichPlain("）"))
+		}
+		rows = append(rows, tg.PageTableRow{Cells: []tg.PageTableCell{{Text: bot.RichConcat(name...)}, {Text: bot.RichPlain(cmd.Description)}}})
+	}
+	return rows
 }
 
 // groupLines 是一组命令的说明行，每行「.名字（.简写） — 说明」，和 README 的表格同一套写法。

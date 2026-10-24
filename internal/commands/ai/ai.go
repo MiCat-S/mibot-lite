@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/MiCat-S/mibot-lite/internal/app"
+	"github.com/MiCat-S/mibot-lite/internal/bot"
 	"github.com/MiCat-S/mibot-lite/internal/command"
 	"github.com/MiCat-S/mibot-lite/internal/commands/kit"
 	"github.com/MiCat-S/mibot-lite/internal/store"
@@ -535,11 +536,7 @@ func (s *Service) ask(ctx context.Context, inv *command.Invocation, search bool)
 		inv.Log.Warn("ai.reply_unavailable", "error", err.Error())
 		reply = nil
 	}
-	replied := ""
-	if reply != nil {
-		replied = reply.Text
-	}
-	question, userText := composeQuestion(own, replied)
+	question, userText := composeQuestion(own, replyText(reply))
 	fromReply, err := collectImages(ctx, inv.Client, reply)
 	if err != nil {
 		return err
@@ -587,6 +584,18 @@ func (s *Service) ask(ctx context.Context, inv *command.Invocation, search bool)
 	if err != nil {
 		return err
 	}
+	anchor := replyAnchor(inv.Message, reply)
+	// 有 Premium 时整个回答发成一条 Rich Message；超出它的上限、或者被拒收（比如 Premium 过期了）
+	// 时退回下面的 HTML 分页和 Telegraph。
+	if inv.Client.CanSendRich() {
+		if blocks := answerRich(question, answer, sources, model, cfg.Collapse); bot.RichFits(blocks) {
+			err := deliverRich(ctx, inv, blocks, anchor)
+			if !bot.RichRejected(err) {
+				return err
+			}
+			inv.Log.Warn("ai.rich_rejected", "error", err.Error())
+		}
+	}
 	body := markdownToHTML(answer, cfg.Collapse) + sourcesHTML(sources)
 	formatted := "问：\n" + command.Escape(question) + "\n\n答：\n" + body
 	if cfg.Telegraph.Enabled && kit.UTF16Len(formatted) > 4050 {
@@ -594,9 +603,9 @@ func (s *Service) ask(ctx context.Context, inv *command.Invocation, search bool)
 		if err != nil {
 			return err
 		}
-		return deliverAnswer(ctx, inv, answerPages(question, telegraphLinkHTML(link), model, cfg.Collapse), replyAnchor(inv.Message, reply))
+		return deliverAnswer(ctx, inv, answerPages(question, telegraphLinkHTML(link), model, cfg.Collapse), anchor)
 	}
-	return deliverAnswer(ctx, inv, answerPages(question, body, model, cfg.Collapse), replyAnchor(inv.Message, reply))
+	return deliverAnswer(ctx, inv, answerPages(question, body, model, cfg.Collapse), anchor)
 }
 
 func (s *Service) configure(ctx context.Context, inv *command.Invocation) error {
