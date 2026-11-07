@@ -67,3 +67,33 @@ func TestRequestCancellation(t *testing.T) {
 		t.Fatalf("context not propagated: %v", err)
 	}
 }
+
+// AI 可以等超过普通请求的 30 秒响应头时限，但仍受自己配置的总超时约束。
+func TestSlowHeadersUseRequestTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(31 * time.Second):
+			w.Write([]byte("ok"))
+		case <-r.Context().Done():
+		}
+	}))
+	defer server.Close()
+	ordinary := make(chan error, 1)
+	go func() {
+		_, err := Do(context.Background(), Request{URL: server.URL, Timeout: 45 * time.Second})
+		ordinary <- err
+	}()
+	response, err := Do(context.Background(), Request{URL: server.URL, Timeout: 45 * time.Second, WaitForHeaders: true})
+	if err != nil || string(response.Body) != "ok" {
+		t.Fatalf("AI 等待响应头失败：%q %v", response.Body, err)
+	}
+	var timeout net.Error
+	if err := <-ordinary; !errors.As(err, &timeout) || !timeout.Timeout() {
+		t.Fatalf("普通请求应保留响应头时限：%v", err)
+	}
+	_, err = Do(context.Background(), Request{URL: server.URL, Timeout: 20 * time.Millisecond, WaitForHeaders: true})
+	var requestErr *RequestError
+	if !errors.Is(err, context.DeadlineExceeded) || !errors.As(err, &requestErr) || requestErr.Stage != "response_headers" {
+		t.Fatalf("AI 总超时或失败阶段不对：%v", err)
+	}
+}

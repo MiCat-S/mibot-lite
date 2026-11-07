@@ -47,6 +47,7 @@ const (
 )
 
 type aiRequest struct {
+	Model     string
 	URL       string
 	Headers   map[string]string
 	Body      map[string]any
@@ -181,7 +182,8 @@ func buildChatRequest(cfg aiConfig, sel aiSelection, text, systemPrompt string, 
 	if format == formatOpenAI && sel.Tier != "" && sel.Tier != "auto" {
 		body["service_tier"] = sel.Tier
 	}
-	return &aiRequest{URL: target, Headers: headers, Body: body, Timeout: time.Duration(cfg.Timeout) * time.Second,
+	provider.Tag = sel.Tag
+	return &aiRequest{Model: sel.Model, URL: target, Headers: headers, Body: body, Timeout: time.Duration(cfg.Timeout) * time.Second,
 		Format: format, Responses: format == formatOpenAI && provider.Responses, Provider: provider}, nil
 }
 
@@ -415,10 +417,15 @@ func HTTPFailure(status int, body []byte, secret string) string {
 	return fmt.Sprintf("AI 接口返回 HTTP %d：%s", status, detail)
 }
 
-func aiCall(ctx context.Context, request *aiRequest) ([]byte, error) {
-	response, err := httpx.PostJSON(ctx, request.URL, request.Headers, request.Body, request.Timeout, aiResponseLimit)
+func aiCall(ctx context.Context, request *aiRequest) (raw []byte, err error) {
+	started := time.Now()
+	info := request.info()
+	info.Stage = "response"
+	defer func() { err = info.Failure(err, started, request.Provider.Key) }()
+	response, err := httpx.PostJSON(ctx, httpx.Request{URL: request.URL, Headers: request.Headers,
+		Timeout: request.Timeout, MaxBytes: aiResponseLimit, WaitForHeaders: true}, request.Body)
 	if err != nil {
-		return nil, kit.Fail("AI 请求失败：" + httpx.Reason(err))
+		return nil, err
 	}
 	if !response.OK() {
 		return nil, &httpStatusError{Status: response.Status, err: kit.Fail(HTTPFailure(response.Status, response.Body, request.Provider.Key))}
@@ -727,9 +734,11 @@ func chatText(ctx context.Context, cfg aiConfig, sel aiSelection, text, systemPr
 	if err != nil {
 		return "", err
 	}
+	started := time.Now()
 	raw, err := aiCall(ctx, request)
 	if err != nil {
 		return "", err
 	}
-	return parseChatText(raw, request.Format, request.Provider.Key)
+	answer, err := parseChatText(raw, request.Format, request.Provider.Key)
+	return answer, request.info().Failure(err, started, request.Provider.Key)
 }

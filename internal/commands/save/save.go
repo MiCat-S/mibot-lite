@@ -872,6 +872,12 @@ func runSaveJobs(ctx context.Context, work *saver, jobs []saveJob, destination t
 				}
 				continue
 			}
+			// 响应丢失时相册可能已送达，逐条再发就重复了：记下来接着处理后面的。
+			if !forwardRejected(err) {
+				index += len(job.messages)
+				tally.failures = append(tally.failures, "相册 #"+strconv.Itoa(job.messages[0].ID)+"：没有确认保存，不再重发（"+command.Brief(err)+"）")
+				continue
+			}
 		}
 		for _, message := range job.messages {
 			index++
@@ -907,6 +913,16 @@ func runSaveJobs(ctx context.Context, work *saver, jobs []saveJob, destination t
 		}
 	}
 	return tally, nil
+}
+
+// forwardRejected 判断 Telegram 是不是明确拒收了这次转发：拒收时什么都没有发出，可以逐条再试。
+// 传输错误和 5xx 的结果不明，限流时逐条再试也只会继续被限。
+func forwardRejected(err error) bool {
+	if _, flood := tgerr.AsFloodWait(err); flood {
+		return false
+	}
+	rpcErr, ok := tgerr.As(err)
+	return ok && rpcErr.Code < 500
 }
 
 // forwardable 判断这些消息能不能直接转发：带禁止转发标记的一条都不行。

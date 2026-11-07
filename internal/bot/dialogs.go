@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/gotd/td/tg"
@@ -73,10 +74,16 @@ func (c *Client) EachDialog(ctx context.Context, pages DialogPages, visit func(*
 			return nil
 		}
 		offsetPeer, offsetID = next, tail.TopMessage
+		found := false
 		for _, item := range messages {
-			if message, ok := item.(*tg.Message); ok && message.ID == tail.TopMessage {
-				offsetDate = message.Date
+			if message, ok := item.(tg.NotEmptyMessage); ok && message.GetID() == tail.TopMessage && PeerID(message.GetPeerID()) == PeerID(tail.Peer) {
+				offsetDate = message.GetDate()
+				found = true
+				break
 			}
+		}
+		if !found {
+			return fmt.Errorf("dialog cursor message %s/%d missing", PeerID(tail.Peer), tail.TopMessage)
 		}
 	}
 	return nil

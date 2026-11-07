@@ -228,7 +228,7 @@ func (u *updater) autoInstall(ctx context.Context, client *bot.Client, latest *r
 	if u.restarter == nil {
 		return
 	}
-	binary, err := executablePath()
+	binary, err := u.binary, u.located
 	if err != nil {
 		logger.Warn("update.locate_failed", "error", err.Error())
 		return

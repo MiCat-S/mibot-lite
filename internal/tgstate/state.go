@@ -1,6 +1,6 @@
 // Package tgstate 保存 gotd 的更新引擎跨重启需要的东西：账号的更新位置、
 // 每个频道的 pts，以及账号见过的所有对象的 access hash。全放在一个 JSON
-// 文件里，每秒最多写一次。这样重启后能从停下的地方接着收更新；某个对话
+// 文件里；高频游标另存小文件，每秒最多写一次。这样重启后能从停下的地方接着收更新；某个对话
 // 在那之后即使再没人说话，也还能编辑其中的消息。
 package tgstate
 
@@ -26,26 +26,31 @@ var (
 )
 
 type document struct {
-	UserID   int64            `json:"userId"`
-	Pts      int              `json:"pts"`
-	Qts      int              `json:"qts"`
-	Date     int              `json:"date"`
-	Seq      int              `json:"seq"`
-	HasState bool             `json:"hasState"`
-	Channels map[string]int   `json:"channels"`
-	Chans    map[string]int64 `json:"channelHashes"`
-	Users    map[string]int64 `json:"userHashes"`
+	// 旧版本重写文件时会丢掉 Generation；此时不再读取新版留下的旧游标。
+	Generation uint64           `json:"generation,omitempty"`
+	UserID     int64            `json:"userId"`
+	Pts        int              `json:"pts"`
+	Qts        int              `json:"qts"`
+	Date       int              `json:"date"`
+	Seq        int              `json:"seq"`
+	HasState   bool             `json:"hasState"`
+	Channels   map[string]int   `json:"channels"`
+	Chans      map[string]int64 `json:"channelHashes"`
+	Users      map[string]int64 `json:"userHashes"`
 }
 
 // State 基于一个 JSON 文件实现 updates.StateStorage、
 // updates.ChannelAccessHasher 和 updates.UserAccessHasher。
 type State struct {
-	path   string
-	mu     sync.Mutex
-	doc    document
-	dirty  bool
-	timer  *time.Timer
-	closed bool
+	path            string
+	mu              sync.Mutex
+	doc             document
+	dirty           bool
+	hashDirty       bool
+	checkpointDirty bool
+	lastCheckpoint  time.Time
+	timer           *time.Timer
+	closed          bool
 	// OnFlushError 在后台写盘失败时调用（Open 之后、开始使用之前设置）。写不进去的话，
 	// 重启后会从旧的 pts 补抓，或者丢掉 access hash，这不能悄悄发生。
 	OnFlushError func(error)
@@ -72,6 +77,17 @@ func Open(path string) (*State, error) {
 		if state.doc.Users == nil {
 			state.doc.Users = map[string]int64{}
 		}
+		info, err := os.Stat(path)
+		if err != nil {
+			return nil, err
+		}
+		state.lastCheckpoint = info.ModTime()
+	}
+	if err := state.loadCursor(); err != nil {
+		return nil, err
+	}
+	if state.lastCheckpoint.IsZero() {
+		state.lastCheckpoint = time.Now()
 	}
 	return state, nil
 }
@@ -85,7 +101,7 @@ func (s *State) Close() error {
 		s.timer.Stop()
 		s.timer = nil
 	}
-	return s.flushLocked()
+	return s.checkpointLocked()
 }
 
 // Flush 立即写入尚未写入的改动。
@@ -99,6 +115,7 @@ func (s *State) Flush() error {
 // 重新计时，否则更新不断时就一直不落盘。调用方持有 mu。
 func (s *State) markDirty() {
 	s.dirty = true
+	s.checkpointDirty = true
 	if s.timer != nil || s.closed {
 		return
 	}
@@ -132,18 +149,58 @@ func (s *State) writable(ctx context.Context) error {
 	return nil
 }
 
+// checkpointInterval 限制直接换回旧程序时游标最多回退多久；正常回滚和退出会立即写全量快照。
+const checkpointInterval = 5 * time.Minute
+
+// Checkpoint 把最新游标和 hash 一起写回旧版本也能读的文件，供切换程序之前调用。
+func (s *State) Checkpoint() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.checkpointLocked()
+}
+
 func (s *State) flushLocked() error {
 	if !s.dirty {
 		return nil
 	}
-	encoded, err := json.Marshal(s.doc)
+	// 新 hash 仍写入兼容旧版的完整文件；普通 pts/date/seq 更新只写小游标。
+	if s.hashDirty || s.doc.Generation == 0 || time.Since(s.lastCheckpoint) >= checkpointInterval {
+		return s.checkpointLocked()
+	}
+	encoded, err := json.Marshal(s.cursor())
+	if err != nil {
+		return err
+	}
+	if err := fsutil.WriteFileAtomic(s.path+".cursor", encoded, 0o600); err != nil {
+		return err
+	}
+	s.dirty = false
+	return nil
+}
+
+func (s *State) checkpointLocked() error {
+	if !s.checkpointDirty {
+		return nil
+	}
+	// 从旧版重新升级时代号从零开始；先删掉上次新版留下的游标，避免代号复用。
+	if s.doc.Generation == 0 {
+		if err := os.Remove(s.path + ".cursor"); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	next := s.doc
+	next.Generation++
+	encoded, err := json.Marshal(next)
 	if err != nil {
 		return err
 	}
 	if err := fsutil.WriteFileAtomic(s.path, encoded, 0o600); err != nil {
 		return err
 	}
-	s.dirty = false
+	// 先原子替换完整快照，再采用新代号。即使此刻退出，旧游标也不会覆盖新快照。
+	s.doc.Generation = next.Generation
+	s.dirty, s.hashDirty, s.checkpointDirty = false, false, false
+	s.lastCheckpoint = time.Now()
 	return nil
 }
 
@@ -257,6 +314,7 @@ func (s *State) SetChannelAccessHash(ctx context.Context, userID, channelID, acc
 	}
 	if s.doc.Chans[key(channelID)] != accessHash {
 		s.doc.Chans[key(channelID)] = accessHash
+		s.hashDirty = true
 		s.markDirty()
 	}
 	return nil
@@ -280,6 +338,7 @@ func (s *State) SetUserAccessHash(ctx context.Context, userID, targetUserID, acc
 	}
 	if s.doc.Users[key(targetUserID)] != accessHash {
 		s.doc.Users[key(targetUserID)] = accessHash
+		s.hashDirty = true
 		s.markDirty()
 	}
 	return nil

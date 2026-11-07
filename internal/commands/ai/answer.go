@@ -246,13 +246,14 @@ func searchText(ctx context.Context, cfg aiConfig, text string, options chatOpti
 		request.Body["tools"] = []any{map[string]any{"type": "web_search", "web_search": map[string]any{"searchContextSize": "high"}}}
 		request.Body["web_search_options"] = map[string]any{"search_context_size": "high"}
 	}
+	started := time.Now()
 	raw, err := aiCall(ctx, request)
 	if err != nil {
 		return "", nil, "", err
 	}
 	output, err := parseChatText(raw, request.Format, provider.Key)
 	if err != nil {
-		return "", nil, "", err
+		return "", nil, "", request.info().Failure(err, started, provider.Key)
 	}
 	var sources []aiSource
 	seen := map[string]bool{}
@@ -327,7 +328,8 @@ func searchText(ctx context.Context, cfg aiConfig, text string, options chatOpti
 }
 
 func (s *Service) telegraphPost(ctx context.Context, cfg aiConfig, method string, body any) (map[string]any, error) {
-	response, err := httpx.PostJSON(ctx, "https://api.telegra.ph/"+method, nil, body, time.Duration(cfg.Timeout)*time.Second, 1<<20)
+	response, err := httpx.PostJSON(ctx, httpx.Request{URL: "https://api.telegra.ph/" + method,
+		Timeout: time.Duration(cfg.Timeout) * time.Second, MaxBytes: 1 << 20}, body)
 	if err != nil {
 		return nil, kit.Fail("Telegraph 请求失败：" + httpx.Reason(err))
 	}

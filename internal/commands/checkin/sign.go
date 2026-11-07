@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -31,9 +32,22 @@ var (
 // signOne 签到一个目标：发签到命令，等对方回复；要点按钮的，在回复里找到按钮点一下。
 // 返回对方的回复（点按钮的是按钮的答复），失败时的错误是给用户看的一句话。
 func signOne(ctx context.Context, client *bot.Client, target signTarget) (string, error) {
+	return signWithAttempt(ctx, client, target, nil)
+}
+
+// signWithAttempt 在目标解析成功后、真正发送前持久记录本次尝试。
+func signWithAttempt(ctx context.Context, client *bot.Client, target signTarget, begin func() error) (string, error) {
 	peer, err := client.ResolveTarget(ctx, target.Target)
 	if err != nil {
 		return "", kit.FailWith("找不到目标 "+target.Target, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if begin != nil {
+		if err := begin(); err != nil {
+			return "", err
+		}
 	}
 	// 签到命令原样发出去，不给 IP 打码：命令里的数字被改了就签不上。
 	sent, err := client.SendText(bot.WithoutIPPrivacy(ctx), peer, target.Command, bot.SendOptions{})
@@ -149,15 +163,55 @@ func awaitMessage(ctx context.Context, client *bot.Client, peer tg.InputPeerClas
 }
 
 // runAll 依次签到 targets，每两个之间停 gap，返回汇总（HTML）。source 是「手动」或「定时」。
-func runAll(ctx context.Context, client *bot.Client, targets []signTarget, source string) string {
+func (s *service) runAll(ctx context.Context, client *bot.Client, targets []signTarget, source, date string) (string, error) {
 	started := time.Now()
 	var lines []string
-	succeeded := 0
+	succeeded, skipped := 0, 0
 	for index, target := range targets {
-		if index > 0 {
-			_ = kit.Sleep(ctx, gap)
+		if err := ctx.Err(); err != nil {
+			return "", err
 		}
-		reply, err := signOne(ctx, client, target)
+		if index > 0 {
+			if err := kit.Sleep(ctx, gap); err != nil {
+				return "", err
+			}
+		}
+		cfg, err := s.store.Read()
+		if err != nil {
+			return "", err
+		}
+		if cfg.AttemptDate == date && slices.Contains(cfg.Attempted, target.ID) {
+			skipped++
+			lines = append(lines, "ℹ️ "+command.Escape(target.Name)+"：上次已开始，结果可能未确认，没有重复发送")
+			continue
+		}
+		var saveErr error
+		reply, err := signWithAttempt(ctx, client, target, func() error {
+			saveErr = s.store.Update(func(cfg *config) error {
+				if cfg.AttemptDate != date {
+					cfg.AttemptDate, cfg.Attempted = date, nil
+				}
+				cfg.Attempted = append(cfg.Attempted, target.ID)
+				return nil
+			})
+			if saveErr == nil && ctx.Err() != nil {
+				// 落盘期间取消，还没发送；撤回本次标记，让重启后能继续这个目标。
+				saveErr = s.store.Update(func(cfg *config) error {
+					if cfg.AttemptDate == date {
+						cfg.Attempted = slices.DeleteFunc(cfg.Attempted, func(id string) bool { return id == target.ID })
+					}
+					return nil
+				})
+				return errors.Join(ctx.Err(), saveErr)
+			}
+			return saveErr
+		})
+		if saveErr != nil {
+			return "", saveErr
+		}
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
 		if err != nil {
 			client.Logger().Warn("checkin.failed", "target", target.ID, "error", err.Error())
 			lines = append(lines, "❌ "+command.Escape(target.Name)+"："+command.Escape(reason(err)))
@@ -166,10 +220,23 @@ func runAll(ctx context.Context, client *bot.Client, targets []signTarget, sourc
 		succeeded++
 		lines = append(lines, "✅ "+command.Escape(target.Name)+"："+command.Escape(brief(reply)))
 	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if err := s.store.Update(func(cfg *config) error {
+		cfg.LastRunDate = date
+		cfg.AttemptDate, cfg.Attempted = "", nil
+		return nil
+	}); err != nil {
+		return "", err
+	}
 	header := []string{"📅 <b>签到汇总</b>",
 		source + " · " + started.In(shanghai).Format("2006-01-02 15:04") + "（北京时间）",
-		fmt.Sprintf("成功 %d 个，失败 %d 个", succeeded, len(targets)-succeeded), ""}
-	return strings.Join(append(header, lines...), "\n")
+		fmt.Sprintf("成功 %d 个，失败 %d 个", succeeded, len(targets)-succeeded-skipped), ""}
+	if skipped > 0 {
+		header[2] += fmt.Sprintf("，跳过上次已开始的 %d 个", skipped)
+	}
+	return strings.Join(append(header, lines...), "\n"), nil
 }
 
 // reason 是签到失败时汇总里写的原因。

@@ -643,20 +643,17 @@ func Register(a *app.App) {
 			if err := kit.Sleep(ctx, now.Truncate(time.Minute).Add(time.Minute).Sub(now)); err != nil {
 				return
 			}
-			state, err := service.store.Read()
-			if err != nil {
-				continue
-			}
-			for id, user := range state.Users {
-				if user == nil || !user.Enabled {
-					continue
-				}
-				if _, err := service.apply(ctx, client, id, false); err != nil && ctx.Err() == nil {
-					client.Logger().Warn("acn.update_failed", slog.String("user", id), slog.String("error", err.Error()))
-				}
-			}
+			service.tick(ctx, client)
 		}
 	})
+}
+
+// tick 只应用当前登录账号的配置；导入文件中的其他账号保留，但不能改这个账号的名字。
+func (s *acnService) tick(ctx context.Context, client *bot.Client) {
+	id := strconv.FormatInt(client.SelfID(), 10)
+	if _, err := s.apply(ctx, client, id, false); err != nil && ctx.Err() == nil {
+		client.Logger().Warn("acn.update_failed", slog.String("user", id), slog.String("error", err.Error()))
+	}
 }
 
 // acnCall 是一次 .acn 调用要用到的东西：谁在改、改的是哪一份配置、当前配置是什么。
@@ -698,10 +695,9 @@ func (c *acnCall) change(apply func(*acnUser)) (acnUser, error) {
 
 func acnStatus(ctx context.Context, inv *command.Invocation, state acnState) error {
 	enabled := 0
-	for _, user := range state.Users {
-		if user != nil && user.Enabled {
-			enabled++
-		}
+	// 状态与后台调度一致，只统计当前账号。
+	if user := state.Users[strconv.FormatInt(inv.Client.SelfID(), 10)]; user != nil && user.Enabled {
+		enabled = 1
 	}
 	running := "已停止"
 	if enabled > 0 {

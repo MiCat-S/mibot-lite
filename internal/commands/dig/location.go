@@ -155,7 +155,7 @@ func locate(ctx context.Context, ips []string) (map[string]string, error) {
 	if len(ips) == 0 {
 		return nil, nil
 	}
-	response, err := httpx.PostJSON(ctx, locateURL, nil, ips, 8*time.Second, 256<<10)
+	response, err := httpx.PostJSON(ctx, httpx.Request{URL: locateURL, Timeout: 8 * time.Second, MaxBytes: 256 << 10}, ips)
 	if err != nil {
 		return nil, err
 	}

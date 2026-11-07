@@ -63,3 +63,32 @@ func TestEachDialog(t *testing.T) {
 		t.Error("第二页的群没记下来")
 	}
 }
+
+func TestEachDialogCursorUsesExactPeerAndServiceMessage(t *testing.T) {
+	for _, service := range []bool{false, true} {
+		t.Run(map[bool]string{false: "same ID in another channel", true: "service message"}[service], func(t *testing.T) {
+			page := dialogPage(1, 100)
+			var tail tg.MessageClass = &tg.Message{ID: 100, Date: 1100, PeerID: &tg.PeerChannel{ChannelID: 100}}
+			if service {
+				tail = &tg.MessageService{ID: 100, Date: 1100, PeerID: &tg.PeerChannel{ChannelID: 100}, Action: &tg.MessageActionChatEditTitle{Title: "renamed"}}
+			}
+			page.Messages = []tg.MessageClass{tail, &tg.Message{ID: 100, Date: 9999, PeerID: &tg.PeerChannel{ChannelID: 1}}}
+			calls := 0
+			api := tg.NewClient(invokerFunc(func(ctx context.Context, input bin.Encoder, output bin.Decoder) error {
+				calls++
+				if calls == 1 {
+					return replying{page}.Invoke(ctx, input, output)
+				}
+				request := input.(*tg.MessagesGetDialogsRequest)
+				if request.OffsetDate != 1100 {
+					t.Errorf("offset date=%d, want1100", request.OffsetDate)
+				}
+				return replying{&tg.MessagesDialogs{}}.Invoke(ctx, input, output)
+			}))
+			client := FromAPI(api, NewPeerCache(), &tg.User{ID: 999}, slog.New(slog.DiscardHandler))
+			if err := client.EachDialog(context.Background(), DialogPages{}, func(*tg.Dialog) {}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

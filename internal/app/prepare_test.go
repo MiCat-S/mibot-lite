@@ -45,6 +45,31 @@ func TestReadOnlyPrepareCreatesNoFiles(t *testing.T) {
 	}
 }
 
+func TestReadOnlyCloseDoesNotCheckpointCursor(t *testing.T) {
+	root := deployment(t)
+	legacy := []byte(`{"generation":1,"userId":1,"hasState":true,"pts":10,"channels":{},"userHashes":{},"channelHashes":{}}`)
+	cursor := []byte(`{"generation":1,"userId":1,"hasState":true,"pts":20,"channels":{}}`)
+	path := filepath.Join(root, config.StateFile)
+	for name, body := range map[string][]byte{path: legacy, path + ".cursor": cursor} {
+		if err := os.WriteFile(name, body, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a, err := Prepare(context.Background(), Options{Root: root, ReadOnly: true, Logger: slog.New(slog.DiscardHandler)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{path: string(legacy), path + ".cursor": string(cursor)} {
+		got, err := os.ReadFile(name)
+		if err != nil || string(got) != want {
+			t.Fatalf("只读预检改写状态 %s：%s %v", name, got, err)
+		}
+	}
+}
+
 func TestPrepareLocksBeforeSessionImport(t *testing.T) {
 	root := deployment(t)
 	lock, err := LockRoot(root)

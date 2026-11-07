@@ -43,11 +43,14 @@ type updater struct {
 	restarter *restart.Restarter
 	repo      string
 	settings  *store.Store[autoConfig]
+	binary    string
+	located   error
 }
 
 // Register 注册 .update 和自动更新的后台任务。装好新版本或回滚之后，用 restarter 重启服务。
 func Register(a *app.App, restarter *restart.Restarter) {
-	u := &updater{a: a, restarter: restarter, repo: a.Env.Get("MIBOT_UPDATE_REPO", "MiCat-S/mibot-lite"),
+	binary, located := executablePath()
+	u := &updater{binary: binary, located: located, a: a, restarter: restarter, repo: a.Env.Get("MIBOT_UPDATE_REPO", "MiCat-S/mibot-lite"),
 		settings: kit.NewStore(a, "update.json", autoDefaults)}
 	a.Registry.Register(&command.Command{Name: "update", Group: command.GroupSystem, Description: "检查并更新程序", Usage: "[check|run|rollback|auto]", Timeout: 10 * time.Minute,
 		Help: help, Handle: u.handle})
@@ -69,7 +72,7 @@ func help(prefix string) string {
 }
 
 func (u *updater) handle(ctx context.Context, inv *command.Invocation) error {
-	binary, located := executablePath()
+	binary, located := u.binary, u.located
 	sub := strings.ToLower(inv.Arg(0))
 	// 下载、替换程序文件、回滚都只能一个一个来：两个同时跑会互相覆盖下载的文件，
 	// 或者把留作回滚的上一版本弄丢。
@@ -126,6 +129,9 @@ func (u *updater) handle(ctx context.Context, inv *command.Invocation) error {
 		previous := binary + ".previous"
 		if info, err := os.Stat(previous); err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
 			return kit.Fail("没有可回滚的上一版本")
+		}
+		if err := u.a.CheckpointState(); err != nil {
+			return kit.FailWith("保存连接状态失败，没有回滚", err)
 		}
 		// 当前版本先挪到 .rollback，上一版本换进来之后，再把它改名成新的 .previous：
 		// 回滚之后还能再滚回来。
@@ -264,6 +270,10 @@ func (u *updater) install(ctx context.Context, logger *slog.Logger, latest *rele
 		logger.Warn("update.check_failed", "version", latest.TagName, "error", err.Error(), "output", tail(string(output), 400))
 		return kit.Fail("更新失败：新版本试跑没通过（详情见日志），已丢弃。当前运行的版本没有改动")
 	}
+	if err := u.a.CheckpointState(); err != nil {
+		os.Remove(candidate)
+		return kit.FailWith("保存连接状态失败，没有替换程序", err)
+	}
 	previous := binary + ".previous"
 	os.Remove(previous)
 	if err := swapBinary(os.Rename, binary, candidate, previous); err != nil {
@@ -283,7 +293,8 @@ func tail(text string, n int) string {
 	return "…" + string(runes[len(runes)-n:])
 }
 
-// executablePath 是正在运行的程序文件的真实路径（解开符号链接）。
+// executablePath 只在注册时解析一次安装路径。Linux 的 /proc/self/exe 会跟随运行文件
+// 的改名；更新后延期重启时再解析，会把 .previous 误当作安装目标。
 // 两个错误都要返回：EvalSymlinks 失败时照样往下走的话，路径是空字符串，后面会去改名一个空路径。
 func executablePath() (string, error) {
 	binary, err := os.Executable()

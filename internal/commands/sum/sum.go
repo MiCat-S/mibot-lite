@@ -297,13 +297,17 @@ func sumHTTPFailure(status int, body []byte, key string) error {
 	return kit.Fail("AI 调用失败：" + ai.HTTPFailure(status, body, key))
 }
 
-func sumCallAI(ctx context.Context, provider sumProvider, messages, prompt, reasoning, tier string, timeout time.Duration) (string, error) {
+func sumCallAI(ctx context.Context, tag string, provider sumProvider, messages, prompt, reasoning, tier string, timeout time.Duration) (output string, err error) {
 	if err := ai.AssertAllowedModel(provider.Model); err != nil {
 		return "", kit.Fail("配置模型被项目策略禁止，请更换模型")
 	}
 	input := prompt + "\n\n" + messages
 	base := sumNormalizedBase(provider.BaseURL)
+	started := time.Now()
+	info := ai.RequestInfo{Tag: tag, Model: provider.Model, Timeout: timeout, Stage: "request"}
+	defer func() { err = info.Failure(err, started, provider.APIKey) }()
 	request := func(protocol string) (httpx.Response, error) {
+		info.Responses = protocol == "responses"
 		headers := map[string]string{}
 		var target string
 		var data map[string]any
@@ -334,24 +338,27 @@ func sumCallAI(ctx context.Context, provider sumProvider, messages, prompt, reas
 				data["service_tier"] = tier
 			}
 		}
-		return httpx.PostJSON(ctx, target, headers, data, timeout, ai.ResponseLimit)
+		return httpx.PostJSON(ctx, httpx.Request{URL: target, Headers: headers, Timeout: timeout,
+			MaxBytes: ai.ResponseLimit, WaitForHeaders: true}, data)
 	}
 	protocol := sumDetectProtocol(provider)
 	result, err := request(protocol)
 	if err != nil {
-		return "", kit.Fail("AI 请求失败：" + httpx.Reason(err))
+		return "", err
 	}
 	auto := provider.Type == "" || provider.Type == "auto" || provider.Type == "openai"
 	if !result.OK() && auto && protocol != "chat" && (result.Status == 404 || result.Status == 400 && regexp.MustCompile(`(?i)unsupported_upstream|endpoint|not supported`).Match(result.Body)) {
 		protocol = "chat"
 		result, err = request(protocol)
 		if err != nil {
-			return "", kit.Fail("AI 请求失败：" + httpx.Reason(err))
+			return "", err
 		}
 	}
+	info.Stage = "response"
 	if !result.OK() {
 		return "", sumHTTPFailure(result.Status, result.Body, provider.APIKey)
 	}
+	info.Stage = "decode"
 	if protocol == "anthropic" || protocol == "responses" {
 		var data map[string]any
 		if err := json.Unmarshal(result.Body, &data); err != nil {
@@ -455,7 +462,7 @@ func (b sumBackend) call(ctx context.Context, db sumDB, messages, prompt string)
 		if !ai.ValidTier(tier) {
 			tier = "auto"
 		}
-		return sumCallAI(ctx, *b.own, messages, prompt, reasoning, tier, timeout)
+		return sumCallAI(ctx, b.name, *b.own, messages, prompt, reasoning, tier, timeout)
 	}
 	return b.models.Chat(ctx, ai.ChatRequest{Tag: b.aiTag, Text: messages, SystemPrompt: prompt, MaxOutputTokens: 2000, FallbackToChat: true, MinTimeout: timeout})
 }

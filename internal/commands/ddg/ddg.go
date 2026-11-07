@@ -239,7 +239,7 @@ type firecrawlItem struct {
 
 // searchFirecrawl 用 Firecrawl 的免 Key 搜索要 limit 条。
 func searchFirecrawl(ctx context.Context, query string, limit int) ([]result, error) {
-	response, err := httpx.PostJSON(ctx, firecrawlURL, nil, map[string]any{"query": query, "limit": limit}, 20*time.Second, 2<<20)
+	response, err := httpx.PostJSON(ctx, httpx.Request{URL: firecrawlURL, Timeout: 20 * time.Second, MaxBytes: 2 << 20}, map[string]any{"query": query, "limit": limit})
 	if err != nil {
 		return nil, err
 	}

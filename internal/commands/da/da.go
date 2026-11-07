@@ -53,8 +53,6 @@ type daService struct {
 
 type daSlot struct {
 	cancel context.CancelFunc
-	task   *daTask
-	mu     sync.Mutex
 }
 
 // save 存下任务进度。存不进去不中断删除（进度只是给 status 和重启后恢复用的），但要记日志：
@@ -82,7 +80,8 @@ func (s *daService) warn(event string, err error) {
 	}
 }
 
-func (s *daService) progress(ctx context.Context, client *bot.Client, task *daTask, status string) {
+// progress 只显示传入的快照；只有删除协程可以保存任务状态和新的回执 ID。
+func (s *daService) progress(ctx context.Context, client *bot.Client, task *daTask, status string) int {
 	seconds := max(1, (time.Now().UnixMilli()-task.StartTime)/1000)
 	state := "已停止"
 	switch {
@@ -103,19 +102,17 @@ func (s *daService) progress(ctx context.Context, client *bot.Client, task *daTa
 	if task.SavedMessageID > 0 {
 		err := client.EditMessage(ctx, &tg.InputPeerSelf{}, task.SavedMessageID, text, false)
 		if err == nil {
-			s.save(task)
-			return
+			return task.SavedMessageID
 		}
 		if ctx.Err() != nil {
-			return
+			return task.SavedMessageID
 		}
 	}
 	id, err := client.SendSelf(ctx, text)
 	if err != nil {
-		return
+		return task.SavedMessageID
 	}
-	task.SavedMessageID = id
-	s.save(task)
+	return id
 }
 
 // pauseInterrupted 在启动时处理上次没跑完的任务：一律改成暂停，
@@ -139,20 +136,8 @@ func (s *daService) pauseInterrupted() {
 	s.warn("da.pause_interrupted_failed", err)
 }
 
-// current 找到这个群的任务：正在跑的取运行中的副本，否则从存档里读。
-func (s *daService) current(id string, slot *daSlot) *daTask {
-	if slot != nil {
-		slot.mu.Lock()
-		running := slot.task
-		var copied daTask
-		if running != nil {
-			copied = *running
-		}
-		slot.mu.Unlock()
-		if running != nil {
-			return &copied
-		}
-	}
+// current 从存档读一份独立快照；运行中的任务只由删除协程持有和修改。
+func (s *daService) current(id string) *daTask {
 	db, err := s.store.Read()
 	s.warn("da.read_failed", err)
 	var task *daTask
@@ -173,13 +158,9 @@ func (s *daService) report(ctx context.Context, inv *command.Invocation, sub str
 	if sub == "stop" && slot != nil {
 		slot.cancel()
 	}
-	task := s.current(id, slot)
+	task := s.current(id)
 	if task == nil {
 		return
-	}
-	if sub == "stop" && slot == nil {
-		task.IsRunning, task.IsPaused = false, true
-		s.save(task)
 	}
 	status := "状态查询"
 	if sub == "stop" {
@@ -222,7 +203,7 @@ func (s *daService) start(inv *command.Invocation) (bool, error) {
 		s.mu.Unlock()
 	}
 	accepted := s.a.Registry.LongRunning(taskCtx, func(taskCtx context.Context) {
-		s.run(taskCtx, client, slot, id, message)
+		s.run(taskCtx, client, id, message)
 	}, release)
 	if !accepted {
 		// 只有服务正在更新或退出时才会走到这里：个数已经在上面限制过了。
@@ -317,7 +298,8 @@ func (s *daService) finish(ctx context.Context, client *bot.Client, task *daTask
 	}
 	feedback, cancel := context.WithTimeout(life, 5*time.Second)
 	defer cancel()
-	s.progress(feedback, client, task, status)
+	task.SavedMessageID = s.progress(feedback, client, task, status)
+	s.save(task)
 	if completed && len(task.Errors) == 0 {
 		err := s.store.Update(func(db *daDB) error {
 			var kept []daTask
@@ -336,16 +318,13 @@ func (s *daService) finish(ctx context.Context, client *bot.Client, task *daTask
 // run 删这个群的消息，直到删完、出错或者被停下。
 //
 // 管理员删全部消息；其他人只能删自己的，走搜索那一支。
-func (s *daService) run(ctx context.Context, client *bot.Client, slot *daSlot, id string, message *bot.Message) {
+func (s *daService) run(ctx context.Context, client *bot.Client, id string, message *bot.Message) {
 	logger := client.Logger().With(slog.String("command", "da"), slog.String("chat", id))
 	task, err := s.loadTask(id)
 	if err != nil {
 		logger.Error("da.store_failed", slog.String("error", err.Error()))
 		return
 	}
-	slot.mu.Lock()
-	slot.task = task
-	slot.mu.Unlock()
 	s.save(task)
 
 	completed := false
@@ -360,7 +339,8 @@ func (s *daService) run(ctx context.Context, client *bot.Client, slot *daSlot, i
 	run := &daRun{ctx: ctx, client: client, api: client.API(), peer: peer, task: task, save: s.save, logger: logger}
 	admin := run.isAdmin()
 	_ = client.Delete(ctx, peer, []int{message.ID})
-	s.progress(ctx, client, task, "任务已启动")
+	task.SavedMessageID = s.progress(ctx, client, task, "任务已启动")
+	s.save(task)
 	if admin {
 		completed = run.sweepAll()
 	} else {

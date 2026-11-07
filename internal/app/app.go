@@ -209,6 +209,9 @@ func Prepare(ctx context.Context, options Options) (*App, error) {
 		gapsConfig.Storage = state
 		gapsConfig.AccessHasher = state
 		gapsConfig.UserAccessHasher = state
+		if !options.ReadOnly {
+			app.Registry.AddJob(func(ctx context.Context, _ *bot.Client) { state.RunCheckpoints(ctx) })
+		}
 	}
 	app.gaps = updates.New(gapsConfig)
 
@@ -497,12 +500,20 @@ func (a *App) SubmitMessage(ctx context.Context, message *tg.Message) command.Re
 	return a.Registry.Submit(ctx, client, envelope)
 }
 
+// CheckpointState 把更新游标和 hash 合成旧版本也能读取的快照，替换程序前调用。
+func (a *App) CheckpointState() error {
+	if a.state == nil || a.ReadOnly {
+		return nil
+	}
+	return a.state.Checkpoint()
+}
+
 // Close 释放锁并把状态刷写到磁盘。
 func (a *App) Close() error {
 	if a.Registry != nil {
 		a.stopCommands()
 	}
-	if a.state != nil {
+	if a.state != nil && !a.ReadOnly {
 		if err := a.state.Close(); err != nil && a.Logger != nil {
 			a.Logger.Warn("updates.state_flush_failed", slog.String("error", err.Error()))
 		}

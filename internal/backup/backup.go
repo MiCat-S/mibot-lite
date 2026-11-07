@@ -48,14 +48,6 @@ const (
 // 部署根目录下的账号和设置文件。
 var rootFiles = []string{config.ConfigFile, config.SessionFile, config.EnvFile}
 
-// stale 列出的文件，如果归档里没有新的来替换，Restore 就把它删掉。
-//
-// 最要紧的是 gotd-session.json。启动时，只有这个文件不存在，才会导入
-// config.json 里的会话；如果留着一个旧的，就以旧的为准。把某人的
-// config.json 恢复到一个还放着另一个账号 gotd-session.json 的目录里，
-// 程序会悄无声息地继续以那个账号运行。
-var stale = []string{config.SessionFile, config.StateFile}
-
 // ErrExists 表示目标目录里已经有账号，而调用方没有要求替换。
 var ErrExists = errors.New("this directory already has an account; restoring would replace it")
 
@@ -156,8 +148,10 @@ func allowed(name string) bool {
 
 // Restore 把 Create 生成的归档解到 root 下，返回写入的文件名。
 //
-// 整个归档读完、检查完之前什么都不写，所以下载不完整，或者文件根本
-// 不是本程序的备份时，目录会原样保留。
+// 含 config.json 时恢复完整配置快照：归档没有的旧配置会被删除；只有设置的归档
+// 则合并到原部署，不改账号和连接状态。单独的会话不能决定完整账号，必须带 config.json。
+// 整个归档读完、检查完、暂存完之前不改已有配置。完整恢复先撤下 config.json，最后
+// 才发布新的：中途失败或进程退出时，服务会因缺少配置而停止，不会用混合的账号和授权启动。
 func Restore(archive io.Reader, root string, overwrite bool) ([]string, error) {
 	zipped, err := gzip.NewReader(archive)
 	if err != nil {
@@ -214,6 +208,21 @@ func Restore(archive io.Reader, root string, overwrite bool) ([]string, error) {
 	if len(files) == 0 {
 		return nil, errors.New("the backup is empty")
 	}
+	// 清单约定了整份快照；在 tar 文件边界截断时也不能把残缺归档当作设置导入。
+	if len(head.Files) != len(files) {
+		return nil, errors.New("the backup's files do not match its manifest")
+	}
+	listed := make(map[string]bool, len(head.Files))
+	for _, name := range head.Files {
+		if _, present := files[name]; !present || listed[name] {
+			return nil, errors.New("the backup's files do not match its manifest")
+		}
+		listed[name] = true
+	}
+	_, accountSnapshot := files[config.ConfigFile]
+	if _, hasSession := files[config.SessionFile]; hasSession && !accountSnapshot {
+		return nil, errors.New("a session backup must include config.json")
+	}
 	if body, ok := files[config.ConfigFile]; ok {
 		if _, err := config.Parse(body); err != nil {
 			return nil, fmt.Errorf("the backup's config.json is not usable: %w", err)
@@ -223,29 +232,86 @@ func Restore(archive io.Reader, root string, overwrite bool) ([]string, error) {
 		return nil, ErrExists
 	}
 
-	if err := os.MkdirAll(filepath.Join(root, "data"), 0o700); err != nil {
+	// 所有新文件先写到部署所在文件系统，空间不足等错误在撤下账号之前暴露。
+	if err := os.MkdirAll(root, 0o700); err != nil {
 		return nil, err
 	}
+	staging, err := os.MkdirTemp(root, ".restore-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(staging)
 	names := make([]string, 0, len(files))
 	for name := range files {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		if err := writeAtomic(filepath.Join(root, filepath.FromSlash(name)), files[name]); err != nil {
+		if err := writeAtomic(filepath.Join(staging, filepath.FromSlash(name)), files[name]); err != nil {
 			return nil, err
 		}
 	}
-	for _, name := range stale {
-		if _, replaced := files[name]; !replaced {
-			if err := os.Remove(filepath.Join(root, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return nil, err
+	if err := os.MkdirAll(filepath.Join(root, "data"), 0o700); err != nil {
+		return nil, err
+	}
+	if accountSnapshot {
+		if err := remove(filepath.Join(root, config.ConfigFile)); err != nil {
+			return nil, err
+		}
+	}
+	apply := func() error {
+		if accountSnapshot {
+			// 只清理备份约定的配置范围，缓存、程序和其他文件不动。
+			stale := []string{config.EnvFile, config.SessionFile, config.StateFile, config.StateFile + ".cursor", "restart-receipt.json"}
+			entries, err := os.ReadDir(filepath.Join(root, "data"))
+			if err != nil {
+				return err
+			}
+			for _, entry := range entries {
+				name := "data/" + entry.Name()
+				if !entry.IsDir() && allowed(name) {
+					stale = append(stale, name)
+				}
+			}
+			for _, name := range stale {
+				if _, replaced := files[name]; !replaced {
+					if err := remove(filepath.Join(root, filepath.FromSlash(name))); err != nil {
+						return err
+					}
+				}
 			}
 		}
+		for _, name := range names {
+			if name == config.ConfigFile {
+				continue
+			}
+			if err := os.Rename(filepath.Join(staging, filepath.FromSlash(name)), filepath.Join(root, filepath.FromSlash(name))); err != nil {
+				return err
+			}
+		}
+		if accountSnapshot {
+			return os.Rename(filepath.Join(staging, config.ConfigFile), filepath.Join(root, config.ConfigFile))
+		}
+		return nil
+	}
+	if err := apply(); err != nil {
+		if accountSnapshot {
+			return nil, fmt.Errorf("restore incomplete; config.json is withheld so the service cannot start with mixed account settings; run restore again: %w", err)
+		}
+		return nil, err
 	}
 	return names, nil
 }
 
 func writeAtomic(target string, body []byte) error {
 	return fsutil.WriteFileAtomic(target, body, 0o600)
+}
+
+// remove 删除不存在的旧配置也算完成。
+func remove(name string) error {
+	err := os.Remove(name)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
 }

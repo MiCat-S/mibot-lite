@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -27,6 +28,8 @@ func deployment(t *testing.T) string {
 		"gotd-session.json":        `{"dc":2}`,
 		".env":                     "MIBOT_PREFIX=.\n",
 		"updates.json":             `{"pts":1}`,
+		"updates.json.cursor":      `{"pts":2}`,
+		"restart-receipt.json":     `{"pending":{"chatId":"999","messageId":1}}`,
 		"mibot-lite":               "binary",
 		"mibot-lite.lock":          "",
 		"data/ai.json":             `{"key":"sk-secret"}`,
@@ -150,7 +153,12 @@ func forge(t *testing.T, entries map[string]string, withManifest bool, kind byte
 	zipped := gzip.NewWriter(&out)
 	packed := tar.NewWriter(zipped)
 	if withManifest {
-		body := `{"format":1,"version":"x","files":[]}`
+		names := make([]string, 0, len(entries))
+		for name := range entries {
+			names = append(names, name)
+		}
+		raw, _ := json.Marshal(manifest{Format: format, Version: "x", Files: names})
+		body := string(raw)
 		packed.WriteHeader(&tar.Header{Name: Manifest, Mode: 0o600, Size: int64(len(body)), Typeflag: tar.TypeReg})
 		packed.Write([]byte(body))
 	}
@@ -219,5 +227,105 @@ func TestOversizedArchiveIsRefused(t *testing.T) {
 func TestEmptyDeploymentHasNothingToBackUp(t *testing.T) {
 	if _, _, err := Create(t.TempDir(), "0.1.12", time.Now()); err == nil {
 		t.Fatal("an empty directory produced a backup")
+	}
+}
+
+// 备份中缺少的设置表示默认值，不能继承目标旧账号的授权或定时动作。
+func TestAccountRestoreRemovesTargetOnlySettings(t *testing.T) {
+	source := t.TempDir()
+	os.WriteFile(filepath.Join(source, "config.json"), []byte(account), 0o600)
+	archive, _, err := Create(source, "v1", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := deployment(t)
+	for _, name := range []string{"sudo.json", "sure.json", "acron.json", "keyword.json"} {
+		os.WriteFile(filepath.Join(target, "data", name), []byte(`{"users":[{"id":"999"}]}`), 0o600)
+	}
+	if _, err := Restore(bytes.NewReader(archive), target, true); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{".env", "gotd-session.json", "updates.json", "updates.json.cursor", "restart-receipt.json", "data/ai.json", "data/alias.json", "data/sudo.json", "data/sure.json", "data/acron.json", "data/keyword.json"} {
+		if _, err := os.Stat(filepath.Join(target, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("old account setting survived: %s (%v)", name, err)
+		}
+	}
+	for _, name := range []string{"config.json", "mibot-lite", "data/eatgif/abc.png", "data/eatgif/abc.json", "data/notes.txt"} {
+		if _, err := os.Stat(filepath.Join(target, name)); err != nil {
+			t.Errorf("out-of-scope file lost: %s (%v)", name, err)
+		}
+	}
+}
+
+// 不含账号的设置备份只做合并，不清除原会话和连接状态。
+func TestSettingsOnlyRestoreKeepsAccountAndUnrelatedSettings(t *testing.T) {
+	source := t.TempDir()
+	os.Mkdir(filepath.Join(source, "data"), 0o700)
+	os.WriteFile(filepath.Join(source, "data/ai.json"), []byte(`{"key":"new"}`), 0o600)
+	archive, _, err := Create(source, "v1", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := deployment(t)
+	if _, err := Restore(bytes.NewReader(archive), target, true); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"config.json", "gotd-session.json", "updates.json", "updates.json.cursor", "restart-receipt.json", ".env", "data/alias.json"} {
+		if _, err := os.Stat(filepath.Join(target, name)); err != nil {
+			t.Errorf("settings import removed %s: %v", name, err)
+		}
+	}
+	got, _ := os.ReadFile(filepath.Join(target, "data/ai.json"))
+	if string(got) != `{"key":"new"}` {
+		t.Fatalf("setting not merged: %s", got)
+	}
+}
+
+func TestSessionOnlyRestoreIsRejected(t *testing.T) {
+	archive := forge(t, map[string]string{"gotd-session.json": `{"dc":2}`}, true, tar.TypeReg)
+	target := deployment(t)
+	if _, err := Restore(bytes.NewReader(archive), target, true); err == nil {
+		t.Fatal("session without account accepted")
+	}
+	got, _ := os.ReadFile(filepath.Join(target, "config.json"))
+	if string(got) != account {
+		t.Fatal("rejected restore changed account")
+	}
+}
+
+// 已暂存的新设置无法放入时，不能留下一个可启动、却带着混合授权的账号。
+func TestFailedAccountRestoreWithholdsAccount(t *testing.T) {
+	source := deployment(t)
+	target := deployment(t)
+	os.Remove(filepath.Join(target, "data/ai.json"))
+	os.Mkdir(filepath.Join(target, "data/ai.json"), 0o700)
+	archive, _, err := Create(source, "v1", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Restore(bytes.NewReader(archive), target, true); err == nil || !strings.Contains(err.Error(), "config.json is withheld") {
+		t.Fatalf("restore failure: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "config.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed restore left account enabled: %v", err)
+	}
+}
+
+// 有清单但文件条目缺失的归档不算部分导入，避免恢复时误删或继承设置。
+func TestIncompleteManifestWritesNothing(t *testing.T) {
+	var out bytes.Buffer
+	zipped := gzip.NewWriter(&out)
+	packed := tar.NewWriter(zipped)
+	put(packed, Manifest, []byte(`{"format":1,"files":["config.json","data/sudo.json"]}`), time.Now())
+	put(packed, "config.json", []byte(account), time.Now())
+	packed.Close()
+	zipped.Close()
+	target := deployment(t)
+	if _, err := Restore(bytes.NewReader(out.Bytes()), target, true); err == nil {
+		t.Fatal("incomplete snapshot accepted")
+	}
+	got, _ := os.ReadFile(filepath.Join(target, "gotd-session.json"))
+	if string(got) != `{"dc":2}` {
+		t.Fatal("incomplete snapshot touched deployment")
 	}
 }

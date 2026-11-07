@@ -217,3 +217,34 @@ func TestBulkHashesStayInMemory(t *testing.T) {
 		t.Errorf("内存里应该还能寻址：%v %v", peer, ok)
 	}
 }
+
+// 更新回包刷新实体时，命令仍可同时寻址；读取字段也必须在锁内。
+func TestInputPeerConcurrentRefresh(t *testing.T) {
+	for _, channel := range []bool{false, true} {
+		t.Run(map[bool]string{false: "user", true: "channel"}[channel], func(t *testing.T) {
+			cache := NewPeerCache()
+			var peer tg.PeerClass = &tg.PeerUser{UserID: 42}
+			refresh := func() { cache.RememberUsers([]tg.UserClass{&tg.User{ID: 42, AccessHash: 99}}) }
+			if channel {
+				peer = &tg.PeerChannel{ChannelID: 42}
+				refresh = func() { cache.RememberChats([]tg.ChatClass{&tg.Channel{ID: 42, AccessHash: 99}}) }
+			}
+			refresh()
+			var work sync.WaitGroup
+			work.Go(func() {
+				for range 2000 {
+					refresh()
+				}
+			})
+			work.Go(func() {
+				for range 2000 {
+					if _, ok := cache.InputPeer(peer); !ok {
+						t.Error("cached peer became unavailable")
+						return
+					}
+				}
+			})
+			work.Wait()
+		})
+	}
+}

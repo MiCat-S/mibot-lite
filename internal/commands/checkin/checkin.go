@@ -60,6 +60,9 @@ type config struct {
 	// CurrentRunTime 是给 PlannedDate 那天挑好的执行时刻。存下来，重启后不会重挑。
 	CurrentRunTime string `json:"currentRunTime,omitempty"`
 	PlannedDate    string `json:"plannedDate,omitempty"`
+	// Attempted 记录本轮已经开始的目标；发送前落盘，取消或崩溃后只继续尚未开始的目标。
+	AttemptDate string   `json:"attemptDate,omitempty"`
+	Attempted   []string `json:"attempted,omitempty"`
 }
 
 func defaults() config {
@@ -159,6 +162,7 @@ func (s *service) handle(ctx context.Context, inv *command.Invocation) error {
 	case "reset":
 		if err := s.store.Update(func(cfg *config) error {
 			cfg.LastRunDate, cfg.PlannedDate, cfg.CurrentRunTime = "", "", ""
+			cfg.AttemptDate, cfg.Attempted = "", nil
 			return nil
 		}); err != nil {
 			return err
@@ -189,9 +193,11 @@ func (s *service) runNow(ctx context.Context, inv *command.Invocation) error {
 	if err := inv.EditText(ctx, kit.Working(fmt.Sprintf("正在签到 %d 个目标", len(targets)))); err != nil {
 		return err
 	}
-	today := dateOf(time.Now())
-	summary := runAll(ctx, inv.Client, targets, "手动")
-	kit.Warn(s.a, "checkin.save_failed", s.store.Update(func(cfg *config) error { cfg.LastRunDate = today; return nil }))
+	today := scheduleDate(cfg, time.Now())
+	summary, err := s.runAll(ctx, inv.Client, targets, "手动", today)
+	if err != nil {
+		return err
+	}
 	return deliver(ctx, inv.Client, cfg, summary, inv)
 }
 
@@ -441,7 +447,7 @@ func (s *service) show(ctx context.Context, inv *command.Invocation) error {
 	if cfg.RunTimeEnd != "" {
 		schedule = "每天 " + command.Code(cfg.RunTime+" ~ "+cfg.RunTimeEnd) + " 之间随机挑一分钟（北京时间）"
 	}
-	today := dateOf(time.Now())
+	today := scheduleDate(cfg, time.Now())
 	status := "今天还没签"
 	switch {
 	case cfg.LastRunDate == today:
@@ -497,23 +503,36 @@ func (s *service) schedule(ctx context.Context, client *bot.Client) {
 }
 
 func (s *service) tick(ctx context.Context, client *bot.Client, now time.Time) {
-	today := dateOf(now)
 	cfg, err := s.store.Read()
-	if err != nil || cfg.LastRunDate == today || len(cfg.enabled()) == 0 {
+	if err != nil {
+		return
+	}
+	today := scheduleDate(cfg, now)
+	if cfg.LastRunDate == today || len(cfg.enabled()) == 0 {
 		return
 	}
 	if cfg.PlannedDate != today || cfg.CurrentRunTime == "" {
 		cfg.PlannedDate, cfg.CurrentRunTime = today, pick(cfg, rand.IntN)
 		planned := cfg
-		kit.Warn(s.a, "checkin.save_failed", s.store.Update(func(stored *config) error {
+		if err := s.store.Update(func(stored *config) error {
 			stored.PlannedDate, stored.CurrentRunTime = planned.PlannedDate, planned.CurrentRunTime
 			return nil
-		}))
+		}); err != nil {
+			client.Logger().Warn("checkin.save_failed", "error", err.Error())
+			return
+		}
 	}
-	at, _ := parseClock(cfg.CurrentRunTime)
-	local := now.In(shanghai)
-	if local.Hour()*60+local.Minute() < at {
+	at := plannedTime(cfg)
+	if now.Before(at) {
 		return
+	}
+	// 和摘要任务共用维护闸门；随机延迟和整轮签到都纳入活动统计。
+	if s.a != nil && s.a.Registry != nil {
+		done, ok := s.a.Registry.Track()
+		if !ok {
+			return
+		}
+		defer done()
 	}
 	if cfg.RandomDelay > 0 && kit.Sleep(ctx, time.Duration(rand.Int64N(int64(cfg.RandomDelay)*int64(time.Minute)))) != nil {
 		return
@@ -526,14 +545,44 @@ func (s *service) tick(ctx context.Context, client *bot.Client, now time.Time) {
 	if cfg, err = s.store.Read(); err != nil || cfg.LastRunDate == today {
 		return
 	}
+	// 延迟期间改过时间时，留给下一次 tick 按新计划判断。
+	if cfg.PlannedDate != today || now.Before(plannedTime(cfg)) {
+		return
+	}
 	targets := cfg.enabled()
 	if len(targets) == 0 {
 		return
 	}
 	client.Logger().Info("checkin.start", "targets", len(targets), "planned", cfg.CurrentRunTime)
-	summary := runAll(ctx, client, targets, "定时")
-	kit.Warn(s.a, "checkin.save_failed", s.store.Update(func(cfg *config) error { cfg.LastRunDate = today; return nil }))
+	summary, err := s.runAll(ctx, client, targets, "定时", today)
+	if err != nil {
+		client.Logger().Warn("checkin.interrupted", "error", err.Error())
+		return
+	}
 	if err := deliver(ctx, client, cfg, summary, nil); err != nil {
 		client.Logger().Warn("checkin.report_failed", "error", err.Error())
 	}
+}
+
+// scheduleDate 按开始时间归属跨午夜的一轮；午夜后仍是前一天开始的那一轮。
+func scheduleDate(cfg config, now time.Time) string {
+	local := now.In(shanghai)
+	start, _ := parseClock(cfg.RunTime)
+	end, ranged := parseClock(cfg.RunTimeEnd)
+	if ranged && end <= start && local.Hour()*60+local.Minute() < start {
+		local = local.AddDate(0, 0, -1)
+	}
+	return dateOf(local)
+}
+
+// plannedTime 兼容旧文件的日期和 HH:MM：选中的时间早于开始时间，就在次日。
+func plannedTime(cfg config) time.Time {
+	day, _ := time.ParseInLocation("2006/1/2", cfg.PlannedDate, shanghai)
+	minute, _ := parseClock(cfg.CurrentRunTime)
+	start, _ := parseClock(cfg.RunTime)
+	end, ranged := parseClock(cfg.RunTimeEnd)
+	if ranged && end <= start && minute < start {
+		day = day.AddDate(0, 0, 1)
+	}
+	return day.Add(time.Duration(minute) * time.Minute)
 }

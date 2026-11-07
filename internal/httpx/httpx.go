@@ -13,8 +13,11 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
+	"net/url"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -39,6 +42,14 @@ var shared = &http.Client{
 	},
 	CheckRedirect: checkRedirect,
 }
+
+// AI 生成内容时可能很久才发响应头，整个请求按调用方的 Timeout 等待。
+// 单独留一个连接池，普通下载、上传等请求仍保留原来的响应头时限。
+var slowHeaders = func() *http.Client {
+	transport := shared.Transport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = 0
+	return &http.Client{Transport: transport, CheckRedirect: checkRedirect}
+}()
 
 // ErrCredentialRedirect 表示带凭证的请求被重定向到了别的源，已拒绝跟随。
 var ErrCredentialRedirect = errors.New("refusing credential redirect to another origin")
@@ -72,6 +83,8 @@ type Request struct {
 	Body    []byte
 	// NoRedirect 不跟随重定向，用于 URL 里带凭证、或者正文不能转给别处的请求。
 	NoRedirect bool
+	// WaitForHeaders 让响应头也按 Timeout 等待，用于 AI 生成请求。
+	WaitForHeaders bool
 	// Timeout 限制整个调用的时长。零值表示 30 秒。
 	Timeout time.Duration
 	// MaxBytes 限制响应体大小。零值表示 2 MB。
@@ -83,6 +96,26 @@ type Response struct {
 	Status int
 	Body   []byte
 }
+
+// RequestError 保留 AI 请求失败的阶段和原始原因；打印时去掉可能带凭证的请求 URL。
+type RequestError struct {
+	Stage string
+	Err   error
+}
+
+func (e *RequestError) Error() string {
+	err := e.Err
+	for {
+		var target *url.Error
+		if !errors.As(err, &target) {
+			break
+		}
+		err = target.Err
+	}
+	return err.Error()
+}
+
+func (e *RequestError) Unwrap() error { return e.Err }
 
 // OK 判断状态码是不是 2xx。
 func (r Response) OK() bool { return r.Status >= 200 && r.Status < 300 }
@@ -103,35 +136,52 @@ func Do(ctx context.Context, request Request) (Response, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	wrapError := func(stage string, err error) error {
+		if request.WaitForHeaders {
+			return &RequestError{Stage: stage, Err: err}
+		}
+		return err
+	}
+	client := shared
+	var wrote atomic.Bool
+	if request.WaitForHeaders {
+		client = slowHeaders
+		ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{WroteRequest: func(info httptrace.WroteRequestInfo) {
+			wrote.Store(info.Err == nil)
+		}})
+	}
 	var body io.Reader
 	if request.Body != nil {
 		body = bytes.NewReader(request.Body)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, request.URL, body)
 	if err != nil {
-		return Response{}, err
+		return Response{}, wrapError("request", err)
 	}
 	req.Header.Set("User-Agent", UserAgent)
 	for key, value := range request.Headers {
 		req.Header.Set(key, value)
 	}
-	client := shared
 	if request.NoRedirect {
-		copy := *shared // 只换重定向策略，Transport 和连接池仍然共用。
+		copy := *client // 只换重定向策略，Transport 和连接池仍然共用。
 		copy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 		client = &copy
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return Response{}, err
+		stage := "request"
+		if wrote.Load() {
+			stage = "response_headers"
+		}
+		return Response{}, wrapError(stage, err)
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
-		return Response{Status: resp.StatusCode}, err
+		return Response{Status: resp.StatusCode}, wrapError("response_body", err)
 	}
 	if int64(len(data)) > limit {
-		return Response{Status: resp.StatusCode}, ErrTooLarge
+		return Response{Status: resp.StatusCode}, wrapError("response_body", ErrTooLarge)
 	}
 	return Response{Status: resp.StatusCode, Body: data}, nil
 }
@@ -152,16 +202,17 @@ func GetJSON(ctx context.Context, url string, timeout time.Duration, maxBytes in
 }
 
 // PostJSON 发送 JSON 请求体，返回原始响应。
-func PostJSON(ctx context.Context, url string, headers map[string]string, payload any, timeout time.Duration, maxBytes int64) (Response, error) {
+func PostJSON(ctx context.Context, request Request, payload any) (Response, error) {
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return Response{}, err
 	}
 	merged := map[string]string{"Content-Type": "application/json"}
-	for key, value := range headers {
+	for key, value := range request.Headers {
 		merged[key] = value
 	}
-	return Do(ctx, Request{Method: http.MethodPost, URL: url, Headers: merged, Body: encoded, Timeout: timeout, MaxBytes: maxBytes})
+	request.Method, request.Headers, request.Body = http.MethodPost, merged, encoded
+	return Do(ctx, request)
 }
 
 // StatusError 表示非 2xx 的响应。

@@ -67,6 +67,9 @@ func TestDispatchShowsErrors(t *testing.T) {
 	if !strings.Contains(logs.String(), "command.refused") || strings.Contains(logs.String(), "command.failed") {
 		t.Errorf("a refusal was logged as a failure:\n%s", logs.String())
 	}
+	if !strings.Contains(logs.String(), "took=") {
+		t.Error("失败日志没有耗时")
+	}
 
 	r.Dispatch(context.Background(), client, message(".crash"))
 	r.Wait(time.Second)

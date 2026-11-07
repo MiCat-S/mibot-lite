@@ -101,7 +101,51 @@ if [ "$WITH_SERVICE" = 1 ] && systemctl is-active --quiet "$SERVICE" 2>/dev/null
 fi
 
 say "Fetching the latest release of $REPO"
-RELEASE=$(mktemp) && trap 'rm -rf "$RELEASE" "${WORK:-}"' EXIT
+RELEASE=$(mktemp)
+WORK=
+STAGING=
+SWITCHING=0
+STOPPED=0
+UNIT_CHANGED=0
+HAD_UNIT=0
+HAD_BINARY=0
+cleanup() {
+  result=$?
+  trap - EXIT
+  set +e
+  if [ "$result" != 0 ] && [ "$SWITCHING" = 1 ]; then
+    # 切换失败时先停止候选，再换回原文件；恢复失败则保留暂存目录供人工处理。
+    recovered=1
+    if [ "$WITH_SERVICE" = 1 ]; then
+      systemctl stop "$SERVICE" || recovered=0
+    fi
+    if [ -e "$STAGING/previous" ] || [ -L "$STAGING/previous" ]; then
+      mv -f "$STAGING/previous" "$ROOT/mibot-lite" || recovered=0
+    elif [ "$HAD_BINARY" = 0 ]; then
+      rm -f "$ROOT/mibot-lite" || recovered=0
+    fi
+    if [ "$UNIT_CHANGED" = 1 ]; then
+      if [ "$HAD_UNIT" = 1 ]; then
+        install -m 644 "$STAGING/previous.service" "$UNIT" || recovered=0
+      else
+        rm -f "$UNIT" || recovered=0
+      fi
+      systemctl daemon-reload || recovered=0
+    fi
+    if [ "$STOPPED" = 1 ]; then
+      systemctl start "$SERVICE" || recovered=0
+    fi
+    if [ "$recovered" = 0 ]; then
+      printf 'Recovery failed; retained installation files at %s\n' "$STAGING" >&2
+      STAGING=
+    fi
+  fi
+  rm -rf "$RELEASE" "$WORK" "$STAGING"
+  exit "$result"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" -o "$RELEASE" \
   || die "could not read the release list; check the network and that $REPO has a release"
 
@@ -157,43 +201,66 @@ if ! grep -q '"session"' "$ROOT/config.json" 2>/dev/null; then
   fi
 fi
 
-if [ "$OWNS_SERVICE" = 1 ]; then
-  say "Stopping the running service to replace its binary"
-  systemctl stop "$SERVICE"
-fi
-install -m 755 "$WORK/$ASSET" "$ROOT/mibot-lite"
-
+# 在原服务还运行时完成预检、模板下载和验证，网络故障不会造成停机。
+chmod 755 "$WORK/$ASSET"
 say "Checking that this build can read $ROOT"
-"$ROOT/mibot-lite" --check --root "$ROOT" || die "the new binary cannot read this deployment; nothing was started"
+"$WORK/$ASSET" --check --root "$ROOT" || die "the new binary cannot read this deployment; nothing was installed"
 
-if [ "$WITH_SERVICE" = 0 ]; then
-  say "Installed to $ROOT/mibot-lite (service untouched)"
-  exit 0
-fi
-
-# Installing over a unit that points somewhere else would repoint the
-# service at this directory without saying so.
-if [ -f "$UNIT" ]; then
-  EXISTING_ROOT=$(systemctl show "$SERVICE" -p WorkingDirectory --value 2>/dev/null || true)
-  if [ -n "$EXISTING_ROOT" ] && [ "$EXISTING_ROOT" != "$ROOT" ]; then
-    die "$SERVICE already points at $EXISTING_ROOT.
+if [ "$WITH_SERVICE" = 1 ]; then
+  if [ -f "$UNIT" ]; then
+    EXISTING_ROOT=$(systemctl show "$SERVICE" -p WorkingDirectory --value 2>/dev/null || true)
+    if [ -n "$EXISTING_ROOT" ] && [ "$EXISTING_ROOT" != "$ROOT" ]; then
+      die "$SERVICE already points at $EXISTING_ROOT.
   Installing here would repoint it at $ROOT and orphan that deployment.
   Use --root $EXISTING_ROOT to upgrade it, or remove the unit first."
+    fi
+  fi
+  [ "${ROOT#/}" != "$ROOT" ] || die "the deployment path must be absolute: $ROOT"
+  case "$ROOT" in *[!A-Za-z0-9._/-]*) die "deployment path must be free of unit metacharacters: $ROOT" ;; esac
+fi
+
+# 与安装文件同一文件系统，改名切换不会截断正在运行的可执行文件。
+STAGING=$(mktemp -d "$ROOT/.install-XXXXXX")
+install -m 755 "$WORK/$ASSET" "$STAGING/candidate"
+if [ "$WITH_SERVICE" = 1 ]; then
+  curl -fsSL "https://raw.githubusercontent.com/$REPO/$TAG/deploy/mibot-lite.service" -o "$STAGING/template" \
+    || die "could not download the service template"
+  sed -e "s|@ROOT@|$ROOT|g" -e "s|@BINARY@|$ROOT/mibot-lite|g" "$STAGING/template" > "$STAGING/$SERVICE"
+  grep -q '@[A-Z][A-Z]*@' "$STAGING/$SERVICE" && die "service template has unsubstituted placeholders"
+  if command -v systemd-analyze > /dev/null; then
+    # 首次安装的正式路径还没有程序，用同一候选验证 ExecStart 可执行性。
+    mkdir "$STAGING/verify"
+    sed -e "s|@ROOT@|$ROOT|g" -e "s|@BINARY@|$STAGING/candidate|g" "$STAGING/template" > "$STAGING/verify/$SERVICE"
+    systemd-analyze verify "$STAGING/verify/$SERVICE"
+  fi
+  if [ -f "$UNIT" ]; then
+    cp "$UNIT" "$STAGING/previous.service"
+    HAD_UNIT=1
   fi
 fi
 
-# systemd-analyze reads the file name as the unit name, so the rendered
-# copy has to carry it.
-[ "${ROOT#/}" != "$ROOT" ] || die "the deployment path must be absolute: $ROOT"
-case "$ROOT" in *[!A-Za-z0-9._/-]*) die "deployment path must be free of unit metacharacters: $ROOT" ;; esac
-STAGING=$(mktemp -d)
-curl -fsSL "https://raw.githubusercontent.com/$REPO/$TAG/deploy/mibot-lite.service" -o "$STAGING/template" \
-  || die "could not download the service template"
-sed -e "s|@ROOT@|$ROOT|g" -e "s|@BINARY@|$ROOT/mibot-lite|g" "$STAGING/template" > "$STAGING/$SERVICE"
-grep -q '@[A-Z][A-Z]*@' "$STAGING/$SERVICE" && die "service template has unsubstituted placeholders"
-command -v systemd-analyze > /dev/null && systemd-analyze verify "$STAGING/$SERVICE"
+if [ -e "$ROOT/mibot-lite" ] || [ -L "$ROOT/mibot-lite" ]; then
+  HAD_BINARY=1
+fi
+SWITCHING=1
+if [ "$OWNS_SERVICE" = 1 ]; then
+  say "Stopping the running service to replace its binary"
+  STOPPED=1
+  systemctl stop "$SERVICE"
+fi
+# 旧文件挪开后就必须由退出钩子负责恢复；先前的失败不触发恢复。
+if [ "$HAD_BINARY" = 1 ]; then
+  mv "$ROOT/mibot-lite" "$STAGING/previous"
+fi
+mv "$STAGING/candidate" "$ROOT/mibot-lite"
+
+if [ "$WITH_SERVICE" = 0 ]; then
+  SWITCHING=0
+  say "Installed to $ROOT/mibot-lite (service untouched)"
+  exit 0
+fi
+UNIT_CHANGED=1
 install -m 644 "$STAGING/$SERVICE" "$UNIT"
-rm -rf "$STAGING"
 
 systemctl daemon-reload
 systemctl reset-failed mibot-lite 2> /dev/null || true
@@ -211,6 +278,7 @@ for _ in $(seq 30); do
   LOG=$(journalctl -u mibot-lite --since "$SINCE" --no-pager -o cat 2> /dev/null || true)
   case $LOG in
     *msg=runtime.ready*)
+      SWITCHING=0
       say "MiBot Lite $TAG is running and enabled at boot"
       printf '%s\n' \
         "   Try .help and .ping in Telegram." \

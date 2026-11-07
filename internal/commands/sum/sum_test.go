@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -239,13 +240,49 @@ func TestSumCallAIErrorDetail(t *testing.T) {
 	}))
 	defer server.Close()
 	provider := sumProvider{Name: "a", BaseURL: server.URL, APIKey: "sk-live-abcdef", Model: "gpt-4o", Type: "chat"}
-	_, err := sumCallAI(context.Background(), provider, "消息", "提示", "auto", "auto", 5*time.Second)
+	_, err := sumCallAI(context.Background(), "p", provider, "消息", "提示", "auto", "auto", 5*time.Second)
 	message, ok := kit.IsUserError(err)
 	if !ok || message != "AI 调用失败：AI 接口返回 HTTP 401：Incorrect API key provided: ***" {
 		t.Fatalf("got %q", message)
 	}
 	if command.Brief(err) != message {
 		t.Fatal("定时任务应记下同样的错误说明")
+	}
+	if !strings.Contains(err.Error(), "stage=response") || strings.Contains(err.Error(), provider.APIKey) {
+		t.Fatalf("错误日志缺少阶段或泄露密钥：%v", err)
+	}
+}
+
+// sum 自己的 Gemini 服务商也保留请求上下文，URL 里的 Key 不进入日志。
+func TestSumTransportFailureContext(t *testing.T) {
+	secret := "sk+summary/123"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("key") != secret {
+			t.Error("请求没有带上测试凭证")
+		}
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		conn.Close()
+	}))
+	defer server.Close()
+	provider := sumProvider{BaseURL: server.URL, APIKey: secret, Model: "gemini-test", Type: "gemini"}
+	_, err := sumCallAI(context.Background(), "summary-api", provider, "消息", "提示", "auto", "auto", time.Second)
+	if err == nil {
+		t.Fatal("应当返回传输失败")
+	}
+	for _, want := range []string{`tag="summary-api"`, `model="gemini-test"`, "stream=false", "responses=false", "timeout=1s", "took=", "stage=response_headers", "EOF"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("错误缺少 %q：%v", want, err)
+		}
+	}
+	message, _ := kit.IsUserError(err)
+	for _, private := range []string{secret, url.QueryEscape(secret), server.URL} {
+		if strings.Contains(err.Error(), private) || strings.Contains(message, private) {
+			t.Errorf("日志或聊天泄露请求信息：%v / %s", err, message)
+		}
 	}
 }
 

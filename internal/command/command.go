@@ -692,12 +692,13 @@ func (r *Registry) run(ctx context.Context, client *bot.Client, message, trigger
 		} else {
 			err = command.Handle(runCtx, inv)
 		}
+		log := inv.Log.With(slog.Duration("took", time.Since(started)))
 		switch {
 		case err == nil:
-			inv.Log.Info("command.handled", slog.String("chat", message.ChatID), slog.Int("message", message.ID), slog.Duration("took", time.Since(started)))
+			log.Info("command.handled", slog.String("chat", message.ChatID), slog.Int("message", message.ID))
 		case r.life.Err() != nil:
 			// 进程要退出了：不回「执行失败」，连接也正在关，发不出去。
-			inv.Log.Info("command.aborted", slog.String("chat", message.ChatID), slog.Int("message", message.ID), slog.Duration("took", time.Since(started)))
+			log.Info("command.aborted", slog.String("chat", message.ChatID), slog.Int("message", message.ID))
 		case ctx.Err() != nil:
 		case isUserError(err):
 			// 用法不对、没有权限、对方不存在这类：不是故障，照原话告诉用户，日志只记一笔。
@@ -709,13 +710,13 @@ func (r *Registry) run(ctx context.Context, client *bot.Client, message, trigger
 				level = slog.LevelWarn
 				attrs = append(attrs, slog.String("error", err.Error()))
 			}
-			inv.Log.Log(context.Background(), level, "command.refused", attrs...)
+			log.Log(context.Background(), level, "command.refused", attrs...)
 			r.reportError(live, inv, "❌ "+text)
 		case errors.Is(err, context.DeadlineExceeded):
-			inv.Log.Warn("command.timeout", slog.String("chat", message.ChatID))
+			log.Warn("command.timeout", slog.String("chat", message.ChatID))
 			r.reportError(live, inv, "❌ 命令执行超时")
 		default:
-			inv.Log.Error("command.failed", slog.String("chat", message.ChatID), slog.Int("message", message.ID), slog.String("error", err.Error()))
+			log.Error("command.failed", slog.String("chat", message.ChatID), slog.Int("message", message.ID), slog.String("error", err.Error()))
 			r.reportError(live, inv, "❌ 命令执行失败："+Brief(err))
 		}
 	})

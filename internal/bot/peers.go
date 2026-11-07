@@ -352,10 +352,12 @@ func (c *PeerCache) InputPeer(peer tg.PeerClass) (tg.InputPeerClass, bool) {
 			return &tg.InputPeerSelf{}, true
 		}
 		info, known := c.users[value.UserID]
-		c.mu.RUnlock()
 		if known && info.HasHash {
-			return &tg.InputPeerUser{UserID: value.UserID, AccessHash: info.Hash}, true
+			peer := &tg.InputPeerUser{UserID: value.UserID, AccessHash: info.Hash}
+			c.mu.RUnlock()
+			return peer, true
 		}
+		c.mu.RUnlock()
 		if hash, ok := lookupHash(durable, selfID, value.UserID, false); ok {
 			return &tg.InputPeerUser{UserID: value.UserID, AccessHash: hash}, true
 		}
@@ -365,10 +367,12 @@ func (c *PeerCache) InputPeer(peer tg.PeerClass) (tg.InputPeerClass, bool) {
 		return &tg.InputPeerChat{ChatID: value.ChatID}, true
 	case *tg.PeerChannel:
 		info, known := c.channels[value.ChannelID]
-		c.mu.RUnlock()
 		if known && info.HasHash {
-			return &tg.InputPeerChannel{ChannelID: value.ChannelID, AccessHash: info.Hash}, true
+			peer := &tg.InputPeerChannel{ChannelID: value.ChannelID, AccessHash: info.Hash}
+			c.mu.RUnlock()
+			return peer, true
 		}
+		c.mu.RUnlock()
 		if hash, ok := lookupHash(durable, selfID, value.ChannelID, true); ok {
 			return &tg.InputPeerChannel{ChannelID: value.ChannelID, AccessHash: hash}, true
 		}
