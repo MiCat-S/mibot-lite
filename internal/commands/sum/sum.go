@@ -561,10 +561,7 @@ func (s *sumService) readMessages(ctx context.Context, client *bot.Client, chatI
 				done = true
 				break
 			}
-			content := strings.TrimSpace(message.Message)
-			if content == "" {
-				content = bot.RichMessageText(message)
-			}
+			content := strings.TrimSpace(bot.MessageText(message))
 			fileName := sumFileName(message.Media)
 			if content == "" && fileName == "" {
 				continue

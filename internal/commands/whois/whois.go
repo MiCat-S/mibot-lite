@@ -171,7 +171,7 @@ func Register(a *app.App) {
 					return err
 				}
 				if reply != nil {
-					raw = loosePattern.FindString(reply.Text)
+					raw = loosePattern.FindString(reply.Content())
 				}
 				if raw == "" {
 					return inv.Edit(ctx, help(inv.Prefix))

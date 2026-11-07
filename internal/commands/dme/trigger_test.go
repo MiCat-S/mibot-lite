@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gotd/td/tg"
+
 	"github.com/MiCat-S/mibot-lite/internal/bot"
 	"github.com/MiCat-S/mibot-lite/internal/command"
 	"github.com/MiCat-S/mibot-lite/internal/store"
@@ -98,6 +100,18 @@ func (h *triggerHarness) runQueued() {
 	h.queued = nil
 	for _, run := range work {
 		run()
+	}
+}
+
+// Rich Message 的正文是空的，触发词要从块里读。
+func TestOfferReadsRichMessage(t *testing.T) {
+	h := newTriggerHarness(t)
+	h.add(t, dmeTrigger{ChatID: "-100", Keyword: "清理", Count: 10})
+	raw := &tg.Message{ID: 9}
+	raw.SetRichMessage(tg.RichMessage{Blocks: []tg.PageBlockClass{&tg.PageBlockParagraph{Text: bot.RichPlain("请清理一下")}}})
+	h.offer(context.Background(), nil, &bot.Message{ID: 9, ChatID: "-100", Raw: raw})
+	if len(h.queued) != 1 {
+		t.Fatalf("富文本没有触发：排了 %d 个删除", len(h.queued))
 	}
 }
 

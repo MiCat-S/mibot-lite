@@ -187,10 +187,11 @@ func (s *service) update(mutate func(*dmeConfig) error) error {
 //
 // 永远返回 false，也就是不认领这条消息：同一条消息还得交给后面的监听者（关键词回复、.sudo）。
 func (s *service) offer(ctx context.Context, client *bot.Client, message *bot.Message) bool {
-	if message.Text == "" || message.Out {
+	text := message.Content()
+	if text == "" || message.Out {
 		return false
 	}
-	hit, ok := s.current().match(message.ChatID, message.Text)
+	hit, ok := s.current().match(message.ChatID, text)
 	if !ok {
 		return false
 	}

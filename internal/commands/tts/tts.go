@@ -303,7 +303,7 @@ func (s *service) speak(ctx context.Context, inv *command.Invocation) error {
 			return err
 		}
 		if reply != nil {
-			text = reply.Text
+			text = reply.Content()
 		}
 	}
 	if text == "" {

@@ -305,6 +305,19 @@ func TestOfferRunsActions(t *testing.T) {
 	}
 }
 
+// Rich Message 的正文是空的，关键词要从块里读，否则发富文本就能绕过过滤。
+func TestOfferReadsRichMessage(t *testing.T) {
+	s, fake, client, _ := newFixture(t)
+	s.seed(t, document{NextID: 2, Tasks: []task{{ID: 1, ChatID: "-1001001", Key: "广告", Include: true, DeleteSource: true}}})
+	message := groupMessage(channelID, 54, "")
+	message.Raw = &tg.Message{ID: 54}
+	message.Raw.SetRichMessage(tg.RichMessage{Blocks: []tg.PageBlockClass{&tg.PageBlockParagraph{Text: bot.RichPlain("卖广告了")}}})
+	s.offer(context.Background(), client, message)
+	if got := fake.take(); !slices.Contains(got, "delete [54]") {
+		t.Errorf("富文本没有触发关键词：%v", got)
+	}
+}
+
 // 回复发不出去（账号在群里被禁言）时，删消息和禁言照做；不引用时回复留在同一个话题。
 func TestOfferContinuesAfterSendFailure(t *testing.T) {
 	s, fake, client, _ := newFixture(t)

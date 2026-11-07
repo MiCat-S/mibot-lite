@@ -413,6 +413,15 @@ func copyMessage(ctx context.Context, client *bot.Client, t task, to tg.InputPee
 	}
 	entities := inputEntities(client.Peers(), original.Entities)
 	if media == nil {
+		if _, rich := original.GetRichMessage(); rich {
+			// 读不到全文时还有开头，比发不出去强。
+			full, err := client.FullRich(ctx, from, original)
+			if err != nil {
+				client.Logger().Warn("acron.rich_partial", "error", err.Error())
+			}
+			_, err = client.CopyRich(ctx, to, full, bot.SendOptions{ReplyTo: replyTo})
+			return err
+		}
 		if strings.TrimSpace(original.Message) == "" {
 			return kit.Fail("源消息里没有能复制的内容")
 		}
@@ -495,7 +504,7 @@ func deleteMatching(ctx context.Context, client *bot.Client, peer tg.InputPeerCl
 	var ids []int
 	for _, message := range messages {
 		// 只有媒体的消息文字是空的，也照样拿去匹配，同 V2。
-		if pattern.MatchString(message.Message) {
+		if pattern.MatchString(bot.MessageText(message)) {
 			ids = append(ids, message.ID)
 		}
 	}

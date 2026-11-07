@@ -159,7 +159,7 @@ const applyTimeout = 2 * time.Minute
 // 永远返回 false，也就是不认领这条消息：关键词回复只是顺带做的事，同一条消息
 // 还得交给后面的监听者——名单里的人发的 .sudo 命令碰巧含关键词，照样要执行。
 func (s *service) offer(ctx context.Context, client *bot.Client, message *bot.Message) bool {
-	if message.Text == "" || message.Out {
+	if message.Content() == "" || message.Out {
 		return false
 	}
 	tasks := s.current().tasksFor(message.ChatID)
@@ -196,8 +196,9 @@ func (s *service) offer(ctx context.Context, client *bot.Client, message *bot.Me
 // hitsOf 按顺序挑出命中的任务。
 func hitsOf(client *bot.Client, message *bot.Message, tasks []*compiled) []task {
 	var hits []task
+	text := message.Content()
 	for _, entry := range tasks {
-		hit, err := matches(entry.task, entry.pattern, message.Text, message.Forward)
+		hit, err := matches(entry.task, entry.pattern, text, message.Forward)
 		if err != nil {
 			// regexp2 超时：这条正则回溯得太厉害，这次按没命中算，和 v2 一样。
 			client.Logger().Warn("keyword.regexp_failed", slog.Int("task", entry.ID), slog.String("error", err.Error()))

@@ -124,3 +124,93 @@ func TestRichFits(t *testing.T) {
 		t.Error("列表项和里面的段落都算块，超过块数上限不能发")
 	}
 }
+
+func richRaw(id int, part bool, text string) *tg.Message {
+	message := &tg.Message{ID: id, PeerID: &tg.PeerUser{UserID: 1}}
+	message.SetRichMessage(tg.RichMessage{Part: part, Blocks: []tg.PageBlockClass{&tg.PageBlockParagraph{Text: &tg.TextPlain{Text: text}}}})
+	return message
+}
+
+// Content 读得到富文本，但 Text 必须留空：命令解析读 Text，富文本里的「.restart」不能被执行。
+func TestContentReadsRichButTextStaysEmpty(t *testing.T) {
+	envelope, ok := Envelope(richRaw(5, false, ".restart"), 1, false, NewPeerCache())
+	if !ok {
+		t.Fatal("消息应该能规整")
+	}
+	if envelope.Text != "" || envelope.Content() != ".restart" {
+		t.Fatalf("Text=%q Content=%q", envelope.Text, envelope.Content())
+	}
+	if got := (&Message{Text: "普通"}).Content(); got != "普通" {
+		t.Fatalf("普通消息：%q", got)
+	}
+	var missing *Message
+	if missing.Content() != "" || MessageText(nil) != "" {
+		t.Fatal("空消息没有文字")
+	}
+	if got := MessageText(&tg.Message{Message: "普通"}); got != "普通" {
+		t.Fatalf("普通消息：%q", got)
+	}
+}
+
+// 只带开头的 Rich Message 才多发一次请求，取不到全文时留着开头。
+func TestFullRich(t *testing.T) {
+	calls, fail := 0, false
+	api := tg.NewClient(invokerFunc(func(_ context.Context, input bin.Encoder, output bin.Decoder) error {
+		if _, ok := input.(*tg.MessagesGetRichMessageRequest); !ok {
+			t.Fatalf("意外的请求 %T", input)
+		}
+		calls++
+		if fail {
+			return tgerr.New(400, "MESSAGE_ID_INVALID")
+		}
+		output.(*tg.MessagesMessagesBox).Messages = &tg.MessagesMessages{Messages: []tg.MessageClass{richRaw(5, false, "全文")}}
+		return nil
+	}))
+	client := FromAPI(api, NewPeerCache(), &tg.User{ID: 1}, slog.New(slog.DiscardHandler))
+	whole := richRaw(5, false, "完整的")
+	if got, err := client.FullRich(context.Background(), &tg.InputPeerSelf{}, whole); err != nil || got != whole || calls != 0 {
+		t.Fatalf("完整消息不该请求：%v %d", err, calls)
+	}
+	part := richRaw(5, true, "开头")
+	if got, err := client.FullRich(context.Background(), &tg.InputPeerSelf{}, part); err != nil || MessageText(got) != "全文" {
+		t.Fatalf("全文：%q %v", MessageText(got), err)
+	}
+	fail = true
+	if got, err := client.FullRich(context.Background(), &tg.InputPeerSelf{}, part); err == nil || got != part {
+		t.Fatalf("取不到全文应留着开头：%v", err)
+	}
+}
+
+// 能发就按块发；没有 Premium 或被拒收时退回纯文字，超长的截断并注明。
+func TestCopyRich(t *testing.T) {
+	var sent []*tg.MessagesSendMessageRequest
+	reject := false
+	api := tg.NewClient(invokerFunc(func(ctx context.Context, input bin.Encoder, output bin.Decoder) error {
+		request := input.(*tg.MessagesSendMessageRequest)
+		sent = append(sent, request)
+		if _, rich := request.GetRichMessage(); rich && reject {
+			return tgerr.New(400, "MEDIA_INVALID")
+		}
+		return replying{&tg.UpdateShortSentMessage{ID: 77}}.Invoke(ctx, input, output)
+	}))
+	premium := FromAPI(api, NewPeerCache(), &tg.User{ID: 1, Premium: true}, slog.New(slog.DiscardHandler))
+	plain := FromAPI(api, NewPeerCache(), &tg.User{ID: 1}, slog.New(slog.DiscardHandler))
+	message := richRaw(5, false, "正文")
+	if id, err := premium.CopyRich(context.Background(), &tg.InputPeerSelf{}, message, SendOptions{}); err != nil || id != 77 || len(sent) != 1 || sent[0].Message != "" {
+		t.Fatalf("按块发：%d %v %d", id, err, len(sent))
+	}
+	reject = true
+	if _, err := premium.CopyRich(context.Background(), &tg.InputPeerSelf{}, message, SendOptions{}); err != nil || len(sent) != 3 || sent[2].Message != "正文" {
+		t.Fatalf("拒收后退回纯文字：%v %d", err, len(sent))
+	}
+	if _, err := plain.CopyRich(context.Background(), &tg.InputPeerSelf{}, message, SendOptions{}); err != nil || len(sent) != 4 || sent[3].Message != "正文" {
+		t.Fatalf("没有 Premium：%v %d", err, len(sent))
+	}
+	long := plainCopy(strings.Repeat("😀", 3000))
+	if utf16Len(long) > 4096 || !strings.HasSuffix(long, "已截断）") {
+		t.Fatalf("截断：%d", utf16Len(long))
+	}
+	if plainCopy("短") != "短" {
+		t.Fatal("短文字不该截断")
+	}
+}

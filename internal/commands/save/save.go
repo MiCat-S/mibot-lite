@@ -320,7 +320,12 @@ func (s *saver) send(ctx context.Context, message *tg.Message, from, to tg.Input
 			return false, err
 		}
 	}
-	return true, s.copy(ctx, message, to)
+	// 重发要全文：读不到全文时还有开头，比发不出去强。
+	full, err := s.client.FullRich(ctx, from, message)
+	if err != nil {
+		s.client.Logger().Warn("save.rich_partial", "error", err.Error())
+	}
+	return true, s.copy(ctx, full, to)
 }
 
 // forward 用一次请求转发这些消息；相册一起转发，到了目标对话里仍是一个相册。
@@ -351,6 +356,15 @@ func (s *saver) copy(ctx context.Context, message *tg.Message, to tg.InputPeerCl
 	}
 	var updates tg.UpdatesClass
 	if media == nil {
+		if _, rich := message.GetRichMessage(); rich {
+			return onFlood(ctx, func() error {
+				id, err := s.client.CopyRich(ctx, to, message, bot.SendOptions{Topic: s.topic})
+				if err == nil {
+					s.lastID = id
+				}
+				return err
+			})
+		}
 		if strings.TrimSpace(message.Message) == "" {
 			return ErrNothingToCopy
 		}
@@ -568,7 +582,7 @@ func (s *saver) saveLocal(ctx context.Context, message *tg.Message, link message
 	metadata, _ := json.MarshalIndent(map[string]any{
 		"source": link.url(), "message_id": message.ID,
 		"date": time.Unix(int64(message.Date), 0).UTC().Format(time.RFC3339),
-		"text": message.Message, "mime_type": source.MimeType,
+		"text": bot.MessageText(message), "mime_type": source.MimeType,
 	}, "", "  ")
 	if err := os.WriteFile(final+".json", metadata, 0o600); err != nil {
 		return "", err

@@ -650,7 +650,7 @@ func (s *yvluService) build(ctx context.Context, inv *command.Invocation, reply 
 			item.Text = inv.Message.QuoteText
 			item.Entities = convertEntities(inv.Message.QuoteEntities, 0)
 		default:
-			item.Text = message.Text
+			item.Text = message.Content()
 			if message.Raw != nil {
 				if entities, ok := message.Raw.GetEntities(); ok {
 					item.Entities = convertEntities(entities, 0)
@@ -1079,7 +1079,7 @@ func (s *yvluService) replyBlock(ctx context.Context, inv *command.Invocation, m
 		return nil
 	}
 	// 回复者如果只选中了消息的一部分，那他回应的就是选中的那部分。
-	text, entities := replied.Text, []tg.MessageEntityClass(nil)
+	text, entities := replied.Content(), []tg.MessageEntityClass(nil)
 	if replied.Raw != nil {
 		if carried, ok := replied.Raw.GetEntities(); ok {
 			entities = carried

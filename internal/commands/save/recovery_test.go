@@ -92,3 +92,35 @@ func TestRestrictedAlbumStillCopiesMessages(t *testing.T) {
 		t.Fatalf("restriction copy fallback: %+v %v %v", tally, texts, err)
 	}
 }
+
+// 禁止转发的 Rich Message 正文是空的，要按块重发，不能当成没有内容。
+func TestRestrictedRichMessageIsCopied(t *testing.T) {
+	var sent *tg.MessagesSendMessageRequest
+	fake := telegram.InvokeFunc(func(_ context.Context, in bin.Encoder, out bin.Decoder) error {
+		req, ok := in.(*tg.MessagesSendMessageRequest)
+		if !ok {
+			t.Errorf("unexpected %T", in)
+			return errors.New("unexpected RPC")
+		}
+		sent = req
+		out.(*tg.UpdatesBox).Updates = &tg.UpdateShortSentMessage{ID: 100}
+		return nil
+	})
+	peers := bot.NewPeerCache()
+	peers.SetSelf(1)
+	client := bot.FromAPI(tg.NewClient(fake), peers, &tg.User{ID: 1, Premium: true}, slog.New(slog.DiscardHandler))
+	work := &saver{client: client, progress: func(string) {}}
+	message := &tg.Message{ID: 10, Noforwards: true, PeerID: &tg.PeerUser{UserID: 1}}
+	blocks := []tg.PageBlockClass{&tg.PageBlockParagraph{Text: bot.RichPlain("正文在块里")}}
+	message.SetRichMessage(tg.RichMessage{Blocks: blocks})
+	tally, err := runSaveJobs(context.Background(), work, []saveJob{{peer: &tg.InputPeerSelf{}, messages: []*tg.Message{message}}}, &tg.InputPeerSelf{}, false)
+	if err != nil || tally.saved != 1 || tally.copied != 1 || len(tally.failures) != 0 {
+		t.Fatalf("rich copy: %+v %v", tally, err)
+	}
+	if sent == nil || sent.Message != "" {
+		t.Fatalf("rich request: %+v", sent)
+	}
+	if rich, ok := sent.GetRichMessage(); !ok || rich.(*tg.InputRichMessage).Blocks[0] != blocks[0] {
+		t.Fatalf("rich blocks missing: %+v", sent)
+	}
+}

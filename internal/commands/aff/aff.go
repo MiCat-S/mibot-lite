@@ -217,13 +217,14 @@ func save(ctx context.Context, inv *command.Invocation, data *store.Store[docume
 	if reply == nil {
 		return kit.Failf("请回复要保存的消息再发 %saff save", inv.Prefix)
 	}
-	if strings.TrimSpace(reply.Text) == "" {
+	text := reply.Content()
+	if strings.TrimSpace(text) == "" {
 		return kit.Fail("被回复的消息没有文字")
 	}
-	if kit.UTF16Len(reply.Text) > maxLength {
+	if kit.UTF16Len(text) > maxLength {
 		return kit.Failf("文字超过 %d 字，没有保存，缩短后再试", maxLength)
 	}
-	index, err := appendEntry(data, newEntry(reply.Raw, reply.Text, time.Now()))
+	index, err := appendEntry(data, newEntry(reply.Raw, text, time.Now()))
 	if err != nil {
 		return err
 	}

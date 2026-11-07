@@ -70,7 +70,7 @@ func signWithAttempt(ctx context.Context, client *bot.Client, target signTarget,
 	case reply == nil:
 		return "", kit.Failf("%d 秒内没收到回复", int(replyWait.Seconds()))
 	case !wantsButton:
-		return reply.Message, nil
+		return bot.MessageText(reply), nil
 	}
 	data, _ := buttonData(reply, target)
 	return click(ctx, client, peer, reply, data)
@@ -129,7 +129,7 @@ func click(ctx context.Context, client *bot.Client, peer tg.InputPeerClass, mess
 	case reply == nil:
 		return "已点按钮，没收到回复", nil
 	}
-	return reply.Message, nil
+	return bot.MessageText(reply), nil
 }
 
 // awaitMessage 每隔 pollEvery 读一次对话最近的 8 条，直到有 match 认可的消息或者等满 replyWait。

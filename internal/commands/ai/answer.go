@@ -125,17 +125,6 @@ func answerRich(question, answer string, sources []aiSource, model string, colla
 	return blocks
 }
 
-// replyText 是被回复消息的文字；对方发的是 Rich Message 时正文是空的，从块里取。
-func replyText(reply *bot.Message) string {
-	if reply == nil {
-		return ""
-	}
-	if reply.Text != "" {
-		return reply.Text
-	}
-	return bot.RichMessageText(reply.Raw)
-}
-
 // replyAnchor 是回答要回复的消息：命令回复了同一对话里的某条消息就回复那条，
 // 在论坛话题里就回复话题，否则不回复。
 func replyAnchor(command, reply *bot.Message) int {

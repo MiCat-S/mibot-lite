@@ -229,7 +229,7 @@ func runTranslate(ctx context.Context, inv *command.Invocation, settings *store.
 			return err
 		}
 		if reply != nil {
-			text = reply.Text
+			text = reply.Content()
 		}
 	}
 	if strings.TrimSpace(text) == "" {

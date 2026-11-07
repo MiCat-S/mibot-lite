@@ -109,3 +109,19 @@ func TestOfferReacts(t *testing.T) {
 		t.Errorf("自定义表情：%+v", fake.requests[0].Reaction[1])
 	}
 }
+
+// Rich Message 的正文是空的，关键词要从块里读。
+func TestOfferReadsRichMessage(t *testing.T) {
+	peers := bot.NewPeerCache()
+	client := bot.FromAPI(tg.NewClient(&recorder{}), peers, &tg.User{ID: 1}, slog.New(slog.DiscardHandler))
+	s := &service{store: store.New(filepath.Join(t.TempDir(), "trace.json"), defaults), queue: make(chan job, 8)}
+	if err := s.update(func(cfg *config) { cfg.Keywords["机场"] = []reaction{{Emoticon: "🔥"}} }); err != nil {
+		t.Fatal(err)
+	}
+	raw := &tg.Message{ID: 7}
+	raw.SetRichMessage(tg.RichMessage{Blocks: []tg.PageBlockClass{&tg.PageBlockParagraph{Text: bot.RichPlain("推荐个机场")}}})
+	s.offer(context.Background(), client, &bot.Message{ID: 7, Peer: &tg.PeerChat{ChatID: 5}, ChatID: "-5", Sender: &tg.PeerUser{UserID: 42}, Raw: raw})
+	if len(s.queue) != 1 {
+		t.Fatalf("富文本没有触发：%d", len(s.queue))
+	}
+}

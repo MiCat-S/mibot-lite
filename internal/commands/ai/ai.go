@@ -536,7 +536,7 @@ func (s *Service) ask(ctx context.Context, inv *command.Invocation, search bool)
 		inv.Log.Warn("ai.reply_unavailable", "error", err.Error())
 		reply = nil
 	}
-	question, userText := composeQuestion(own, replyText(reply))
+	question, userText := composeQuestion(own, reply.Content())
 	fromReply, err := collectImages(ctx, inv.Client, reply)
 	if err != nil {
 		return err

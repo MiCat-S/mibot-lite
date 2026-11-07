@@ -326,10 +326,11 @@ func fillSend(ctx context.Context, inv *command.Invocation, t *task) error {
 	if raw.ReplyMarkup != nil {
 		return kit.Fail("定时发送只存文字，带按钮的消息请用 copy 或 forward")
 	}
-	if strings.TrimSpace(raw.Message) == "" {
+	text := bot.MessageText(raw)
+	if strings.TrimSpace(text) == "" {
 		return kit.Fail("被回复的消息里没有文字")
 	}
-	t.Message, t.Entities = raw.Message, encodeEntities(raw.Entities)
+	t.Message, t.Entities = text, encodeEntities(raw.Entities)
 	return nil
 }
 

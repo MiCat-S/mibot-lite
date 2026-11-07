@@ -55,7 +55,7 @@ func handle(ctx context.Context, inv *command.Invocation) error {
 		if reply == nil {
 			return inv.Edit(ctx, help(inv.Prefix))
 		}
-		found, ok := findTarget(reply.Text)
+		found, ok := findTarget(reply.Content())
 		if !ok {
 			return kit.Fail("被回复的消息里没有 IP、前缀或 AS 号")
 		}

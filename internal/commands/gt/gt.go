@@ -38,7 +38,7 @@ func Register(a *app.App, models *ai.Service) {
 					return err
 				}
 				if reply != nil {
-					text = reply.Text
+					text = reply.Content()
 				}
 			}
 			if strings.TrimSpace(text) == "" {

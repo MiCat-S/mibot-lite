@@ -424,6 +424,11 @@ func (c *Client) GetReply(ctx context.Context, message *Message) (*Message, erro
 	}
 	for _, candidate := range found {
 		if candidate.ID == message.ReplyToID {
+			// 读不到全文时还有开头，比什么都没有强。
+			candidate, err = c.FullRich(ctx, peer, candidate)
+			if err != nil {
+				c.logger.Warn("rich.full_failed", slog.String("error", err.Error()))
+			}
 			envelope, ok := Envelope(candidate, c.SelfID(), false, c.peers)
 			if !ok {
 				return nil, nil

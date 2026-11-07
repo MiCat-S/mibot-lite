@@ -4,6 +4,7 @@ import (
 	"context"
 	"strconv"
 	"strings"
+	"unicode/utf16"
 	"unicode/utf8"
 
 	"github.com/gotd/td/tg"
@@ -101,6 +102,63 @@ func RichRejected(err error) bool {
 	}
 	rpcErr, ok := tgerr.As(err)
 	return ok && rpcErr.Code < 500
+}
+
+// FullRich 补全只带开头的 Rich Message：长消息可能只发一部分（part），全文要用
+// messages.getRichMessage 取。不是这种消息就原样返回；取不到时返回原消息和错误。
+func (c *Client) FullRich(ctx context.Context, peer tg.InputPeerClass, message *tg.Message) (*tg.Message, error) {
+	rich, ok := message.GetRichMessage()
+	if !ok || !rich.Part {
+		return message, nil
+	}
+	result, err := c.api.MessagesGetRichMessage(ctx, &tg.MessagesGetRichMessageRequest{Peer: peer, ID: message.ID})
+	if err != nil {
+		return message, err
+	}
+	list, _ := c.Unpack(result)
+	for _, item := range list {
+		if full, ok := item.(*tg.Message); ok && full.ID == message.ID {
+			return full, nil
+		}
+	}
+	return message, nil
+}
+
+// CopyRich 把收到的 Rich Message 重新发一遍，返回新消息的 id。没有 Premium 或被拒收时
+// （比如块里引用了别处的图片）退回纯文字。
+func (c *Client) CopyRich(ctx context.Context, peer tg.InputPeerClass, message *tg.Message, options SendOptions) (int, error) {
+	rich, _ := message.GetRichMessage()
+	if c.CanSendRich() {
+		id, err := c.SendRich(ctx, peer, rich.Blocks, options)
+		if err == nil || !RichRejected(err) {
+			return id, err
+		}
+	}
+	return c.SendPlain(ctx, peer, plainCopy(RichMessageText(message)), nil, options)
+}
+
+// plainCopy 让富文本装进普通消息：Rich Message 能到 32768 字，普通消息只有 4096，超了就截断并注明。
+func plainCopy(text string) string {
+	const limit = 4000
+	units := 0
+	for index, char := range text {
+		units += utf16.RuneLen(char)
+		if units > limit {
+			return text[:index] + "\n…（内容过长，已截断）"
+		}
+	}
+	return text
+}
+
+// MessageText 是消息看得到的文字：普通消息是正文，Rich Message 的正文是空的，从块里取。
+func MessageText(message *tg.Message) string {
+	switch {
+	case message == nil:
+		return ""
+	case message.Message != "":
+		return message.Message
+	}
+	return RichMessageText(message)
 }
 
 // RichPlain 是一段纯文字，空字符串是 textEmpty（textPlain 不收空串）。

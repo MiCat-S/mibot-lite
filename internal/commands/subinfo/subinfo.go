@@ -157,7 +157,7 @@ func (s *service) handle(ctx context.Context, inv *command.Invocation, concise b
 			// 自己已经给了链接，读不到被回复的消息只是少几个链接。
 			inv.Log.Warn("subinfo.reply_unavailable", "error", err.Error())
 		case reply != nil:
-			source += " " + reply.Text + " " + entityLinks(reply)
+			source += " " + reply.Content() + " " + entityLinks(reply)
 		}
 	}
 	list := links(source)

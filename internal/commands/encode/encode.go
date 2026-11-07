@@ -80,7 +80,7 @@ func run(ctx context.Context, inv *command.Invocation, op operation) error {
 			return err
 		}
 		if reply != nil {
-			input = strings.TrimSpace(reply.Text)
+			input = strings.TrimSpace(reply.Content())
 		}
 	}
 	if input == "" {

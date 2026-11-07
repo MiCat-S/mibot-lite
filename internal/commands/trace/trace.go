@@ -201,7 +201,7 @@ func (s *service) offer(ctx context.Context, client *bot.Client, message *bot.Me
 	if len(cfg.Users) == 0 && len(cfg.Keywords) == 0 {
 		return false
 	}
-	items := cfg.match(bot.PeerID(message.Sender), message.Text)
+	items := cfg.match(bot.PeerID(message.Sender), message.Content())
 	if len(items) == 0 {
 		return false
 	}

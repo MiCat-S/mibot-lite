@@ -42,6 +42,18 @@ type Message struct {
 	Raw           *tg.Message
 }
 
+// Content 是这条消息看得到的文字：普通消息是正文，Rich Message 的正文是空的，从块里取。
+// 命令解析、.sudo 仍然只读 Text：富文本里的内容不能被当成命令执行。
+func (m *Message) Content() string {
+	switch {
+	case m == nil:
+		return ""
+	case m.Text != "":
+		return m.Text
+	}
+	return RichMessageText(m.Raw)
+}
+
 // PeerID 按 teleproto 标记十进制 id 的方式渲染 peer。
 func PeerID(peer tg.PeerClass) string {
 	switch value := peer.(type) {

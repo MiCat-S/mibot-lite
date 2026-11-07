@@ -122,7 +122,7 @@ func Register(a *app.App) {
 				return err
 			}
 			if reply != nil {
-				query = replyQuery(reply.Text)
+				query = replyQuery(reply.Content())
 			}
 		}
 		if query == "" {
