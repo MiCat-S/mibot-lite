@@ -542,7 +542,7 @@ func (s *yvluService) saveSticker(ctx context.Context, inv *command.Invocation) 
 		if err != nil {
 			return kit.Fail("不支持的媒体类型，请回复贴纸或图片")
 		}
-		png, err := imaging.EncodePNG(imaging.ResizeFit(decoded, 512, 512))
+		png, err := imaging.EncodePNG(media.ResizeSticker(decoded))
 		if err != nil {
 			return err
 		}
@@ -710,7 +710,7 @@ func (s *yvluService) following(ctx context.Context, inv *command.Invocation, re
 	var ordered []*bot.Message
 	for _, item := range found {
 		message, ok := item.(*tg.Message)
-		if !ok || message.ID < reply.ID {
+		if !ok || message.ID < reply.ID || inv.IsCommandMessage(message) {
 			continue
 		}
 		if envelope, ok := bot.Envelope(message, inv.Client.SelfID(), false, inv.Client.Peers()); ok {
@@ -1009,11 +1009,7 @@ func (s *yvluService) describeDocument(ctx context.Context, inv *command.Invocat
 		if len(audio.Waveform) == 0 {
 			return
 		}
-		waveform := make([]int, 0, len(audio.Waveform))
-		for _, sample := range audio.Waveform {
-			waveform = append(waveform, kit.Clamp(int(sample), 0, 31))
-		}
-		item.Voice = &quoteVoice{Waveform: waveform, Duration: audio.Duration}
+		item.Voice = &quoteVoice{Waveform: decodeWaveform(audio.Waveform), Duration: audio.Duration}
 	case strings.HasPrefix(document.MimeType, "image/"):
 		if file, err := inv.Client.DownloadMedia(ctx, message.Raw, 8<<20); err == nil {
 			item.Media = &quotePhot{URL: "data:" + document.MimeType + ";base64," + base64.StdEncoding.EncodeToString(file.Data)}
@@ -1030,6 +1026,23 @@ func (s *yvluService) describeDocument(ctx context.Context, inv *command.Invocat
 	default:
 		item.Document = &quoteDoc{FileName: fileName}
 	}
+}
+
+// decodeWaveform 按 Telegram TL 语音波形的格式，从低位开始每 5 位读取一个采样值。
+func decodeWaveform(packed []byte) []int {
+	samples := make([]int, 0, len(packed)*8/5)
+	var bits uint16
+	var available uint
+	for _, value := range packed {
+		bits |= uint16(value) << available
+		available += 8
+		for available >= 5 {
+			samples = append(samples, int(bits&31))
+			bits >>= 5
+			available -= 5
+		}
+	}
+	return samples
 }
 
 // embedVideo 把短动画转码，让语录里能显示会动的画面。这里失败并不致命：

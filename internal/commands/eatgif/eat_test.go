@@ -75,12 +75,3 @@ func TestStamp(t *testing.T) {
 		t.Errorf("size=256 时宽 %d", got)
 	}
 }
-
-func TestStickerSize(t *testing.T) {
-	for _, c := range []struct{ w, h, wantW, wantH int }{{231, 218, 512, 483}, {1266, 830, 512, 336}, {512, 510, 512, 510}, {300, 600, 256, 512}} {
-		got := stickerSize(solid(c.w, c.h, color.RGBA{A: 255})).Bounds()
-		if got.Dx() != c.wantW || got.Dy() != c.wantH {
-			t.Errorf("%dx%d → %v，应为 %dx%d", c.w, c.h, got, c.wantW, c.wantH)
-		}
-	}
-}

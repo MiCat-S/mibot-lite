@@ -36,6 +36,12 @@ type Invocation struct {
 	Trigger *bot.Message
 }
 
+// IsCommandMessage 判断历史记录里的消息是不是这次命令本身，借用时包括原始触发消息。
+func (inv *Invocation) IsCommandMessage(message *tg.Message) bool {
+	return (message.ID == inv.Message.ID && bot.PeerID(message.PeerID) == inv.Message.ChatID) ||
+		(inv.Trigger != nil && message.ID == inv.Trigger.ID && bot.PeerID(message.PeerID) == inv.Trigger.ChatID)
+}
+
 // Arg 返回第 i 个参数，没有就返回 ""。
 func (inv *Invocation) Arg(index int) string {
 	if index < len(inv.Args) {

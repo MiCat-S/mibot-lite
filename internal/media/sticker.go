@@ -2,6 +2,8 @@ package media
 
 import (
 	"bytes"
+	"image"
+	"math"
 	"strings"
 
 	"github.com/gotd/td/tg"
@@ -12,6 +14,19 @@ import (
 
 // webmMagic 是 EBML 文件头，WebM 都以它开头。
 var webmMagic = []byte{0x1a, 0x45, 0xdf, 0xa3}
+
+// ResizeSticker 保持宽高比，把较长的一边缩放到贴纸所需的 512 像素。
+func ResizeSticker(source image.Image) image.Image {
+	bounds := source.Bounds()
+	longest := max(bounds.Dx(), bounds.Dy())
+	if longest == 512 {
+		return source
+	}
+	scale := 512 / float64(longest)
+	width := max(1, int(math.Round(float64(bounds.Dx())*scale)))
+	height := max(1, int(math.Round(float64(bounds.Dy())*scale)))
+	return imaging.Resize(source, width, height)
+}
 
 // StickerDocument 是把一张 WebP 或一段 WebM 当贴纸发出去的参数：不属于任何贴纸包，
 // alt 是它配的 emoji。格式按文件头认，宽高和时长也从文件头读；读不到时按贴纸的常见

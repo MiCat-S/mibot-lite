@@ -94,21 +94,6 @@ func ResizeCover(source image.Image, width, height int) *image.RGBA {
 	return target
 }
 
-// ResizeFit 把图像缩小到能放进 width x height，保持宽高比。
-// 本来就更小的图像按原尺寸返回，不做缩放。
-func ResizeFit(source image.Image, width, height int) *image.RGBA {
-	bounds := source.Bounds()
-	scale := math.Min(float64(width)/float64(bounds.Dx()), float64(height)/float64(bounds.Dy()))
-	if scale > 1 {
-		scale = 1
-	}
-	targetWidth := max(1, int(math.Round(float64(bounds.Dx())*scale)))
-	targetHeight := max(1, int(math.Round(float64(bounds.Dy())*scale)))
-	target := image.NewRGBA(image.Rect(0, 0, targetWidth, targetHeight))
-	xdraw.CatmullRom.Scale(target, target.Bounds(), source, bounds, draw.Src, nil)
-	return target
-}
-
 // Rotate 把图像绕中心旋转 degrees 度，画布尺寸不变——动画配置是在
 // 固定的蒙版里旋转脸，画布一变大，粘贴位置就会偏。
 func Rotate(source image.Image, degrees float64) *image.RGBA {

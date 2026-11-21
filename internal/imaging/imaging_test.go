@@ -75,17 +75,6 @@ func TestResizeCoverCropsCentre(t *testing.T) {
 	}
 }
 
-func TestResizeFitKeepsAspectAndNeverUpscales(t *testing.T) {
-	result := ResizeFit(image.NewRGBA(image.Rect(0, 0, 1000, 500)), 512, 512)
-	if result.Bounds().Dx() != 512 || result.Bounds().Dy() != 256 {
-		t.Fatalf("size %v, want 512x256", result.Bounds())
-	}
-	small := ResizeFit(image.NewRGBA(image.Rect(0, 0, 40, 30)), 512, 512)
-	if small.Bounds().Dx() != 40 || small.Bounds().Dy() != 30 {
-		t.Fatalf("a smaller image should not be upscaled, got %v", small.Bounds())
-	}
-}
-
 // 旋转前后画布尺寸必须不变，否则动画配置给出的粘贴位置
 // 会落到别处。
 func TestRotateKeepsCanvasSize(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"image/png"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 
@@ -15,6 +16,17 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/command"
 	"github.com/MiCat-S/mibot-lite/internal/commands/kit"
 )
+
+func TestDescribeVoiceUnpacksWaveform(t *testing.T) {
+	document := &tg.Document{Attributes: []tg.DocumentAttributeClass{
+		&tg.DocumentAttributeAudio{Voice: true, Duration: 4, Waveform: []byte{0xe1, 0x0f}},
+	}}
+	var message quoteMessage
+	(&yvluService{}).describeDocument(t.Context(), nil, nil, document, &message)
+	if message.Voice == nil || message.Voice.Duration != 4 || !slices.Equal(message.Voice.Waveform, []int{1, 31, 3}) {
+		t.Fatalf("unexpected voice: %+v", message.Voice)
+	}
+}
 
 // .yvlu 的参数语法按位置解析，而且不规则；下面这些是用户早已用顺手的写法。
 func TestParseYvlu(t *testing.T) {

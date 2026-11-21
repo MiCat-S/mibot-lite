@@ -64,7 +64,7 @@ func repeat(ctx context.Context, root string, inv *command.Invocation) error {
 	if err != nil {
 		return err
 	}
-	messages, err := fetchFrom(ctx, inv.Client, source, reply.ID, count)
+	messages, err := fetchFrom(ctx, inv, source, reply.ID, count)
 	if err != nil {
 		return err
 	}
@@ -126,15 +126,15 @@ func forumTopic(message *bot.Message) int {
 // 编号不小于 first 的最早 count 条。已删除的编号不占名额；私聊和普通群的编号是
 // 整个账号共用的，中间隔着别的对话的编号，也不会因此少转。服务消息（进群、置顶等）
 // 占名额但转发不了，不转。
-func fetchFrom(ctx context.Context, client *bot.Client, peer tg.InputPeerClass, first, count int) ([]*tg.Message, error) {
-	result, err := client.API().MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{Peer: peer, OffsetID: first, AddOffset: -count, Limit: count})
+func fetchFrom(ctx context.Context, inv *command.Invocation, peer tg.InputPeerClass, first, count int) ([]*tg.Message, error) {
+	result, err := inv.Client.API().MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{Peer: peer, OffsetID: first, AddOffset: -count, Limit: count})
 	if err != nil {
 		return nil, err
 	}
-	page, _ := client.Unpack(result)
+	page, _ := inv.Client.Unpack(result)
 	var messages []*tg.Message
 	for _, item := range page {
-		if message, ok := item.(*tg.Message); ok && message.ID >= first {
+		if message, ok := item.(*tg.Message); ok && message.ID >= first && !inv.IsCommandMessage(message) {
 			messages = append(messages, message)
 		}
 	}

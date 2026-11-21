@@ -174,3 +174,16 @@ func TestRepeatOutsideForumsHasNoTopic(t *testing.T) {
 		t.Errorf("calls:\n%q\nwant:\n%q", calls, want)
 	}
 }
+
+func TestRepeatExcludesOwnCommandAndTrigger(t *testing.T) {
+	h := chat(false)
+	peer := &tg.PeerChannel{ChannelID: group}
+	for _, id := range []int{99, 100} {
+		h.messages[id] = &tg.Message{ID: id, PeerID: peer, Message: ".re 20"}
+	}
+	trigger := &bot.Message{ID: 99, Peer: peer, ChatID: bot.PeerID(peer)}
+	calls := run(t, h, trigger, false, "20")
+	if !slices.Contains(calls, "forward [12 13 15 20] top=0") {
+		t.Fatalf("unexpected history forwarded: %v", calls)
+	}
+}

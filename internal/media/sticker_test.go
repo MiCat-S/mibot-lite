@@ -1,10 +1,20 @@
 package media
 
 import (
+	"image"
 	"testing"
 
 	"github.com/gotd/td/tg"
 )
+
+func TestResizeSticker(t *testing.T) {
+	for _, c := range []struct{ w, h, wantW, wantH int }{{231, 218, 512, 483}, {1266, 830, 512, 336}, {512, 510, 512, 510}, {300, 600, 256, 512}} {
+		got := ResizeSticker(image.NewRGBA(image.Rect(0, 0, c.w, c.h))).Bounds()
+		if got.Dx() != c.wantW || got.Dy() != c.wantH {
+			t.Errorf("%dx%d → %v，应为 %dx%d", c.w, c.h, got, c.wantW, c.wantH)
+		}
+	}
+}
 
 // 格式按文件头认；读不出宽高时按 512×512 填，而不是 teleproto 的 1×1。
 func TestStickerDocument(t *testing.T) {

@@ -100,13 +100,6 @@ func eatAssetURL(root, value string) (string, error) {
 	return root + clean, nil
 }
 
-func (s *eatService) source() string {
-	if current, err := s.settings.Read(); err == nil && current.Source != "" {
-		return current.Source
-	}
-	return eatSource
-}
-
 // load 读取素材目录，force 时丢掉内存里的副本重新下载。
 func (s *eatService) load(ctx context.Context, force bool) (map[string]eatEntry, string, error) {
 	s.mu.Lock()
@@ -115,8 +108,12 @@ func (s *eatService) load(ctx context.Context, force bool) (map[string]eatEntry,
 	if catalog != nil && !force {
 		return catalog, root, nil
 	}
-	source := s.source()
-	root, err := eatRoot(source)
+	settings, err := s.settings.Read()
+	if err != nil {
+		return nil, "", err
+	}
+	source := kit.OrDefault(settings.Source, eatSource)
+	root, err = eatRoot(source)
 	if err != nil {
 		return nil, "", err
 	}
@@ -447,23 +444,11 @@ func (s *eatService) render(ctx context.Context, inv *command.Invocation, reply 
 	if err != nil {
 		return nil, err
 	}
-	png, err := imaging.EncodePNG(stickerSize(composed))
+	png, err := imaging.EncodePNG(media.ResizeSticker(composed))
 	if err != nil {
 		return nil, err
 	}
 	return media.StickerWebP(ctx, png)
-}
-
-// stickerSize 把成品等比缩放到长边正好 512：素材有大有小，贴纸包要求一边是 512，
-// 这样发出去的贴纸也能用 .sticker 存进包里。
-func stickerSize(source image.Image) image.Image {
-	bounds := source.Bounds()
-	longest := max(bounds.Dx(), bounds.Dy())
-	if longest == 512 {
-		return source
-	}
-	scale := 512 / float64(longest)
-	return imaging.Resize(source, max(1, int(math.Round(float64(bounds.Dx())*scale))), max(1, int(math.Round(float64(bounds.Dy())*scale))))
 }
 
 // set 重新下载素材目录，可以顺带换一个来源。
@@ -487,6 +472,8 @@ func (s *eatService) set(ctx context.Context, inv *command.Invocation, name, lin
 		return kit.FailWith("读不到素材目录", err)
 	}
 	// 仓库里的图可能也更新过，清掉素材缓存，下次用到时重新下载。
-	_ = os.RemoveAll(filepath.Join(s.a.DataDir(), "eat"))
+	if err := os.RemoveAll(filepath.Join(s.a.DataDir(), "eat")); err != nil {
+		return err
+	}
 	return inv.EditPages(ctx, command.HTMLPages("✅ 素材目录已更新\n"+eatList(catalog, inv.Prefix, name), command.PageLimit))
 }
