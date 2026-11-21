@@ -56,18 +56,25 @@ unit=/etc/systemd/system/mibot-lite.service
 template=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../deploy" && pwd -P)/mibot-lite.service
 [[ -f "$template" ]] || { echo "Missing unit template: $template" >&2; exit 1; }
 
-install -m 755 "$binary" "$installed"
 # systemd-analyze reads the file name as the unit name, so the rendered
 # copy has to be called mibot-lite.service; a bare mktemp name is rejected
 # with "Failed to prepare filename".
-staging=$(mktemp -d)
+staging=$(mktemp -d "$root/.install-XXXXXX")
 trap 'rm -rf "$staging"' EXIT
 rendered="$staging/mibot-lite.service"
 sed -e "s|@ROOT@|$root|g" -e "s|@BINARY@|$installed|g" "$template" > "$rendered"
 if grep -q '@[A-Z][A-Z]*@' "$rendered"; then
   echo "Unit template has unsubstituted placeholders" >&2; exit 1
 fi
-/usr/bin/systemd-analyze verify "$rendered"
+install -m 755 "$binary" "$staging/candidate"
+mkdir "$staging/verify"
+sed -e "s|@ROOT@|$root|g" -e "s|@BINARY@|$staging/candidate|g" "$template" > "$staging/verify/mibot-lite.service"
+/usr/bin/systemd-analyze verify "$staging/verify/mibot-lite.service"
+if [[ -f "$unit" ]]; then
+  existing_root=$(/usr/bin/systemctl show mibot-lite -p WorkingDirectory --value)
+  [[ -z "$existing_root" || "$existing_root" == "$root" ]] || { echo "mibot-lite already serves $existing_root" >&2; exit 1; }
+fi
+mv -f "$staging/candidate" "$installed"
 install -m 644 "$rendered" "$unit"
 
 /usr/bin/systemctl daemon-reload

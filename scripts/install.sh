@@ -59,9 +59,12 @@ die() { printf '\033[1;31mError:\033[0m %s\n' "$*" >&2; exit 1; }
 
 [ "$(uname -s)" = Linux ] || die "this installer targets Linux; build from source for $(uname -s)"
 [ "${EUID:-$(id -u)}" = 0 ] || die "run as root (the service and its unit are installed system-wide)"
-for tool in curl install systemctl; do
+for tool in curl install; do
   command -v "$tool" > /dev/null || die "missing required command: $tool"
 done
+if [ "$WITH_SERVICE" = 1 ]; then
+  command -v systemctl > /dev/null || die "missing required command: systemctl"
+fi
 command -v sha256sum > /dev/null || command -v shasum > /dev/null || die "need sha256sum or shasum to verify the download"
 
 # Checked before anything is downloaded, so a wrong path costs nothing.
