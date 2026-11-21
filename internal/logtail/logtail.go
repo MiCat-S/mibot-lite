@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"hash/fnv"
 	"log/slog"
+	"net/netip"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -46,12 +48,13 @@ var carrying = map[string]bool{
 
 var (
 	addresses = regexp.MustCompile(`\b\d{1,3}(?:\.\d{1,3}){3}\b`)
+	ipv6      = regexp.MustCompile(`(?i)(?:[a-f\d]{0,4}:){2,}[a-f\d:.]*(?:%[\w.-]+)?`)
 	// 单独出现的九位及以上数字，总归是某种 id。
 	longIDs = regexp.MustCompile(`\b\d{9,}\b`)
 	tokens  = regexp.MustCompile(`\b(?:sk|xox[a-z]|ghp|gho|Bearer)[-_ ][A-Za-z0-9_.\-]{8,}`)
 	// URL 只留协议和主机，其余去掉：主机能说明是哪个服务出的错，
 	// 路径则是藏 key 的地方。
-	urls = regexp.MustCompile(`(https?://[^/\s"]+)(/[^\s"]*)?`)
+	urls = regexp.MustCompile(`(?i)https?://[^\s"<>]+`)
 )
 
 // Scrub 从自由文本里去掉不该离开本机的内容。
@@ -59,8 +62,21 @@ var (
 // 它处理的是本包无法按键名归类的值，实际上就是错误信息：这是日志里
 // 最有用的部分，也最可能夹带地址或 URL。
 func Scrub(value string) string {
-	value = urls.ReplaceAllString(value, "$1/…")
+	value = urls.ReplaceAllStringFunc(value, func(link string) string {
+		parsed, err := url.Parse(link)
+		if err != nil || parsed.Host == "" {
+			return "[url]"
+		}
+		return parsed.Scheme + "://" + parsed.Host + "/…"
+	})
 	value = tokens.ReplaceAllString(value, "[token]")
+	value = ipv6.ReplaceAllStringFunc(value, func(match string) string {
+		address := strings.TrimRight(match, ".")
+		if parsed, err := netip.ParseAddr(address); err == nil && parsed.Is6() {
+			return "[ip]" + match[len(address):]
+		}
+		return match
+	})
 	value = addresses.ReplaceAllString(value, "[ip]")
 	value = longIDs.ReplaceAllString(value, "[id]")
 	return value
@@ -171,7 +187,7 @@ func (h *Handler) Handle(ctx context.Context, record slog.Record) error {
 	line.WriteByte(' ')
 	line.WriteString(record.Level.String())
 	line.WriteByte(' ')
-	line.WriteString(record.Message)
+	line.WriteString(Scrub(record.Message))
 	line.WriteString(h.prefix)
 	record.Attrs(func(attr slog.Attr) bool {
 		line.WriteString(pair(attr))

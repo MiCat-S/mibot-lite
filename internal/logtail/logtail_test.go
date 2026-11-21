@@ -19,16 +19,16 @@ func ring(t *testing.T) (*slog.Logger, *Ring) {
 // 真正要紧的就是这个测试，其余都是细节。
 func TestNothingSensitiveReachesTheRing(t *testing.T) {
 	logger, held := ring(t)
-	logger.Info("dispatch.dropped",
+	logger.Info("dispatch.dropped from 2001:db8::1",
 		slog.Int64("account", 215959394),
 		slog.String("chat", "-1001771725356"),
 		slog.String("text", "我的银行卡密码是 123456"),
-		slog.String("error", "dial 43.153.150.179:443: refused, see https://api.example.com/v1/x?key=sk-abcd1234efgh"),
+		slog.String("error", "dial [2001:db8::2]:443 via 43.153.150.179: refused, see https://alice:private@example.net?token=direct-secret and https://api.example.com/v1/x?key=sk-abcd1234efgh"),
 	)
 	whole := strings.Join(held.Tail(0, nil), "\n")
 	for _, secret := range []string{
 		"215959394", "-1001771725356", "银行卡", "123456",
-		"43.153.150.179", "sk-abcd1234efgh", "/v1/x",
+		"43.153.150.179", "2001:db8::", "alice:private", "direct-secret", "sk-abcd1234efgh", "/v1/x",
 	} {
 		if strings.Contains(whole, secret) {
 			t.Errorf("ring leaked %q:\n%s", secret, whole)
@@ -75,6 +75,10 @@ func TestScrubKeepsTheDiagnosis(t *testing.T) {
 		"took 15.490826543s":                  "took 15.490826543s",
 		"connect to 10.0.0.1 failed":          "connect to [ip] failed",
 		"https://speedtest.net/result/c/abcd": "https://speedtest.net/…",
+		"https://example.com?token=secret":    "https://example.com/…",
+		"https://example.com#secret":          "https://example.com/…",
+		"http://[2001:db8::1]:8080?q=x":       "http://[[ip]]:8080/…",
+		"dial [fe80::1%en0]:443":              "dial [[ip]]:443",
 	} {
 		if got := Scrub(input); got != want {
 			t.Errorf("Scrub(%q) = %q, want %q", input, got, want)

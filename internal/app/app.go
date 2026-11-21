@@ -405,12 +405,12 @@ func (a *App) handle(ctx context.Context, entities tg.Entities, message tg.Messa
 	// 能不能解析成命令，决定了丢弃时记录的级别：普通消息经过只是
 	// debug 噪音；操作者输入了命令却没等到回应，就该记在他们真正会看的
 	// 级别上。
-	_, looksLikeCommand := a.Registry.Parse(plain.Message)
+	route, looksLikeCommand := a.Registry.Parse(plain.Message)
 	envelope, converted := bot.Envelope(plain, client.SelfID(), edited, a.peers)
 	// 这条是不是本账号自己写的，这才是命令关卡真正要问的。只看 Out 标志，
 	// 在收藏夹里会答错：和自己的对话没有方向，Telegram 不设这个标志，
 	// 结果在那里输入的每条命令都被当成别人的消息丢掉了。
-	mine := plain.Out || (converted && envelope.SenderID() == client.SelfID())
+	mine := plain.Out || (converted && envelope.SenderIsUser(client.SelfID()))
 	if mine {
 		a.Logger.Debug("update.outgoing", slog.String("chat", bot.PeerID(plain.PeerID)),
 			slog.Int("message", plain.ID), slog.Bool("command", looksLikeCommand))
@@ -418,7 +418,7 @@ func (a *App) handle(ctx context.Context, entities tg.Entities, message tg.Messa
 	drop := func(reason string) {
 		if looksLikeCommand && mine {
 			a.Logger.Info("dispatch.dropped", slog.String("reason", reason),
-				slog.Int("message", plain.ID), slog.String("text", truncate(plain.Message, 40)))
+				slog.Int("message", plain.ID), slog.String("command", route.Command))
 			return
 		}
 		a.Logger.Debug("dispatch.skipped", slog.String("reason", reason), slog.Int("message", plain.ID))
@@ -470,15 +470,6 @@ func (a *App) OfferForeign(ctx context.Context, client *bot.Client, message *bot
 		}
 	}
 	return false
-}
-
-// truncate 截短文本，用在日志行里。
-func truncate(text string, limit int) string {
-	runes := []rune(text)
-	if len(runes) <= limit {
-		return text
-	}
-	return string(runes[:limit]) + "…"
 }
 
 // Bot 返回已连接的客户端；授权完成之前返回 nil。

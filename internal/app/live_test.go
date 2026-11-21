@@ -1,12 +1,39 @@
 package app
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/MiCat-S/mibot-lite/internal/bot"
+	"github.com/MiCat-S/mibot-lite/internal/command"
 	"github.com/gotd/td/tg"
 )
+
+func TestDispatchIdentityAndDroppedCommandLog(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	a := &App{Logger: logger, Registry: command.New([]string{"."}, logger), peers: bot.NewPeerCache()}
+	defer a.Registry.Abort()
+	a.peers.SetSelf(7)
+	a.bot.Store(bot.FromAPI(nil, a.peers, &tg.User{ID: 7}, logger))
+	message := &tg.Message{ID: 1, PeerID: &tg.PeerUser{UserID: 7}, Out: true, Message: ".tk sample-secret"}
+	a.handle(context.Background(), tg.Entities{}, message, true)
+	if text := logs.String(); !strings.Contains(text, "command=tk") || strings.Contains(text, "sample-secret") {
+		t.Fatalf("dropped command log: %s", text)
+	}
+	foreign := false
+	a.OnForeign(func(context.Context, *bot.Client, *bot.Message) bool { foreign = true; return true })
+	message = &tg.Message{ID: 2, PeerID: &tg.PeerChat{ChatID: 9}, Message: ".ping"}
+	message.SetFromID(&tg.PeerChannel{ChannelID: 7})
+	a.handle(context.Background(), tg.Entities{}, message, false)
+	if !foreign {
+		t.Fatal("a channel with the account's numeric ID was routed as the account owner")
+	}
+}
 
 // 同一条消息会从 liveHandler 和更新引擎各来一次，只能处理一次；两代轮换之后才忘掉。
 func TestSeenMessagesKeepsTwoWindows(t *testing.T) {

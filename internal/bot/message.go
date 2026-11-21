@@ -102,6 +102,12 @@ func (m *Message) SenderID() int64 {
 	return 0
 }
 
+// SenderIsUser 按用户身份判断发送者；群组和频道有各自的 ID 空间。
+func (m *Message) SenderIsUser(id int64) bool {
+	u, ok := m.Sender.(*tg.PeerUser)
+	return ok && u.UserID == id
+}
+
 // IsGroup 判断是不是普通群或超级群。
 func (m *Message) IsGroup() bool { return m.ChatType == ChatGroup || m.ChatType == ChatSupergroup }
 
@@ -150,7 +156,7 @@ func Envelope(message *tg.Message, selfID int64, edited bool, peers *PeerCache) 
 	}
 	// 在和自己的对话里，Telegram 不设 Out：没有方向可记。那里只有本账号
 	// 会写消息，所以 envelope 直接把这一点标出来，免得调用方各自再推一遍。
-	if result.Saved && result.SenderID() == selfID {
+	if result.Saved && result.SenderIsUser(selfID) {
 		result.Out = true
 	}
 	editDate, hasEdit := message.GetEditDate()
