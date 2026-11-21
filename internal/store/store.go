@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"sync/atomic"
 
 	"github.com/MiCat-S/mibot-lite/internal/fsutil"
 )
@@ -17,7 +18,7 @@ type Store[T any] struct {
 	path     string
 	defaults func() T
 	mu       sync.Mutex
-	cached   *T
+	cached   atomic.Pointer[T]
 }
 
 // New 创建一个 store。defaults 生成文件不存在或为空时所代表的文档；
@@ -30,8 +31,8 @@ func New[T any](path string, defaults func() T) *Store[T] {
 func (s *Store[T]) Path() string { return s.path }
 
 func (s *Store[T]) load() (*T, error) {
-	if s.cached != nil {
-		return s.cached, nil
+	if cached := s.cached.Load(); cached != nil {
+		return cached, nil
 	}
 	value := s.defaults()
 	raw, err := os.ReadFile(s.path)
@@ -44,15 +45,25 @@ func (s *Store[T]) load() (*T, error) {
 			return nil, fmt.Errorf("%s: %w", s.path, err)
 		}
 	}
-	s.cached = &value
-	return s.cached, nil
+	s.cached.Store(&value)
+	return &value, nil
+}
+
+// Snapshot 返回最近一次成功写入的只读快照。Update 修改独立副本，已有快照始终有效。
+// 需要修改结果的调用方使用 Read。
+func (s *Store[T]) Snapshot() (*T, error) {
+	// 监听器每条消息都读规则，已有快照时无需等待正在进行的文件写入。
+	if cached := s.cached.Load(); cached != nil {
+		return cached, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.load()
 }
 
 // Read 返回文档的一份副本。
 func (s *Store[T]) Read() (T, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	value, err := s.load()
+	value, err := s.Snapshot()
 	if err != nil {
 		var zero T
 		return zero, err
@@ -78,7 +89,7 @@ func (s *Store[T]) Update(mutate func(value *T) error) error {
 	if err := writeAtomic(s.path, working); err != nil {
 		return err
 	}
-	s.cached = &working
+	s.cached.Store(&working)
 	return nil
 }
 

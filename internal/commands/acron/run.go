@@ -256,7 +256,11 @@ func target(ctx context.Context, client *bot.Client, t task) (tg.InputPeerClass,
 	if err != nil {
 		return nil, "", kit.FailWith("找不到对话 "+t.Chat, err)
 	}
-	return peer, bot.PeerID(peerOf(peer, client.SelfID())), nil
+	chatID := bot.PeerID(peerOf(peer, client.SelfID()))
+	if t.ResolvedPeer && t.ChatID != "" && t.ChatID != chatID {
+		return nil, "", kit.Fail("目标已指向另一个对话，请重新添加任务")
+	}
+	return peer, chatID, nil
 }
 
 // run 做任务的那件事，返回记进列表的结果。

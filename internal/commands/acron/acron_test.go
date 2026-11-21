@@ -86,6 +86,9 @@ func TestCompileRegex(t *testing.T) {
 }
 
 func TestHelpers(t *testing.T) {
+	if id := messageID("4294967301"); id != 0 {
+		t.Fatalf("message ID outside Telegram's int32 range was accepted: %d", id)
+	}
 	for value, want := range map[string][2]string{"@a": {"@a", ""}, "@a|12": {"@a", "12"}, "-1001｜5": {"-1001", "5"}, "|": {"", ""}} {
 		if chat, reply := splitTarget(value); chat != want[0] || reply != want[1] {
 			t.Errorf("splitTarget(%q) = %q %q", value, chat, reply)
@@ -322,6 +325,18 @@ func taskByID(t *testing.T, s *service, id string) task {
 		t.Fatalf("没有任务 %s", id)
 	}
 	return st.Tasks[index]
+}
+
+func TestExecuteRejectsReassignedTarget(t *testing.T) {
+	fake := &fakeTelegram{}
+	s, _ := testService(t, task{ID: "1", Type: "del", Chat: "@friend", ChatID: "43", ResolvedPeer: true, MsgID: "7"})
+	s.execute(context.Background(), fakeClient(fake), "1")
+	if len(sent[*tg.MessagesDeleteMessagesRequest](fake)) != 0 {
+		t.Fatal("task deleted a message in the new target")
+	}
+	if task := taskByID(t, s, "1"); task.ChatID != "43" || !strings.Contains(task.LastError, "另一个对话") {
+		t.Fatalf("task lost its saved target or error: %+v", task)
+	}
 }
 
 // send：文字和格式原样发出，回复指定的消息；解析出来的对话 ID 记进任务。

@@ -3,7 +3,9 @@ package guestban
 import (
 	"context"
 	"log/slog"
+	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -17,9 +19,10 @@ import (
 
 // recorder 冒充 Telegram，记下删了哪些消息、封了谁。
 type recorder struct {
-	mu      sync.Mutex
-	deleted []int
-	banned  []string
+	mu       sync.Mutex
+	deleted  []int
+	banned   []string
+	onDelete func()
 }
 
 func respond(output bin.Decoder, value bin.Encoder) error {
@@ -36,6 +39,9 @@ func (r *recorder) Invoke(_ context.Context, input bin.Encoder, output bin.Decod
 	switch request := input.(type) {
 	case *tg.ChannelsDeleteMessagesRequest:
 		r.deleted = append(r.deleted, request.ID...)
+		if r.onDelete != nil {
+			r.onDelete()
+		}
 		return respond(output, &tg.MessagesAffectedMessages{Pts: 1, PtsCount: len(request.ID)})
 	case *tg.ChannelsEditBannedRequest:
 		switch target := request.Participant.(type) {
@@ -59,7 +65,7 @@ func setup(t *testing.T) (*service, *bot.Client, *recorder) {
 	fake := &recorder{}
 	peers := bot.NewPeerCache()
 	peers.SetSelf(1)
-	peers.RememberUsers([]tg.UserClass{withHash(&tg.User{ID: 42, Bot: true, Username: "ppzmzbot"}), withHash(&tg.User{ID: 77}),
+	peers.RememberUsers([]tg.UserClass{withHash(&tg.User{ID: 42, Bot: true, Username: "ppzmzbot"}), withHash(&tg.User{ID: 77}), withHash(&tg.User{ID: 78}),
 		withHash(&tg.User{ID: 43, Bot: true, Username: "GoodBot"})})
 	peers.RememberChats([]tg.ChatClass{withHash(&tg.Channel{ID: 5000, Megagroup: true, Title: "群"})})
 	client := bot.FromAPI(tg.NewClient(fake), peers, &tg.User{ID: 1}, slog.New(slog.DiscardHandler))
@@ -133,9 +139,83 @@ func TestStrictBansInvoker(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.offer(context.Background(), client, guestMessage(20, 42, 77))
+	s.offer(context.Background(), client, guestMessage(21, 42, 78))
+	s.offer(context.Background(), client, guestMessage(22, 42, 77))
 	drain(s, client)
-	if len(fake.banned) != 2 || fake.banned[0] != "user42" || fake.banned[1] != "user77" {
+	if !slices.Equal(fake.banned, []string{"user42", "user77", "user78"}) {
 		t.Errorf("严格模式应封机器人和叫它的人：%v", fake.banned)
+	}
+}
+
+func TestQueuedGuestCleanupUsesCurrentSettings(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		edit    func(*config)
+		deleted []int
+		banned  []string
+	}{
+		{"disabled", func(cfg *config) { cfg.Groups["-1005000"].Enabled = false }, nil, nil},
+		{"allowed", func(cfg *config) { cfg.Allow = []string{"ppzmzbot"} }, nil, nil},
+		{"strict disabled", func(cfg *config) { cfg.Groups["-1005000"].Strict = false }, []int{20}, []string{"user42"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, client, fake := setup(t)
+			if err := s.update(func(cfg *config) error {
+				cfg.Groups["-1005000"] = &group{Enabled: true, Strict: true}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			s.offer(context.Background(), client, guestMessage(20, 42, 77))
+			if err := s.update(func(cfg *config) error { tc.edit(cfg); return nil }); err != nil {
+				t.Fatal(err)
+			}
+			drain(s, client)
+			if !slices.Equal(fake.deleted, tc.deleted) || !slices.Equal(fake.banned, tc.banned) {
+				t.Fatalf("deleted %v and banned %v", fake.deleted, fake.banned)
+			}
+		})
+	}
+}
+
+func TestFailedSettingsWriteDoesNotEnableCleanup(t *testing.T) {
+	s, client, fake := setup(t)
+	blocked := filepath.Join(t.TempDir(), "file")
+	s.store = store.New(filepath.Join(blocked, "guestban.json"), defaults)
+	s.current()
+	if err := os.WriteFile(blocked, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.update(func(cfg *config) error {
+		cfg.Groups["-1005000"] = &group{Enabled: true}
+		return nil
+	}); err == nil {
+		t.Fatal("settings write unexpectedly succeeded")
+	}
+	s.offer(context.Background(), client, guestMessage(20, 42, 77))
+	drain(s, client)
+	if len(fake.deleted)+len(fake.banned) != 0 {
+		t.Fatalf("failed write enabled cleanup: %v %v", fake.deleted, fake.banned)
+	}
+}
+
+func TestDisablingWhileDeleteRunsPreventsFollowingBans(t *testing.T) {
+	s, client, fake := setup(t)
+	if err := s.update(func(cfg *config) error {
+		cfg.Groups["-1005000"] = &group{Enabled: true, Strict: true}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fake.onDelete = func() {
+		if err := s.update(func(cfg *config) error { cfg.Groups["-1005000"].Enabled = false; return nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.offer(context.Background(), client, guestMessage(20, 42, 77))
+	drain(s, client)
+	if !slices.Equal(fake.deleted, []int{20}) || len(fake.banned) != 0 {
+		t.Fatalf("deleted %v and banned %v", fake.deleted, fake.banned)
 	}
 }
 

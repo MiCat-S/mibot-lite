@@ -193,6 +193,11 @@ func senderUserID(message *bot.Message) string {
 	return ""
 }
 
+func activeDelegate(saved *store.Store[delegateDocument], user, chat string) (delegateDocument, bool) {
+	current, err := saved.Read()
+	return current, err == nil && current.hasUser(user) && current.allowsChat(chat)
+}
+
 // relay 以账号身份在触发消息所在的对话里发出 text，回复同一个目标、留在同一个话题里；
 // text 是命令的话接着执行。能不能借出去在发之前就判断，不许的命令不会以账号身份出现在群里。
 func relay(ctx context.Context, a *app.App, client *bot.Client, trigger *bot.Message, text string, entities []tg.MessageEntityClass) {
@@ -525,8 +530,8 @@ func Register(a *app.App) {
 		if user == "" {
 			return false
 		}
-		current, err := sureList.Read()
-		if err != nil || !current.hasUser(user) || !current.allowsChat(message.ChatID) {
+		current, allowed := activeDelegate(sureList, user, message.ChatID)
+		if !allowed {
 			return false
 		}
 		text, ok := current.match(message.Text)
@@ -535,6 +540,10 @@ func Register(a *app.App) {
 		}
 		a.Registry.Background(ctx, func(ctx context.Context) {
 			inBackground(func() {
+				current, allowed := activeDelegate(sureList, user, message.ChatID)
+				if matched, ok := current.match(message.Text); !allowed || !ok || matched != text {
+					return
+				}
 				relay(ctx, a, client, message, text, nil)
 				if kit.Sleep(ctx, sureDelay) == nil {
 					_ = client.DeleteMessage(ctx, message)
@@ -548,8 +557,7 @@ func Register(a *app.App) {
 		if user == "" {
 			return false
 		}
-		current, err := sudoList.Read()
-		if err != nil || !current.hasUser(user) || !current.allowsChat(message.ChatID) {
+		if _, allowed := activeDelegate(sudoList, user, message.ChatID); !allowed {
 			return false
 		}
 		// 只转发认得的命令。前缀开头但不是命令的消息如果也照发，名单里的人
@@ -566,7 +574,11 @@ func Register(a *app.App) {
 			entities = message.Raw.Entities
 		}
 		a.Registry.Background(ctx, func(ctx context.Context) {
-			inBackground(func() { relay(ctx, a, client, message, message.Text, entities) })
+			inBackground(func() {
+				if _, allowed := activeDelegate(sudoList, user, message.ChatID); allowed {
+					relay(ctx, a, client, message, message.Text, entities)
+				}
+			})
 		})
 		return true
 	})

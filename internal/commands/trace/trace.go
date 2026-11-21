@@ -10,7 +10,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -108,10 +107,9 @@ type job struct {
 }
 
 type service struct {
-	a      *app.App
-	store  *store.Store[config]
-	cached atomic.Pointer[config]
-	queue  chan job
+	a     *app.App
+	store *store.Store[config]
+	queue chan job
 }
 
 // Register 注册 .trace、看别人消息的监听者和发回应的后台任务。数据存在 data/trace.json。
@@ -140,18 +138,6 @@ func help(prefix string) string {
 		"可用的表情：" + strings.Join(available, "") + "。会员可以用自定义表情；不是会员的账号一条消息只能点一个表情。"
 }
 
-func (s *service) current() *config {
-	if loaded := s.cached.Load(); loaded != nil {
-		return loaded
-	}
-	cfg, err := s.store.Read()
-	if err != nil {
-		cfg = defaults()
-	}
-	s.cached.Store(&cfg)
-	return &cfg
-}
-
 func (s *service) update(mutate func(*config)) error {
 	return s.store.Update(func(cfg *config) error {
 		if cfg.Users == nil {
@@ -161,15 +147,6 @@ func (s *service) update(mutate func(*config)) error {
 			cfg.Keywords = map[string][]reaction{}
 		}
 		mutate(cfg)
-		copied := *cfg
-		copied.Users, copied.Keywords = make(map[string][]reaction, len(cfg.Users)), make(map[string][]reaction, len(cfg.Keywords))
-		for key, value := range cfg.Users {
-			copied.Users[key] = append([]reaction(nil), value...)
-		}
-		for key, value := range cfg.Keywords {
-			copied.Keywords[key] = append([]reaction(nil), value...)
-		}
-		s.cached.Store(&copied)
 		return nil
 	})
 }
@@ -197,7 +174,10 @@ func (s *service) offer(ctx context.Context, client *bot.Client, message *bot.Me
 	if message.Sender == nil || message.Saved {
 		return false
 	}
-	cfg := s.current()
+	cfg, err := s.store.Snapshot()
+	if err != nil {
+		return false
+	}
 	if len(cfg.Users) == 0 && len(cfg.Keywords) == 0 {
 		return false
 	}
@@ -432,7 +412,7 @@ func (s *service) user(ctx context.Context, inv *command.Invocation) error {
 		return inv.Edit(ctx, help(inv.Prefix))
 	}
 	id := bot.PeerID(reply.Sender)
-	if id == "" || reply.SenderID() == inv.Client.SelfID() {
+	if id == "" || reply.SenderIsUser(inv.Client.SelfID()) {
 		return kit.Fail("不能追踪自己")
 	}
 	if len(inv.Args) == 0 {
@@ -458,8 +438,12 @@ func (s *service) user(ctx context.Context, inv *command.Invocation) error {
 	if err := s.update(func(cfg *config) { cfg.Users[id] = items }); err != nil {
 		return err
 	}
+	cfg, err := s.store.Snapshot()
+	if err != nil {
+		return err
+	}
 	if peer, err := inv.Client.InputPeer(reply.Peer); err == nil {
-		if err := react(ctx, inv.Client, job{peer: peer, message: reply.ID, reactions: items, big: s.current().Config.Big}); err != nil {
+		if err := react(ctx, inv.Client, job{peer: peer, message: reply.ID, reactions: items, big: cfg.Config.Big}); err != nil {
 			return kit.FailWith("已追踪 "+id+"，但这次没能点上表情", err)
 		}
 	}
@@ -481,14 +465,21 @@ func (s *service) receipt(ctx context.Context, inv *command.Invocation, text str
 	if err := inv.EditText(ctx, text); err != nil {
 		return err
 	}
-	if !s.current().Config.KeepLog && kit.Sleep(ctx, 10*time.Second) == nil {
+	cfg, err := s.store.Snapshot()
+	if err != nil {
+		return err
+	}
+	if !cfg.Config.KeepLog && kit.Sleep(ctx, 10*time.Second) == nil {
 		_ = inv.Client.DeleteMessage(ctx, inv.Message)
 	}
 	return nil
 }
 
 func (s *service) status(ctx context.Context, inv *command.Invocation) error {
-	cfg := s.current()
+	cfg, err := s.store.Snapshot()
+	if err != nil {
+		return err
+	}
 	lines := []string{"👀 <b>自动回应</b>", fmt.Sprintf("追踪 %d 个用户、%d 个关键词", len(cfg.Users), len(cfg.Keywords)), "", "<b>用户</b>"}
 	users := make([]string, 0, len(cfg.Users))
 	for id := range cfg.Users {

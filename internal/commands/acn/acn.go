@@ -507,7 +507,7 @@ func currentWeather(ctx context.Context, user *acnUser, includeDisabled bool, no
 
 // apply 为一个账号重新拼出昵称并提交上去。
 func (s *acnService) apply(ctx context.Context, client *bot.Client, userID string, force bool) (bool, error) {
-	state, err := s.store.Read()
+	state, err := s.store.Snapshot()
 	if err != nil {
 		return false, err
 	}
@@ -522,6 +522,13 @@ func (s *acnService) apply(ctx context.Context, client *bot.Client, userID strin
 	}
 	now := time.Now()
 	weather, fetched := currentWeather(ctx, user, false, now)
+	if fetched {
+		// 天气查询期间命令可能已关闭自动更新或改了地点，旧结果不再适用。
+		latest, err := s.store.Snapshot()
+		if err != nil || latest != state {
+			return false, err
+		}
+	}
 	firstName := kit.TruncateRunes(composeName(user, state.RandomTexts, weather, now), 64)
 
 	request := &tg.AccountUpdateProfileRequest{}
@@ -551,17 +558,26 @@ func (s *acnService) apply(ctx context.Context, client *bot.Client, userID strin
 		}
 		return false, err
 	}
-	textCount := len(state.RandomTexts)
+	if user.Enabled {
+		latest, err := s.store.Snapshot()
+		if err != nil {
+			return false, err
+		}
+		// off/reset 可能在 Telegram 处理改名时先完成。以最新保存的原名收尾。
+		if current := latest.Users[userID]; current != nil && !current.Enabled {
+			return false, s.restore(ctx, client, current)
+		}
+	}
 	return true, s.store.Update(func(state *acnState) error {
 		current := state.Users[userID]
 		if current == nil {
 			return nil
 		}
 		current.LastUpdate = time.Now().UTC().Format(time.RFC3339)
-		if fetched {
+		if fetched && current.WeatherLocation == user.WeatherLocation {
 			current.WeatherCompact, current.WeatherCacheTS = weather, now.UnixMilli()
 		}
-		if textCount > 0 && current.Mode != "time" {
+		if textCount := len(state.RandomTexts); textCount > 0 && current.Mode != "time" {
 			current.TextIndex = (current.TextIndex + 1) % textCount
 		}
 		return nil

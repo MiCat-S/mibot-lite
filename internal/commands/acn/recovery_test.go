@@ -54,3 +54,31 @@ func TestScheduledUpdateIgnoresForeignAccountConfig(t *testing.T) {
 		t.Fatal("foreign imported config changed")
 	}
 }
+
+func TestDisableDuringProfileUpdateRestoresOriginal(t *testing.T) {
+	s := &acnService{store: store.New(filepath.Join(t.TempDir(), "acn.json"), acnDefaults)}
+	if err := s.store.Update(func(state *acnState) error {
+		user := newAcnUser("1")
+		user.Enabled, user.OriginalFirstName = true, "Original"
+		state.Users["1"] = user
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	fake := telegram.InvokeFunc(func(ctx context.Context, in bin.Encoder, out bin.Decoder) error {
+		names = append(names, in.(*tg.AccountUpdateProfileRequest).FirstName)
+		if len(names) == 1 {
+			if err := s.store.Update(func(state *acnState) error { state.Users["1"].Enabled = false; return nil }); err != nil {
+				return err
+			}
+		}
+		out.(*tg.UserBox).User = &tg.User{ID: 1}
+		return nil
+	})
+	client := bot.FromAPI(tg.NewClient(fake), bot.NewPeerCache(), &tg.User{ID: 1}, slog.New(slog.DiscardHandler))
+	s.tick(context.Background(), client)
+	if len(names) != 2 || names[1] != "Original" || names[0] == names[1] {
+		t.Fatalf("profile calls: %v", names)
+	}
+}

@@ -1,11 +1,20 @@
 package sudo
 
 import (
+	"context"
 	"io"
 	"log/slog"
+	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/MiCat-S/mibot-lite/internal/app"
+	"github.com/MiCat-S/mibot-lite/internal/bot"
 	"github.com/MiCat-S/mibot-lite/internal/command"
+	"github.com/MiCat-S/mibot-lite/internal/store"
+	"github.com/gotd/td/bin"
+	"github.com/gotd/td/telegram"
+	"github.com/gotd/td/tg"
 )
 
 func TestSureRuleMatching(t *testing.T) {
@@ -61,5 +70,61 @@ func TestDelegationAllowed(t *testing.T) {
 		if got := delegationAllowed(route); got != want {
 			t.Errorf("%q（展开成 %s %v）能否借出：%v，应为 %v", text, route.Command, route.Args, got, want)
 		}
+	}
+}
+
+func TestQueuedDelegationHonorsRevocation(t *testing.T) {
+	for _, name := range []string{"sudo", "sure"} {
+		t.Run(name, func(t *testing.T) {
+			log := slog.New(slog.DiscardHandler)
+			a := &app.App{Root: t.TempDir(), Registry: command.New([]string{"."}, log), Logger: log}
+			defer a.Registry.Abort()
+			saved := store.New(filepath.Join(a.DataDir(), name+".json"), func() delegateDocument { return delegateDocument{} })
+			if err := saved.Update(func(d *delegateDocument) error {
+				d.Users = []delegateEntry{{ID: "42"}}
+				d.Messages = []sureRule{{ID: 1, Msg: ".ping"}}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			Register(a)
+			a.Registry.Register(&command.Command{Name: "ping"})
+
+			pending := make(chan func(), 1)
+			oldBackground := inBackground
+			inBackground = func(work func()) { pending <- work }
+			defer func() { inBackground = oldBackground }()
+			fake := telegram.InvokeFunc(func(_ context.Context, in bin.Encoder, out bin.Decoder) error {
+				switch in.(type) {
+				case *tg.MessagesEditMessageRequest:
+					out.(*tg.UpdatesBox).Updates = &tg.Updates{}
+				default:
+					t.Fatalf("revoked delegation sent RPC %T", in)
+				}
+				return nil
+			})
+			peers := bot.NewPeerCache()
+			peers.SetSelf(1)
+			client := bot.FromAPI(tg.NewClient(fake), peers, &tg.User{ID: 1}, log)
+			peer := &tg.PeerUser{UserID: 1}
+			ctx := a.Registry.Lifecycle()
+			trigger := &bot.Message{ID: 7, Peer: peer, ChatID: "1", Sender: &tg.PeerUser{UserID: 42}, Text: ".ping"}
+			if !a.OfferForeign(ctx, client, trigger) {
+				t.Fatal("delegation was not queued")
+			}
+			var work func()
+			select {
+			case work = <-pending:
+			case <-time.After(time.Second):
+				t.Fatal("queued delegation did not start")
+			}
+			handler, _ := a.Registry.Lookup(name)
+			inv := &command.Invocation{Client: client, Prefix: ".", Args: []string{"del", "42"}, Log: log,
+				Message: &bot.Message{ID: 8, Peer: peer, ChatID: "1", Out: true}}
+			if err := handler.Handle(ctx, inv); err != nil {
+				t.Fatal(err)
+			}
+			work()
+		})
 	}
 }

@@ -54,7 +54,6 @@ type event struct {
 	message int
 	bot     int64
 	via     tg.PeerClass
-	strict  bool
 }
 
 // queueSize 是排队等处理的消息上限。刷屏时一秒几十条，处理一条要发两三个请求；
@@ -68,8 +67,7 @@ type service struct {
 	queue  chan event
 
 	mu sync.Mutex
-	// banned 记下最近在某个群里封过的机器人（「群/机器人」→ 时间），一阵刷屏只封一次，
-	// 后面的消息只删不再封。
+	// banned 按群和封禁目标记录最近的尝试，刷屏时不用反复封同一个账号。
 	banned map[string]time.Time
 	// warned 记下没有管理权限的群，每个群一小时只记一次日志。
 	warned map[string]time.Time
@@ -106,6 +104,11 @@ func (s *service) current() *config {
 	if loaded := s.cached.Load(); loaded != nil {
 		return loaded
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if loaded := s.cached.Load(); loaded != nil {
+		return loaded
+	}
 	cfg, err := s.store.Read()
 	if err != nil {
 		cfg = defaults()
@@ -115,27 +118,23 @@ func (s *service) current() *config {
 }
 
 func (s *service) update(mutate func(*config) error) error {
-	return s.store.Update(func(cfg *config) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var updated *config
+	if err := s.store.Update(func(cfg *config) error {
 		if cfg.Groups == nil {
 			cfg.Groups = map[string]*group{}
 		}
 		if err := mutate(cfg); err != nil {
 			return err
 		}
-		copied := cloneConfig(*cfg)
-		s.cached.Store(&copied)
+		updated = cfg
 		return nil
-	})
-}
-
-// cloneConfig 深拷贝一份给缓存：Update 里的 cfg 之后还会被改。
-func cloneConfig(cfg config) config {
-	copied := config{Groups: make(map[string]*group, len(cfg.Groups)), Allow: append([]string(nil), cfg.Allow...)}
-	for id, value := range cfg.Groups {
-		entry := *value
-		copied.Groups[id] = &entry
+	}); err != nil {
+		return err
 	}
-	return copied
+	s.cached.Store(updated)
+	return nil
 }
 
 // allowed 判断机器人在不在放行名单里（按 ID 或用户名）。
@@ -149,6 +148,19 @@ func (cfg *config) allowed(id int64, username string) bool {
 	return false
 }
 
+func (s *service) settingsFor(client *bot.Client, chatID string, botID int64) *group {
+	cfg := s.current()
+	settings := cfg.Groups[chatID]
+	if settings == nil || !settings.Enabled {
+		return nil
+	}
+	info, _ := client.Peers().User(botID)
+	if cfg.allowed(botID, info.Username) {
+		return nil
+	}
+	return settings
+}
+
 // offer 看一条别人发的消息：是访客机器人发的、在开启了的群里、机器人没被放行，就排进队列。
 // 总是返回 false：不占用消息，.sure、.sudo 照样看得到。
 func (s *service) offer(ctx context.Context, client *bot.Client, message *bot.Message) bool {
@@ -156,17 +168,8 @@ func (s *service) offer(ctx context.Context, client *bot.Client, message *bot.Me
 	if raw == nil || raw.GuestchatViaFrom == nil {
 		return false
 	}
-	cfg := s.current()
-	settings := cfg.Groups[message.ChatID]
-	if settings == nil || !settings.Enabled {
-		return false
-	}
 	sender, ok := raw.FromID.(*tg.PeerUser)
-	if !ok {
-		return false
-	}
-	info, _ := client.Peers().User(sender.UserID)
-	if cfg.allowed(sender.UserID, info.Username) {
+	if !ok || s.settingsFor(client, message.ChatID, sender.UserID) == nil {
 		return false
 	}
 	peer, err := client.InputPeer(message.Peer)
@@ -178,7 +181,7 @@ func (s *service) offer(ctx context.Context, client *bot.Client, message *bot.Me
 		return false
 	}
 	select {
-	case s.queue <- event{chatID: message.ChatID, channel: channel, message: message.ID, bot: sender.UserID, via: raw.GuestchatViaFrom, strict: settings.Strict}:
+	case s.queue <- event{chatID: message.ChatID, channel: channel, message: message.ID, bot: sender.UserID, via: raw.GuestchatViaFrom}:
 	default:
 		client.Logger().Warn("guestban.queue_full", "chat", message.ChatID, "message", message.ID)
 	}
@@ -205,6 +208,9 @@ func (s *service) work(ctx context.Context, client *bot.Client) {
 
 // process 删掉消息；这阵子没在这个群封过这个机器人的话就封禁它，严格模式下再封叫它的人。
 func (s *service) process(ctx context.Context, client *bot.Client, item event) {
+	if s.settingsFor(client, item.chatID, item.bot) == nil {
+		return
+	}
 	logger := client.Logger()
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
@@ -215,8 +221,9 @@ func (s *service) process(ctx context.Context, client *bot.Client, item event) {
 		deleted = 1
 	}
 	bots := 0
-	if s.firstBan(item.chatID, item.bot) {
-		if target, err := client.InputPeer(&tg.PeerUser{UserID: item.bot}); err == nil {
+	// 删除可能在等限流，此时仍允许管理员关闭清理或放行机器人。
+	if s.settingsFor(client, item.chatID, item.bot) != nil {
+		if target, err := client.InputPeer(&tg.PeerUser{UserID: item.bot}); err == nil && s.firstBan(item.chatID, strconv.FormatInt(item.bot, 10)) {
 			if err := ban(ctx, client, item.channel, target); err != nil {
 				s.warnOnce(logger, item.chatID, "ban_bot", err)
 			} else {
@@ -224,13 +231,14 @@ func (s *service) process(ctx context.Context, client *bot.Client, item event) {
 				logger.Info("guestban.banned", "chat", item.chatID, "bot", item.bot)
 			}
 		}
-		if item.strict {
-			if target, err := client.InputPeer(item.via); err == nil {
-				if err := ban(ctx, client, item.channel, target); err != nil {
-					s.warnOnce(logger, item.chatID, "ban_invoker", err)
-				} else {
-					logger.Info("guestban.banned_invoker", "chat", item.chatID, "invoker", bot.PeerID(item.via))
-				}
+	}
+	if settings := s.settingsFor(client, item.chatID, item.bot); settings != nil && settings.Strict {
+		invoker := bot.PeerID(item.via)
+		if target, err := client.InputPeer(item.via); err == nil && s.firstBan(item.chatID, invoker) {
+			if err := ban(ctx, client, item.channel, target); err != nil {
+				s.warnOnce(logger, item.chatID, "ban_invoker", err)
+			} else {
+				logger.Info("guestban.banned_invoker", "chat", item.chatID, "invoker", invoker)
 			}
 		}
 	}
@@ -253,9 +261,9 @@ func ban(ctx context.Context, client *bot.Client, channel *tg.InputChannel, targ
 	return err
 }
 
-// firstBan 判断这阵子（10 分钟内）是不是第一次在这个群看到这个机器人，是的话记下。
-func (s *service) firstBan(chatID string, botID int64) bool {
-	key := chatID + "/" + strconv.FormatInt(botID, 10)
+// firstBan 判断 10 分钟内是否已经尝试过封禁这个目标。
+func (s *service) firstBan(chatID, targetID string) bool {
+	key := chatID + "/" + targetID
 	now := time.Now()
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -123,5 +124,27 @@ func TestOfferReadsRichMessage(t *testing.T) {
 	s.offer(context.Background(), client, &bot.Message{ID: 7, Peer: &tg.PeerChat{ChatID: 5}, ChatID: "-5", Sender: &tg.PeerUser{UserID: 42}, Raw: raw})
 	if len(s.queue) != 1 {
 		t.Fatalf("富文本没有触发：%d", len(s.queue))
+	}
+}
+
+func TestFailedWriteKeepsActiveReactions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "trace.json")
+	s := &service{store: store.New(path, defaults), queue: make(chan job, 2)}
+	if err := s.update(func(cfg *config) { cfg.Keywords["hello"] = []reaction{{Emoticon: "👍"}} }); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.update(func(cfg *config) { delete(cfg.Keywords, "hello") }); err == nil {
+		t.Fatal("expected persistence error")
+	}
+	client := bot.FromAPI(tg.NewClient(&recorder{}), bot.NewPeerCache(), &tg.User{ID: 1}, slog.New(slog.DiscardHandler))
+	s.offer(context.Background(), client, &bot.Message{ID: 7, Peer: &tg.PeerChat{ChatID: 5}, ChatID: "-5", Sender: &tg.PeerUser{UserID: 42}, Text: "hello"})
+	if len(s.queue) != 1 {
+		t.Fatal("failed update disabled the active reaction")
 	}
 }

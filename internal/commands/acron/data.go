@@ -173,11 +173,11 @@ func (s state) nextID() string {
 
 // messageID 读一个存成字符串的消息 ID，不是正整数时返回 0。
 func messageID(value string) int {
-	id, err := strconv.Atoi(strings.TrimSpace(value))
+	id, err := strconv.ParseInt(strings.TrimSpace(value), 10, 32)
 	if err != nil || id <= 0 {
 		return 0
 	}
-	return id
+	return int(id)
 }
 
 // splitTarget 拆开「对话|消息 ID」，竖线也可以是全角的，同 V2。

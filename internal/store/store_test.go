@@ -77,3 +77,26 @@ func TestReadReturnsCopy(t *testing.T) {
 		t.Fatalf("mutating a read value changed the store: %d", second.Items["a"])
 	}
 }
+
+func TestSnapshotRemainsValidDuringUpdate(t *testing.T) {
+	s := newTestStore(t)
+	previous, err := s.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s.Update(func(next *document) error {
+		next.Items["new"] = 2
+		committed, err := s.Snapshot()
+		if err != nil || committed != previous || len(committed.Items) != 0 {
+			t.Errorf("uncommitted snapshot: %+v %v", committed, err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := s.Snapshot()
+	if err != nil || current.Items["new"] != 2 || len(previous.Items) != 0 {
+		t.Fatalf("snapshots: old %+v new %+v err %v", previous, current, err)
+	}
+}
