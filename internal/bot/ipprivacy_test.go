@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"bytes"
 	"context"
 	"testing"
 
@@ -77,6 +78,53 @@ func TestRedactMessageEntities(t *testing.T) {
 }
 
 type capture struct{ input bin.Encoder }
+
+func TestIPRedactorRichMessages(t *testing.T) {
+	original := RichConcat(RichPlain("出口 10.20.30.4"), RichCode("0"))
+	cell := tg.PageTableCell{}
+	cell.SetText(&tg.TextURL{Text: RichPlain("详情"), URL: "https://10%2e20%2e30%2e40/info"})
+	rich := &tg.InputRichMessage{Blocks: []tg.PageBlockClass{
+		&tg.PageBlockParagraph{Text: original},
+		&tg.PageBlockTable{Title: RichPlain("表"), Rows: []tg.PageTableRow{{Cells: []tg.PageTableCell{cell}}}},
+	}}
+	send := &tg.MessagesSendMessageRequest{Peer: &tg.InputPeerSelf{}}
+	send.SetRichMessage(rich)
+	edit := &tg.MessagesEditMessageRequest{Peer: &tg.InputPeerSelf{}, ID: 1}
+	edit.SetRichMessage(rich)
+	sink := &capture{}
+	handle := IPRedactor{}.Handle(sink)
+	old := CurrentIPPolicy()
+	t.Cleanup(func() { _ = SetIPPolicy(old) })
+	for _, policy := range []IPPolicy{DefaultIPPolicy, {Mode: "hide", IPv4: 2, IPv6: 4}} {
+		if err := SetIPPolicy(policy); err != nil {
+			t.Fatal(err)
+		}
+		for _, request := range []bin.Encoder{send, edit} {
+			if err := handle(context.Background(), request, nil); err != nil {
+				t.Fatal(err)
+			}
+			payload, _ := sink.input.(interface {
+				GetRichMessage() (tg.InputRichMessageClass, bool)
+			}).GetRichMessage()
+			blocks := payload.(*tg.InputRichMessage).Blocks
+			if got := richPlain(blocks[0].(*tg.PageBlockParagraph).Text); got != MaskIPs("出口 10.20.30.40") {
+				t.Errorf("formatted address: %q", got)
+			}
+			label := blocks[1].(*tg.PageBlockTable).Rows[0].Cells[0].Text
+			if _, linked := label.(*tg.TextURL); linked || richPlain(label) != "详情" {
+				t.Errorf("table link: %#v", label)
+			}
+			var wire bin.Buffer
+			if err := sink.input.Encode(&wire); err != nil || bytes.Contains(wire.Buf, []byte("%2e")) {
+				t.Fatalf("encoded rich message retained IP link or is invalid: %v", err)
+			}
+		}
+	}
+	if err := handle(WithoutIPPrivacy(context.Background()), send, nil); err != nil || sink.input != send ||
+		richPlain(original) != "出口 10.20.30.40" || rich.Blocks[1].(*tg.PageBlockTable).Rows[0].Cells[0].Text != cell.Text {
+		t.Fatal("original rich message or privacy exemption changed")
+	}
+}
 
 func (c *capture) Invoke(_ context.Context, input bin.Encoder, _ bin.Decoder) error {
 	c.input = input

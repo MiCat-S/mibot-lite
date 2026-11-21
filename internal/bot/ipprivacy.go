@@ -334,6 +334,7 @@ func redactRequest(input bin.Encoder) bin.Encoder {
 	switch request := input.(type) {
 	case *tg.MessagesSendMessageRequest:
 		copied := *request
+		copied.RichMessage = redactRichMessage(request.RichMessage)
 		message, entities, changed := redactMessage(request.Message, request.Entities)
 		copied.Message, copied.Entities = message, entities
 		if changed {
@@ -343,6 +344,7 @@ func redactRequest(input bin.Encoder) bin.Encoder {
 		return &copied
 	case *tg.MessagesEditMessageRequest:
 		copied := *request
+		copied.RichMessage = redactRichMessage(request.RichMessage)
 		message, entities, changed := redactMessage(request.Message, request.Entities)
 		copied.Message, copied.Entities = message, entities
 		if changed {
