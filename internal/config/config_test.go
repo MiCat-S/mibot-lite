@@ -72,7 +72,7 @@ func TestEnvFileAndPrefixes(t *testing.T) {
 // SetEnv 只动那一行：注释、空行、别的设置原样保留，改完 ReadEnv 读出来的就是写进去的。
 func TestSetEnvChangesOnlyThatLine(t *testing.T) {
 	root := t.TempDir()
-	original := "# 部署设置\nMIBOT_SERVICE=\"custom.service\"\n\nMIBOT_PREFIX=. 。\nOTHER=1\n"
+	original := "# 部署设置\nMIBOT_SERVICE=\"custom.service\"\n\nMIBOT_PREFIX=. 。\nOTHER=1\n\n"
 	if err := os.WriteFile(filepath.Join(root, ".env"), []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestSetEnvChangesOnlyThatLine(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(filepath.Join(root, ".env"))
-	want := "# 部署设置\nMIBOT_SERVICE=\"custom.service\"\n\nMIBOT_PREFIX=! ！ ~\nOTHER=1\n"
+	want := "# 部署设置\nMIBOT_SERVICE=\"custom.service\"\n\nMIBOT_PREFIX=! ！ ~\nOTHER=1\n\n"
 	if string(raw) != want {
 		t.Fatalf(".env 变成了：\n%s\n应为：\n%s", raw, want)
 	}

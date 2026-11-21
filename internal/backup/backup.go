@@ -25,6 +25,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -63,7 +64,14 @@ type manifest struct {
 func Create(root, version string, now time.Time) ([]byte, []string, error) {
 	var names []string
 	for _, name := range rootFiles {
-		if regular(filepath.Join(root, name)) {
+		info, err := os.Stat(filepath.Join(root, name))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+		if info.Mode().IsRegular() {
 			names = append(names, name)
 		}
 	}
@@ -80,11 +88,18 @@ func Create(root, version string, now time.Time) ([]byte, []string, error) {
 	if len(names) == 0 {
 		return nil, nil, errors.New("nothing to back up: no config.json, .env or data/*.json here")
 	}
+	if len(names)+1 > maxEntries {
+		return nil, nil, errors.New("too many files to restore this backup")
+	}
+	if slices.Contains(names, config.SessionFile) && !slices.Contains(names, config.ConfigFile) {
+		return nil, nil, errors.New("a session backup must include config.json")
+	}
 	sort.Strings(names)
 
 	var archive bytes.Buffer
 	zipped := gzip.NewWriter(&archive)
-	packed := tar.NewWriter(zipped)
+	limit := &backupWriter{out: zipped, remaining: maxTotal}
+	packed := tar.NewWriter(limit)
 	head, err := json.MarshalIndent(manifest{Format: format, Version: version, Created: now.UTC(), Files: names}, "", "  ")
 	if err != nil {
 		return nil, nil, err
@@ -94,13 +109,21 @@ func Create(root, version string, now time.Time) ([]byte, []string, error) {
 	}
 	for _, name := range names {
 		full := filepath.Join(root, filepath.FromSlash(name))
+		info, err := os.Stat(full)
+		if err != nil {
+			return nil, nil, err
+		}
+		if info.Size() > limit.remaining {
+			return nil, nil, fmt.Errorf("%s exceeds the remaining backup size limit", name)
+		}
 		body, err := os.ReadFile(full)
 		if err != nil {
 			return nil, nil, err
 		}
-		info, err := os.Stat(full)
-		if err != nil {
-			return nil, nil, err
+		if name == config.ConfigFile {
+			if _, err := config.Parse(body); err != nil {
+				return nil, nil, fmt.Errorf("cannot back up invalid config.json: %w", err)
+			}
 		}
 		if err := put(packed, name, body, info.ModTime()); err != nil {
 			return nil, nil, err
@@ -115,6 +138,21 @@ func Create(root, version string, now time.Time) ([]byte, []string, error) {
 	return archive.Bytes(), names, nil
 }
 
+// Restore 按解压后的 tar 字节数计量，包括 PAX 头和补齐块。
+type backupWriter struct {
+	out       io.Writer
+	remaining int64
+}
+
+func (w *backupWriter) Write(p []byte) (int, error) {
+	if int64(len(p)) > w.remaining {
+		return 0, errors.New("backup exceeds the restore size limit")
+	}
+	n, err := w.out.Write(p)
+	w.remaining -= int64(n)
+	return n, err
+}
+
 func put(packed *tar.Writer, name string, body []byte, stamp time.Time) error {
 	header := &tar.Header{Name: name, Mode: 0o600, Size: int64(len(body)), ModTime: stamp, Typeflag: tar.TypeReg, Format: tar.FormatPAX}
 	if err := packed.WriteHeader(header); err != nil {
@@ -122,11 +160,6 @@ func put(packed *tar.Writer, name string, body []byte, stamp time.Time) error {
 	}
 	_, err := packed.Write(body)
 	return err
-}
-
-func regular(name string) bool {
-	info, err := os.Lstat(name)
-	return err == nil && info.Mode().IsRegular()
 }
 
 // allowed 判断归档里的某个路径是不是 Create 会写入的。Restore 每一项
@@ -199,6 +232,13 @@ func Restore(archive io.Reader, root string, overwrite bool) ([]string, error) {
 		}
 		files[header.Name] = body
 	}
+	// tar 遇到结束块就停止读取；继续读到 gzip 末尾才能校验尾部和校验和。
+	if _, err := io.Copy(io.Discard, limited); err != nil {
+		return nil, fmt.Errorf("the backup is damaged: %w", err)
+	}
+	if limited.N <= 0 {
+		return nil, errors.New("the backup is larger than any configuration could be")
+	}
 	if head == nil {
 		return nil, errors.New("not a mibot-lite backup: it has no " + Manifest)
 	}
@@ -228,8 +268,12 @@ func Restore(archive io.Reader, root string, overwrite bool) ([]string, error) {
 			return nil, fmt.Errorf("the backup's config.json is not usable: %w", err)
 		}
 	}
-	if !overwrite && regular(filepath.Join(root, config.ConfigFile)) {
-		return nil, ErrExists
+	if !overwrite {
+		if _, err := os.Lstat(filepath.Join(root, config.ConfigFile)); err == nil {
+			return nil, ErrExists
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
 	}
 
 	// 所有新文件先写到部署所在文件系统，空间不足等错误在撤下账号之前暴露。
@@ -262,7 +306,7 @@ func Restore(archive io.Reader, root string, overwrite bool) ([]string, error) {
 	apply := func() error {
 		if accountSnapshot {
 			// 只清理备份约定的配置范围，缓存、程序和其他文件不动。
-			stale := []string{config.EnvFile, config.SessionFile, config.StateFile, config.StateFile + ".cursor", "restart-receipt.json"}
+			stale := []string{config.EnvFile, config.SessionFile, config.StateFile, config.StateFile + ".cursor", config.RestartReceiptFile}
 			entries, err := os.ReadDir(filepath.Join(root, "data"))
 			if err != nil {
 				return err

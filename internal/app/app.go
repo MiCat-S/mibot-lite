@@ -136,12 +136,6 @@ func Prepare(ctx context.Context, options Options) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	cfg, err := config.Read(root)
-	if err != nil {
-		return nil, err
-	}
-	env := config.ReadEnv(root, os.Environ())
-
 	var lock *os.File
 	prepared := false
 	if !options.ReadOnly {
@@ -154,8 +148,13 @@ func Prepare(ctx context.Context, options Options) (*App, error) {
 			}
 		}()
 	}
+	cfg, err := config.Read(root)
+	if err != nil {
+		return nil, err
+	}
+	env := config.ReadEnv(root, os.Environ())
 
-	var storage gotdsession.Storage = &gotdsession.FileStorage{Path: filepath.Join(root, config.SessionFile)}
+	var storage gotdsession.Storage = session.FileStorage{Path: filepath.Join(root, config.SessionFile)}
 	if options.ReadOnly {
 		// 只读检查：已有的会话文件照样读出来校验，但导入写进内存，不创建会话文件。
 		data, err := storage.LoadSession(ctx)
@@ -239,16 +238,9 @@ func Prepare(ctx context.Context, options Options) (*App, error) {
 			}},
 		},
 	}
-	if cfg.Proxy != nil {
-		var auth *proxy.Auth
-		if cfg.Proxy.Username != "" || cfg.Proxy.Password != "" {
-			auth = &proxy.Auth{User: cfg.Proxy.Username, Password: cfg.Proxy.Password}
-		}
-		dialer, err := proxy.SOCKS5("tcp", net.JoinHostPort(cfg.Proxy.IP, strconv.Itoa(cfg.Proxy.Port)), auth, &net.Dialer{Timeout: 10 * time.Second})
-		if err != nil {
-			return nil, fmt.Errorf("proxy: %w", err)
-		}
-		clientOptions.Resolver = dcs.Plain(dcs.PlainOptions{Dial: dialer.(proxy.ContextDialer).DialContext})
+	clientOptions.Resolver, err = TelegramResolver(cfg.Proxy)
+	if err != nil {
+		return nil, err
 	}
 	app.client = telegram.NewClient(cfg.APIID, cfg.APIHash, clientOptions)
 	if options.Register != nil {
@@ -256,6 +248,22 @@ func Prepare(ctx context.Context, options Options) (*App, error) {
 	}
 	prepared = true
 	return app, nil
+}
+
+// TelegramResolver 让运行服务和重新登录使用同一份代理设置。
+func TelegramResolver(cfg *config.Proxy) (dcs.Resolver, error) {
+	if cfg == nil {
+		return nil, nil
+	}
+	var auth *proxy.Auth
+	if cfg.Username != "" || cfg.Password != "" {
+		auth = &proxy.Auth{User: cfg.Username, Password: cfg.Password}
+	}
+	dialer, err := proxy.SOCKS5("tcp", net.JoinHostPort(cfg.IP, strconv.Itoa(cfg.Port)), auth, &net.Dialer{Timeout: 10 * time.Second})
+	if err != nil {
+		return nil, fmt.Errorf("proxy: %w", err)
+	}
+	return dcs.Plain(dcs.PlainOptions{Dial: dialer.(proxy.ContextDialer).DialContext}), nil
 }
 
 // protocolLogger 把 slog 适配给 gotd。gotd 的协议日志在 info 和 debug

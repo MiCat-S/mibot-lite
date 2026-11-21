@@ -57,6 +57,7 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/commands/whois"
 	"github.com/MiCat-S/mibot-lite/internal/commands/yvlu"
 	"github.com/MiCat-S/mibot-lite/internal/config"
+	"github.com/MiCat-S/mibot-lite/internal/fsutil"
 	"github.com/MiCat-S/mibot-lite/internal/mibox"
 )
 
@@ -160,6 +161,22 @@ var miboxImports = []miboxImport{
 // 不同的先转换；再把 MiBox .env 里的 TB_PREFIX 写成这边的 MIBOT_PREFIX。
 // 目标已存在的文件、已设置的前缀都不覆盖。
 func ImportMiBox(miboxRoot, dataDir string, out io.Writer) error {
+	info, err := os.Stat(miboxRoot)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s is not a MiBox deployment directory", miboxRoot)
+	}
+	root := filepath.Dir(dataDir)
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return err
+	}
+	lock, err := app.LockRoot(root)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return err
 	}
@@ -177,9 +194,11 @@ func ImportMiBox(miboxRoot, dataDir string, out io.Writer) error {
 			return err
 		}
 		destination := filepath.Join(dataDir, item.target)
-		if _, err := os.Stat(destination); err == nil {
+		if _, err := os.Lstat(destination); err == nil {
 			fmt.Fprintf(out, "skip %s (already exists)\n", destination)
 			continue
+		} else if !os.IsNotExist(err) {
+			return err
 		}
 		if item.convert != nil {
 			// SQLite 开着 WAL 时，最近的写入可能还在 -wal 文件里没合并，只读主文件会漏掉。
@@ -193,7 +212,7 @@ func ImportMiBox(miboxRoot, dataDir string, out io.Writer) error {
 			}
 			raw = converted
 		}
-		if err := os.WriteFile(destination, raw, 0o600); err != nil {
+		if err := fsutil.WriteFileAtomic(destination, raw, 0o600); err != nil {
 			return err
 		}
 		written[item.target] = true
@@ -201,7 +220,7 @@ func ImportMiBox(miboxRoot, dataDir string, out io.Writer) error {
 		imported++
 	}
 	fmt.Fprintf(out, "%d file(s) imported\n", imported)
-	return importPrefix(miboxRoot, filepath.Dir(dataDir), out)
+	return importPrefix(miboxRoot, root, out)
 }
 
 // importPrefix 把 MiBox 的 TB_PREFIX（空格分隔的前缀）写成 MIBOT_PREFIX，

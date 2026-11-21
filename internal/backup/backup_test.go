@@ -216,6 +216,45 @@ func TestTruncatedArchiveWritesNothing(t *testing.T) {
 	}
 }
 
+func TestDamagedGzipFooterKeepsPreviousAccount(t *testing.T) {
+	archive, _, err := Create(deployment(t), "v1", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	badChecksum := bytes.Clone(archive)
+	badChecksum[len(badChecksum)-8] ^= 1
+	for name, damaged := range map[string][]byte{"truncated": archive[:len(archive)-1], "checksum": badChecksum} {
+		t.Run(name, func(t *testing.T) {
+			target := deployment(t)
+			if _, err := Restore(bytes.NewReader(damaged), target, true); err == nil {
+				t.Fatal("damaged archive was accepted")
+			}
+			if _, err := os.Stat(filepath.Join(target, config.StateFile)); err != nil {
+				t.Fatalf("rejected restore changed target state: %v", err)
+			}
+		})
+	}
+}
+
+func TestRestoreRequiresForceForSymlinkedConfig(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(deployment(t), config.ConfigFile)
+	target := filepath.Join(root, config.ConfigFile)
+	if err := os.Symlink(source, target); err != nil {
+		t.Fatal(err)
+	}
+	archive, names, err := Create(root, "v1", time.Now())
+	if err != nil || len(names) != 1 || names[0] != config.ConfigFile {
+		t.Fatalf("backing up symlinked account: %v, %v", names, err)
+	}
+	if _, err := Restore(bytes.NewReader(archive), root, false); !errors.Is(err, ErrExists) {
+		t.Fatalf("restoring over symlinked account: %v", err)
+	}
+	if link, err := os.Readlink(target); err != nil || link != source {
+		t.Fatalf("rejected restore changed the link: %q, %v", link, err)
+	}
+}
+
 func TestOversizedArchiveIsRefused(t *testing.T) {
 	huge := strings.Repeat("0", maxTotal+10)
 	archive := forge(t, map[string]string{"data/big.json": huge}, true, tar.TypeReg)
@@ -327,5 +366,24 @@ func TestIncompleteManifestWritesNothing(t *testing.T) {
 	got, _ := os.ReadFile(filepath.Join(target, "gotd-session.json"))
 	if string(got) != `{"dc":2}` {
 		t.Fatal("incomplete snapshot touched deployment")
+	}
+}
+
+func TestCreateRefusesUnrestorableDeployment(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, config.SessionFile), []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Create(root, "test", time.Now()); err == nil {
+		t.Fatal("backed up session without account")
+	}
+	if err := os.WriteFile(filepath.Join(root, config.ConfigFile), []byte(account), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(filepath.Join(root, config.SessionFile), maxTotal-1); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Create(root, "test", time.Now()); err == nil {
+		t.Fatal("returned an archive exceeding the restore limit")
 	}
 }

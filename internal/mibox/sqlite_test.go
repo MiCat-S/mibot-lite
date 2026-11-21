@@ -1,10 +1,22 @@
 package mibox
 
 import (
+	"bytes"
 	"os"
 	"strings"
 	"testing"
 )
+
+func TestRejectsImpossibleSQLiteLengths(t *testing.T) {
+	overflowed := bytes.Repeat([]byte{0xff}, 9)
+	if _, err := record(overflowed); err == nil {
+		t.Fatal("record with an overflowing header length was accepted")
+	}
+	file := sqliteFile{data: make([]byte, 512), pageSize: 512, usable: 512}
+	if _, err := file.payload(file.data, 0, ^uint64(0)); err == nil {
+		t.Fatal("payload larger than its database was accepted")
+	}
+}
 
 // testdata/alias.db 是用 Python 的 sqlite3 生成的真实数据库：403 行，
 // 多页（有内部页），其中一行的值长到要用溢出页。

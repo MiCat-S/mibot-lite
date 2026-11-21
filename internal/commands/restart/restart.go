@@ -22,6 +22,7 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/bot"
 	"github.com/MiCat-S/mibot-lite/internal/command"
 	"github.com/MiCat-S/mibot-lite/internal/commands/kit"
+	"github.com/MiCat-S/mibot-lite/internal/config"
 	"github.com/MiCat-S/mibot-lite/internal/store"
 )
 
@@ -70,7 +71,7 @@ func systemctl() string {
 // Register 注册 .restart 和处理回执的钩子，返回的 Restarter 交给 .update。
 func Register(a *app.App) *Restarter {
 	r := &Restarter{a: a, service: a.Env.Get("MIBOT_SERVICE", "mibot-lite.service"),
-		store: store.New(filepath.Join(a.Root, "restart-receipt.json"), func() receiptDocument { return receiptDocument{} })}
+		store: store.New(filepath.Join(a.Root, config.RestartReceiptFile), func() receiptDocument { return receiptDocument{} })}
 	a.Registry.Register(&command.Command{Name: "restart", Group: command.GroupSystem, Description: "重启 systemd 服务", Help: restartHelp, Handle: func(ctx context.Context, inv *command.Invocation) error {
 		// 重启不收参数；带了参数多半是打错了，别真的重启。只带 help 的由派发器显示说明。
 		if len(inv.Args) > 0 {

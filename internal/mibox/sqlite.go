@@ -82,7 +82,7 @@ func (f *sqliteFile) rows(root uint32) ([][]any, error) {
 			case 0x0D: // 叶子页：负载长度、rowid、负载
 				size, used := varint(page[offset:])
 				_, rowidLen := varint(page[offset+used:])
-				payload, err := f.payload(page, offset+used+rowidLen, int(size))
+				payload, err := f.payload(page, offset+used+rowidLen, size)
 				if err != nil {
 					return err
 				}
@@ -100,11 +100,18 @@ func (f *sqliteFile) rows(root uint32) ([][]any, error) {
 		}
 		return nil
 	}
-	return out, walk(root)
+	if err := walk(root); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // payload 取出一个叶子单元的完整负载，放不下的部分在溢出页链上。
-func (f *sqliteFile) payload(page []byte, start, size int) ([]byte, error) {
+func (f *sqliteFile) payload(page []byte, start int, sizeField uint64) ([]byte, error) {
+	if sizeField > uint64(len(f.data)) {
+		return nil, errors.New("SQLite 负载越界")
+	}
+	size := int(sizeField)
 	maxLocal := f.usable - 35
 	if size <= maxLocal {
 		if start+size > len(page) {
@@ -152,12 +159,12 @@ func varint(data []byte) (uint64, int) {
 // record 解一条记录：文本是 string，整数是 int64，浮点是 float64，NULL 是 nil，BLOB 是 []byte。
 func record(payload []byte) ([]any, error) {
 	headerSize, used := varint(payload)
-	if int(headerSize) > len(payload) {
+	if headerSize < uint64(used) || headerSize > uint64(len(payload)) {
 		return nil, errors.New("SQLite 记录头越界")
 	}
 	var types []uint64
 	for position := used; position < int(headerSize); {
-		value, n := varint(payload[position:])
+		value, n := varint(payload[position:headerSize])
 		types = append(types, value)
 		position += n
 	}

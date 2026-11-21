@@ -59,8 +59,8 @@ chmod +x /tmp/mibot-lite
 ```
 
 依次询问 API ID、API hash、手机号（含 `+` 和国家码）、验证码，开了两步验证
-还会问密码。**全部校验通过之前不写任何文件**：会话先在内存里建好，Telegram
-确认身份后才落盘，中途退出不会留下半个会话。
+还会问密码。会话先在内存里建好，Telegram 确认身份后才写入账号文件。
+要用 `--login --force` 替换已有会话，先停止这个目录上的服务。
 
 成功后目录里有 `config.json`（gramjs 格式，MiBox 也读得懂）和
 `gotd-session.json`。

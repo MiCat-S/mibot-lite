@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 
 	gotdsession "github.com/gotd/td/session"
 	"github.com/gotd/td/telegram"
@@ -22,6 +21,7 @@ import (
 	"github.com/gotd/td/tg"
 	"golang.org/x/term"
 
+	"github.com/MiCat-S/mibot-lite/internal/app"
 	"github.com/MiCat-S/mibot-lite/internal/config"
 	"github.com/MiCat-S/mibot-lite/internal/fsutil"
 	"github.com/MiCat-S/mibot-lite/internal/session"
@@ -37,7 +37,7 @@ type Options struct {
 	Out     io.Writer
 }
 
-// Run 登录并写出文件。Telegram 确认账号之前，磁盘上什么都不会改。
+// Run 登录并写出文件。Telegram 确认账号之前不改账号配置。
 func Run(ctx context.Context, options Options) error {
 	out := options.Out
 	if out == nil {
@@ -54,25 +54,36 @@ func Run(ctx context.Context, options Options) error {
 	if info, err := os.Stat(root); err != nil || !info.IsDir() {
 		return fmt.Errorf("deployment directory %s does not exist; create it first", root)
 	}
+	lock, err := app.LockRoot(root)
+	if errors.Is(err, app.ErrRunning) {
+		return errors.New("a mibot-lite instance is running on this directory; stop it before signing in")
+	}
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+
 	existing := map[string]any{}
+	var proxy *config.Proxy
 	if raw, err := os.ReadFile(filepath.Join(root, config.ConfigFile)); err == nil {
 		decoder := json.NewDecoder(strings.NewReader(string(raw)))
 		decoder.UseNumber()
 		if err := decoder.Decode(&existing); err != nil {
 			return fmt.Errorf("config.json: %w", err)
 		}
-		current, _ := existing["session"].(string)
-		switch {
-		case current != "" && !options.Force:
-			return errors.New("config.json already holds a session; pass --force to replace it")
-		case current != "":
-			// --force 的意思是「替换会话」，不是「在有进程正用着它时
-			// 替换」。那样的话，服务会继续用一个已经不是磁盘上那份的
-			// 会话运行，下次重启就会悄悄变成另一个登录。
-			if err := refuseWhileRunning(root); err != nil {
-				return err
-			}
+		if existing == nil {
+			return errors.New("config.json must contain an object")
 		}
+		current, _ := existing["session"].(string)
+		if current != "" && !options.Force {
+			return errors.New("config.json already holds a session; pass --force to replace it")
+		}
+		proxy, err = config.ParseProxy(raw)
+		if err != nil {
+			return err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
 	}
 	prompt := &terminal{in: in, out: out, reader: bufio.NewReader(in)}
 	apiID, apiHash := options.APIID, options.APIHash
@@ -111,7 +122,11 @@ func Run(ctx context.Context, options Options) error {
 	if name, ok := existing["app_name"].(string); ok && strings.TrimSpace(name) != "" {
 		device = name
 	}
-	client := telegram.NewClient(apiID, apiHash, telegram.Options{SessionStorage: memory, Device: telegram.DeviceConfig{DeviceModel: device}})
+	resolver, err := app.TelegramResolver(proxy)
+	if err != nil {
+		return err
+	}
+	client := telegram.NewClient(apiID, apiHash, telegram.Options{SessionStorage: memory, Device: telegram.DeviceConfig{DeviceModel: device}, Resolver: resolver})
 	var who string
 	err = client.Run(ctx, func(ctx context.Context) error {
 		flow := auth.NewFlow(authenticator{prompt: prompt}, auth.SendCodeOptions{})
@@ -153,44 +168,38 @@ func Run(ctx context.Context, options Options) error {
 	if err != nil {
 		return err
 	}
-	if err := writeFile(filepath.Join(root, config.ConfigFile), append(document, '\n')); err != nil {
+	if err := writeAccount(ctx, root, append(document, '\n'), data); err != nil {
 		return err
-	}
-	file := &gotdsession.FileStorage{Path: filepath.Join(root, config.SessionFile)}
-	if err := (&gotdsession.Loader{Storage: file}).Save(ctx, data); err != nil {
-		return fmt.Errorf("write %s: %w", config.SessionFile, err)
-	}
-	if err := os.Chmod(file.Path, 0o600); err != nil {
-		fmt.Fprintf(out, "Warning: could not restrict %s to owner-only (0600): %v\n", config.SessionFile, err)
 	}
 	fmt.Fprintf(out, "Signed in as %s. config.json and %s written to %s\n", who, config.SessionFile, root)
 	return nil
 }
 
-// refuseWhileRunning 在已有进程持有这个部署的实例锁时返回错误。
-//
-// 这个锁和运行中的服务拿的是同一个 flock，所以这里直接问内核，而不是
-// 根据 pid 文件或服务单元名去猜：不管部署是跑在 systemd 下、终端里，
-// 还是根本没在跑，结果都是对的。
-func refuseWhileRunning(root string) error {
-	path := filepath.Join(root, config.LockFile)
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+func writeAccount(ctx context.Context, root string, document []byte, data *gotdsession.Data) error {
+	staging, err := os.MkdirTemp(root, ".login-")
 	if err != nil {
-		// 锁文件连打开都打不开，并不能说明有东西在运行；如果目录
-		// 不可用，登录后面自然会因为别的原因失败。
-		return nil
+		return err
 	}
-	defer file.Close()
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		return errors.New("a mibot-lite instance is running on this directory; stop it before signing in again")
+	defer os.RemoveAll(staging)
+	stagedConfig := filepath.Join(staging, config.ConfigFile)
+	if err := fsutil.WriteFileAtomic(stagedConfig, document, 0o600); err != nil {
+		return err
 	}
-	// 马上释放：登录不需要一直拿着锁，只需要知道有没有别人拿着。
-	_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
-	return nil
-}
-
-func writeFile(path string, content []byte) error {
-	return fsutil.WriteFileAtomic(path, content, 0o600)
+	file := session.FileStorage{Path: filepath.Join(staging, config.SessionFile)}
+	if err := (&gotdsession.Loader{Storage: file}).Save(ctx, data); err != nil {
+		return fmt.Errorf("write %s: %w", config.SessionFile, err)
+	}
+	// 启动时可以从 config.json 导入缺失的 gotd 会话。先撤下缓存，再原子切换配置，
+	// 中途退出时仍有一份完整配置可供启动，不会混用两个账号。
+	for _, name := range []string{config.StateFile, config.StateFile + ".cursor", config.RestartReceiptFile, config.SessionFile} {
+		if err := os.Remove(filepath.Join(root, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	if err := os.Rename(stagedConfig, filepath.Join(root, config.ConfigFile)); err != nil {
+		return err
+	}
+	return os.Rename(file.Path, filepath.Join(root, config.SessionFile))
 }
 
 type terminal struct {

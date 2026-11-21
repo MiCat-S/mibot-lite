@@ -21,6 +21,7 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/bot"
 	"github.com/MiCat-S/mibot-lite/internal/commands"
 	"github.com/MiCat-S/mibot-lite/internal/config"
+	"github.com/MiCat-S/mibot-lite/internal/fsutil"
 	"github.com/MiCat-S/mibot-lite/internal/login"
 	"github.com/MiCat-S/mibot-lite/internal/logtail"
 	"github.com/MiCat-S/mibot-lite/internal/sysinfo"
@@ -94,6 +95,17 @@ func main() { os.Exit(run(parseFlags())) }
 
 // run 按参数选一种模式执行，返回退出码。
 func run(f flags) int {
+	serviceMode := f.serve || f.check || f.verifyLive
+	modes := 0
+	for _, selected := range []bool{f.serve, f.check, f.verifyLive, f.signIn, f.restoreFrom != "", f.backupTo != "", f.showVersion} {
+		if selected {
+			modes++
+		}
+	}
+	if modes > 1 || (f.importMibox != "" && modes == 1 && !serviceMode) || (modes == 0 && f.importMibox == "") {
+		flag.Usage()
+		return 2
+	}
 	if f.showVersion {
 		fmt.Println(displayVersion())
 		return 0
@@ -101,13 +113,12 @@ func run(f flags) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	connects := f.serve || f.check || f.verifyLive
 	if f.importMibox != "" {
 		if err := commands.ImportMiBox(f.importMibox, filepath.Join(f.root, "data"), os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, "mibot-lite --import-mibox:", err)
 			return 1
 		}
-		if !connects {
+		if !serviceMode {
 			return 0
 		}
 	}
@@ -122,9 +133,6 @@ func run(f flags) int {
 			return 1
 		}
 		return 0
-	case !connects:
-		flag.Usage()
-		return 2
 	}
 	return runService(ctx, f)
 }
@@ -133,7 +141,7 @@ func run(f flags) int {
 func runBackup(f flags) int {
 	archive, names, err := backup.Create(f.root, displayVersion(), time.Now())
 	if err == nil {
-		err = os.WriteFile(f.backupTo, archive, 0o600)
+		err = fsutil.WriteFileAtomic(f.backupTo, archive, 0o600)
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "mibot-lite --backup:", err)
