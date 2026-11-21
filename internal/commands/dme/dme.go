@@ -102,7 +102,10 @@ func (s *service) command(ctx context.Context, inv *command.Invocation) error {
 			return ctx.Err()
 		}
 		inv.Log.Error("dme.failed", slog.String("error", err.Error()))
-		_, _ = inv.Client.SendSelf(context.WithoutCancel(ctx), command.Escape("❌ 在「"+inv.Client.Peers().Title(inv.Message.Peer)+"」删除自己的消息失败，请检查权限、网络和 Telegram 限制后重试"))
+		_, notifyErr := inv.Client.SendSelf(ctx, command.Escape("❌ 在「"+inv.Client.Peers().Title(inv.Message.Peer)+"」删除自己的消息失败，请检查权限、网络和 Telegram 限制后重试"))
+		if notifyErr != nil {
+			return kit.FailWith("删除失败", err)
+		}
 	}
 	return nil
 }
@@ -161,7 +164,7 @@ func newDmeRun(ctx context.Context, client *bot.Client, message *bot.Message, lo
 	}
 	run.direct = message.Saved
 	inputChannel, _ := bot.InputChannel(peer)
-	if anti && isChannel && channelInfo.Broadcast && inputChannel != nil {
+	if anti && message.Out && isChannel && channelInfo.Broadcast && inputChannel != nil {
 		result, err := run.api.ChannelsGetParticipant(ctx, &tg.ChannelsGetParticipantRequest{Channel: inputChannel, Participant: &tg.InputPeerSelf{}})
 		if err == nil {
 			_, run.direct = result.Participant.(*tg.ChannelParticipantCreator)
@@ -214,7 +217,15 @@ func topicOf(m *tg.Message) int {
 
 // eligible 判断一条消息该不该删：在命令之前、在当前话题里、并且是自己的。
 func (r *dmeRun) eligible(m *tg.Message) bool {
-	return m.ID > 0 && m.ID < r.message.ID && (r.topicID == 0 || topicOf(m) == r.topicID) && (r.direct || r.mine(m))
+	if m.ID <= 0 || m.ID >= r.message.ID || (!r.direct && !r.mine(m)) {
+		return false
+	}
+	if r.topicID != 0 {
+		return topicOf(m) == r.topicID
+	}
+	// 论坛的 General 不带话题 ID，但仍应排除其他论坛话题。
+	reply, _ := m.ReplyTo.(*tg.MessageReplyHeader)
+	return reply == nil || !reply.ForumTopic
 }
 
 // scrub 是防撤回模式：删之前先把文字改成「占位符」、把媒体换成一张灰图，

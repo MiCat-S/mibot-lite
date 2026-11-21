@@ -2,9 +2,12 @@ package save
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/gotd/td/tg"
 
@@ -26,7 +29,7 @@ func TestParseLink(t *testing.T) {
 			t.Errorf("parseLink(%q) = %+v %v, want %+v", text, got, ok, want)
 		}
 	}
-	for _, text := range []string{"https://t.me/durov", "https://example.com/c/1/2", "t.me/c/abc/1", "hello", "t.me/ab/1"} {
+	for _, text := range []string{"https://t.me/durov", "https://example.com/c/1/2", "t.me/c/abc/1", "hello", "t.me/ab/1", "t.me/durov/4294967301"} {
 		if _, ok := parseLink(text); ok {
 			t.Errorf("%q parsed as a message link", text)
 		}
@@ -43,6 +46,7 @@ func TestParseSaveArgs(t *testing.T) {
 		t.Errorf("a reversed range should be put in order: %+v %v", request, err)
 	}
 	for label, args := range map[string][]string{
+		"two ranges":     {"t.me/c/1/1|t.me/c/1/2", "t.me/c/1/3|t.me/c/1/4"},
 		"two chats":      {"t.me/c/1/1|t.me/c/2/9"},
 		"half a range":   {"t.me/c/1/1|nope"},
 		"two targets":    {"t.me/durov/1", "@a", "@b"},
@@ -178,5 +182,48 @@ func TestSentID(t *testing.T) {
 	}
 	if got := sentID(&tg.UpdatesTooLong{}); got != 0 {
 		t.Errorf("an unreadable reply = %d, want 0", got)
+	}
+}
+
+func TestPublishLocalKeepsBothDownloads(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "1_"+sanitizeSegment(strings.Repeat("𠀀", 80)))
+	if !utf8.ValidString(path) {
+		t.Fatal("split UTF-8 filename")
+	}
+	for _, body := range []string{"first", "second"} {
+		src := filepath.Join(dir, "temp")
+		if err := os.WriteFile(src, []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+		got, err := publishLocal(src, path, []byte(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := path
+		if body == "second" {
+			want += "_2"
+		}
+		if got != want {
+			t.Fatalf("got %q, want %q", got, want)
+		}
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != "first" {
+		t.Fatalf("first download: %q %v", got, err)
+	}
+	// 老附件占用了新附件对应的元数据名时，仍要另选新名字。
+	other := filepath.Join(dir, "3_report")
+	if err := os.WriteFile(other+".json", []byte("old attachment"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := publishLocal(path, other, []byte("metadata")); err != nil || got != other+"_2" {
+		t.Fatalf("collision: %q %v", got, err)
+	}
+	if body, err := os.ReadFile(other + ".json"); err != nil || string(body) != "old attachment" {
+		t.Fatalf("old attachment: %q %v", body, err)
+	}
+	if _, err := publishLocal(path, filepath.Join(path, "impossible"), nil); err == nil {
+		t.Fatal("invalid destination accepted")
 	}
 }

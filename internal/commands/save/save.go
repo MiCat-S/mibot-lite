@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gotd/td/telegram/uploader"
 	"github.com/gotd/td/tg"
@@ -105,11 +106,11 @@ func parseLink(text string) (messageLink, bool) {
 	if match == nil {
 		return messageLink{}, false
 	}
-	id, err := strconv.Atoi(match[3])
+	id, err := strconv.ParseInt(match[3], 10, 32)
 	if err != nil || id <= 0 {
 		return messageLink{}, false
 	}
-	link := messageLink{ID: id, Raw: text}
+	link := messageLink{ID: int(id), Raw: text}
 	if match[1] != "" {
 		link.ChatID = "-100" + match[1]
 	} else {
@@ -148,6 +149,9 @@ func parseSaveArgs(args []string) (saveRequest, error) {
 	var others []string
 	for _, argument := range args {
 		if left, right, ok := strings.Cut(argument, "|"); ok {
+			if request.Range != nil {
+				return request, kit.Fail("一次只能保存一个消息范围")
+			}
 			from, okFrom := parseLink(left)
 			to, okTo := parseLink(right)
 			if !okFrom || !okTo {
@@ -558,6 +562,7 @@ func (s *saver) saveLocal(ctx context.Context, message *tg.Message, link message
 	if err != nil {
 		return "", err
 	}
+	defer os.Remove(path)
 	chat := link.Username
 	if chat == "" {
 		chat = strings.TrimPrefix(link.ChatID, "-100")
@@ -567,26 +572,22 @@ func (s *saver) saveLocal(ctx context.Context, message *tg.Message, link message
 	}
 	directory := filepath.Join(s.root, "save", sanitizeSegment(chat))
 	if err := os.MkdirAll(directory, 0o700); err != nil {
-		os.Remove(path)
 		return "", err
 	}
 	name := strconv.Itoa(message.ID) + localExtension(source)
 	if source.FileName != "" {
 		name = strconv.Itoa(message.ID) + "_" + sanitizeSegment(source.FileName)
 	}
-	final := uniquePath(filepath.Join(directory, name))
-	if err := os.Rename(path, final); err != nil {
-		os.Remove(path)
-		return "", err
-	}
 	metadata, _ := json.MarshalIndent(map[string]any{
 		"source": link.url(), "message_id": message.ID,
 		"date": time.Unix(int64(message.Date), 0).UTC().Format(time.RFC3339),
 		"text": bot.MessageText(message), "mime_type": source.MimeType,
 	}, "", "  ")
-	if err := os.WriteFile(final+".json", metadata, 0o600); err != nil {
+	final, err := publishLocal(path, filepath.Join(directory, name), metadata)
+	if err != nil {
 		return "", err
 	}
+
 	relative, _ := filepath.Rel(s.root, final)
 	return relative, nil
 }
@@ -598,8 +599,13 @@ func sanitizeSegment(value string) string {
 	if value == "" {
 		return "file"
 	}
-	if runes := []rune(value); len(runes) > 80 {
-		value = string(runes[:80])
+	// 给消息 ID、重名序号和来源文件的 .json 后缀留出空间。
+	count := 0
+	for index, r := range value {
+		if count == 80 || index+utf8.RuneLen(r) > 220 {
+			return value[:index]
+		}
+		count++
 	}
 	return value
 }
@@ -627,17 +633,48 @@ func localExtension(source *bot.MediaSource) string {
 	return ".bin"
 }
 
-func uniquePath(path string) string {
-	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-		return path
-	}
+// 媒体和元数据分别占用一个文件名。同一条消息换过附件时，旧附件本身也可能以 .json 结尾。
+func publishLocal(source, path string, metadata []byte) (string, error) {
 	extension := filepath.Ext(path)
 	base := strings.TrimSuffix(path, extension)
-	for index := 2; ; index++ {
-		candidate := base + "_" + strconv.Itoa(index) + extension
-		if _, err := os.Stat(candidate); errors.Is(err, os.ErrNotExist) {
-			return candidate
+	for index := 1; ; index++ {
+		candidate := path
+		if index > 1 {
+			candidate = base + "_" + strconv.Itoa(index) + extension
 		}
+		slot, err := os.OpenFile(candidate, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		if err := slot.Close(); err != nil {
+			os.Remove(candidate)
+			return "", err
+		}
+		sidecar := candidate + ".json"
+		file, err := os.OpenFile(sidecar, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err != nil {
+			os.Remove(candidate)
+			if errors.Is(err, os.ErrExist) {
+				continue
+			}
+			return "", err
+		}
+		_, err = file.Write(metadata)
+		if closeErr := file.Close(); err == nil {
+			err = closeErr
+		}
+		if err == nil {
+			err = os.Rename(source, candidate)
+		}
+		if err != nil {
+			os.Remove(sidecar)
+			os.Remove(candidate)
+			return "", err
+		}
+		return candidate, nil
 	}
 }
 

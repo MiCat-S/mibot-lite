@@ -473,6 +473,12 @@ func TestMessageModes(t *testing.T) {
 	if got := last(calls); !strings.Contains(got, "符合条件 1 人") || !strings.Contains(got, "⚠️ 1 人查不到发言记录，已跳过") {
 		t.Errorf("模式 2：%q", got)
 	}
+	if err := f.run(t, here, "2 213503982334601 search"); err != nil {
+		t.Fatal(err)
+	}
+	if calls := f.fake.take(); !slices.Contains(calls, "search 11 min=0") {
+		t.Errorf("长时间范围应搜索全部消息：%v", calls)
+	}
 	if err := f.run(t, here, "3 10 search"); err != nil {
 		t.Fatal(err)
 	}

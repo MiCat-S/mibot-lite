@@ -547,8 +547,9 @@ func (s *service) search(ctx context.Context, inv *command.Invocation, opts opti
 		}
 		if err != nil {
 			inv.Log.Warn("search.source_failed", "source", handle, "error", err.Error())
-			s.pruneIfGone(handle, err)
-			continue
+			if pruneErr := s.pruneIfGone(handle, err); pruneErr != nil {
+				inv.Log.Warn("search.prune_failed", "source", handle, "error", pruneErr.Error())
+			}
 		}
 		found = append(found, videos...)
 		if len(videos) > 0 && !opts.kkp && !opts.random {
@@ -571,12 +572,12 @@ func (s *service) search(ctx context.Context, inv *command.Invocation, opts opti
 
 // pruneIfGone 在 Telegram 明确说用户名不存在时移除这个频道源，和 MiBox 一样；
 // 连不上、限流之类的暂时错误不动它。
-func (s *service) pruneIfGone(handle string, err error) {
+func (s *service) pruneIfGone(handle string, err error) error {
 	if !tgerr.Is(err, "USERNAME_NOT_OCCUPIED", "USERNAME_INVALID") {
-		return
+		return nil
 	}
 	s.sources.forget(handle)
-	_ = s.store.Update(func(cfg *config) error {
+	return s.store.Update(func(cfg *config) error {
 		cfg.ChannelList = slices.DeleteFunc(cfg.ChannelList, func(item channel) bool { return item.Handle == handle })
 		if cfg.DefaultChannel != nil && *cfg.DefaultChannel == handle {
 			cfg.DefaultChannel = nil
@@ -661,7 +662,7 @@ func (s *service) channelVideos(ctx context.Context, inv *command.Invocation, it
 	}
 	messages, err := searchMessages(ctx, client, found.peer, opts.query, nil, 200)
 	if err != nil {
-		return nil, err
+		return result, err
 	}
 	for _, message := range messages {
 		if !matches(message, opts.query) {
@@ -679,7 +680,7 @@ func (s *service) channelVideos(ctx context.Context, inv *command.Invocation, it
 		}
 		around, err := history(ctx, client, found.peer, message.ID+10, 20)
 		if err != nil {
-			return nil, err
+			return result, err
 		}
 		var album []*tg.Message
 		for _, member := range around {

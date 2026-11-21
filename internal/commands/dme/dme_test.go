@@ -64,6 +64,20 @@ func photoMessage(id int) *tg.Message {
 	return &tg.Message{ID: id, Date: int(time.Now().Unix()), Media: &tg.MessageMediaPhoto{}}
 }
 
+func TestGeneralTopicDoesNotDeleteOtherTopics(t *testing.T) {
+	run := &dmeRun{message: &bot.Message{ID: 100}}
+	general := &tg.Message{ID: 70, Out: true}
+	topic := &tg.Message{ID: 80, Out: true}
+	topic.SetReplyTo(&tg.MessageReplyHeader{ForumTopic: true, ReplyToMsgID: 40})
+	if !run.eligible(general) || run.eligible(topic) {
+		t.Fatal("General should only delete its own messages")
+	}
+	run.topicID = 40
+	if run.eligible(general) || !run.eligible(topic) {
+		t.Fatal("a specific topic should only delete its own messages")
+	}
+}
+
 // 占位图只上传一次，后面的消息引用第一次换上去的那张照片。
 func TestScrubUploadsPlaceholderOnce(t *testing.T) {
 	fake := &fakeTelegram{}

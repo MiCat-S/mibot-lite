@@ -321,7 +321,11 @@ func (s *service) matches(ctx context.Context, client *bot.Client, g group, req 
 func (s *service) countMessages(ctx context.Context, client *bot.Client, g group, req request, user *tg.User) (int, error) {
 	request := &tg.MessagesSearchRequest{Peer: g.peer, Q: "", Filter: &tg.InputMessagesFilterEmpty{}, Limit: 1}
 	if req.mode == "2" {
-		request.MinDate = int(max(0, s.now().Unix()-int64(req.day)*86400))
+		now := s.now().Unix()
+		const daySeconds = 24 * 60 * 60
+		if int64(req.day) <= now/daySeconds {
+			request.MinDate = int(now - int64(req.day)*daySeconds)
+		}
 	}
 	request.SetFromID(&tg.InputPeerUser{UserID: user.ID, AccessHash: user.AccessHash})
 	var result tg.MessagesMessagesClass

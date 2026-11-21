@@ -18,6 +18,7 @@ import (
 // permissionFake 是只回答两个权限接口的假 Telegram：查自己的成员身份按 participantErr
 // 失败或返回普通成员，管理员列表按 admins 返回（adminsErr 不为空时失败）。
 type permissionFake struct {
+	participant    tg.ChannelParticipantClass
 	participantErr error
 	admins         []tg.ChannelParticipantClass
 	adminsErr      error
@@ -32,7 +33,11 @@ func (p *permissionFake) Invoke(_ context.Context, input bin.Encoder, output bin
 		if p.participantErr != nil {
 			return p.participantErr
 		}
-		value = &tg.ChannelsChannelParticipant{Participant: &tg.ChannelParticipantSelf{UserID: 1, InviterID: 2, Date: 1}}
+		participant := p.participant
+		if participant == nil {
+			participant = &tg.ChannelParticipantSelf{UserID: 1, InviterID: 2, Date: 1}
+		}
+		value = &tg.ChannelsChannelParticipant{Participant: participant}
 	case *tg.ChannelsGetParticipantsRequest:
 		p.calls = append(p.calls, fmt.Sprintf("participants %s limit=%d", request.Filter.TypeName(), request.Limit))
 		if p.adminsErr != nil {
@@ -65,9 +70,11 @@ func TestIsAdminFallsBackToAdminList(t *testing.T) {
 		calls []string
 	}{
 		"直接查到普通成员": {fake: &permissionFake{}, want: false, calls: []string{"participant"}},
+		"直接查到没有删消息权限的自己": {fake: &permissionFake{participant: &tg.ChannelParticipantAdmin{UserID: 1, PromotedBy: 9, Date: 1}}, want: false,
+			calls: []string{"participant"}},
 		"列表里有自己": {fake: &permissionFake{participantErr: failed, admins: []tg.ChannelParticipantClass{
 			&tg.ChannelParticipantCreator{UserID: 9},
-			&tg.ChannelParticipantAdmin{UserID: 1, PromotedBy: 9, Date: 1},
+			&tg.ChannelParticipantAdmin{UserID: 1, PromotedBy: 9, Date: 1, AdminRights: tg.ChatAdminRights{DeleteMessages: true}},
 		}}, want: true, calls: []string{"participant", "participants channelParticipantsAdmins limit=100"}},
 		"列表里只有提拔别人的自己": {fake: &permissionFake{participantErr: failed, admins: []tg.ChannelParticipantClass{
 			&tg.ChannelParticipantAdmin{UserID: 5, PromotedBy: 1, Date: 1},

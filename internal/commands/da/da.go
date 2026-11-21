@@ -300,7 +300,7 @@ func (s *daService) finish(ctx context.Context, client *bot.Client, task *daTask
 	defer cancel()
 	task.SavedMessageID = s.progress(feedback, client, task, status)
 	s.save(task)
-	if completed && len(task.Errors) == 0 {
+	if completed && len(task.Errors) == 0 && ctx.Err() == nil {
 		err := s.store.Update(func(db *daDB) error {
 			var kept []daTask
 			for _, item := range db.Tasks {
@@ -361,9 +361,11 @@ func (r *daRun) isAdmin() bool {
 		return r.inAdminList(channel)
 	}
 	r.client.Peers().RememberUsers(result.Users)
-	switch result.Participant.(type) {
-	case *tg.ChannelParticipantAdmin, *tg.ChannelParticipantCreator:
+	switch participant := result.Participant.(type) {
+	case *tg.ChannelParticipantCreator:
 		return true
+	case *tg.ChannelParticipantAdmin:
+		return participant.AdminRights.DeleteMessages
 	}
 	return false
 }
@@ -387,7 +389,7 @@ func (r *daRun) inAdminList(channel *tg.InputChannel) bool {
 		switch value := participant.(type) {
 		case *tg.ChannelParticipantAdmin:
 			if value.UserID == self {
-				return true
+				return value.AdminRights.DeleteMessages
 			}
 		case *tg.ChannelParticipantCreator:
 			if value.UserID == self {

@@ -216,6 +216,12 @@ func (s *service) handle(ctx context.Context, inv *command.Invocation) error {
 		admins = map[int64]bool{}
 	}
 	out, err := s.scan(ctx, inv, g, req, admins)
+	// 中途取消或翻页失败也可能已经移出了成员，旧的搜索报告已经失效。
+	if !req.search {
+		if err := s.cache.clearChat(g.chatID); err != nil {
+			inv.Log.Warn("clean_member.cache_write_failed", "error", err.Error())
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -225,7 +231,11 @@ func (s *service) handle(ctx context.Context, inv *command.Invocation) error {
 	if data.Users == nil {
 		data.Users = []userInfo{}
 	}
-	s.remember(inv, key, data, req.search)
+	if req.search {
+		if err := s.cache.save(key, data, now); err != nil {
+			inv.Log.Warn("clean_member.cache_write_failed", "error", err.Error())
+		}
+	}
 	return s.finish(ctx, inv, data, req, out)
 }
 
@@ -239,21 +249,6 @@ func verb(req request) string {
 // cached 取一份还没过期的搜索结果。
 func (s *service) cached(key string) (cacheData, bool) {
 	return s.cache.load(key, s.now())
-}
-
-// remember 存下这次的结果。v2 移出之后也把名单存成缓存，24 小时内再搜会拿到一份
-// 已经移出去的人；这里只存搜索的结果，移出之后把这个群组的缓存都清掉——人少了，
-// 别的模式的结果也跟着变了。存不进去不影响这次的结果，只记日志。
-func (s *service) remember(inv *command.Invocation, key string, data cacheData, search bool) {
-	var err error
-	if search {
-		err = s.cache.save(key, data, s.now())
-	} else {
-		err = s.cache.clearChat(data.ChatID)
-	}
-	if err != nil {
-		inv.Log.Warn("clean_member.cache_write_failed", "error", err.Error())
-	}
 }
 
 // outcome 是一次扫描的结果。

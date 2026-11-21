@@ -165,12 +165,13 @@ func TestConfigCompatible(t *testing.T) {
 
 // fakeTelegram 是几个频道和一个对话（用户 1 的收藏夹）。
 type fakeTelegram struct {
-	mu       sync.Mutex
-	channels map[string]*tg.Channel
-	messages map[int64][]*tg.Message
-	comments map[int][]*tg.Message
-	linked   map[int64]int64
-	restrict bool
+	mu             sync.Mutex
+	channels       map[string]*tg.Channel
+	messages       map[int64][]*tg.Message
+	comments       map[int][]*tg.Message
+	linked         map[int64]int64
+	failedSearchID int64
+	restrict       bool
 	// forwardErr 不为空时转发返回这个错误（不是禁止转发的那种）。
 	forwardErr error
 	// reply 是命令回复的那条消息，按编号读回时返回它。
@@ -243,6 +244,9 @@ func (f *fakeTelegram) Invoke(_ context.Context, input bin.Encoder, output bin.D
 		id := peerChannel(request.Peer)
 		_, video := request.Filter.(*tg.InputMessagesFilterVideo)
 		f.calls = append(f.calls, fmt.Sprintf("search %d q=%q video=%v limit=%d", id, request.Q, video, request.Limit))
+		if id == f.failedSearchID {
+			return tgerr.New(400, "CHANNEL_PRIVATE")
+		}
 		keep := func(message *tg.Message) bool {
 			if video {
 				if _, _, ok := videoDocument(message); !ok {
@@ -375,6 +379,22 @@ func TestSearchForwardsBestMatch(t *testing.T) {
 	// 讨论组里的 9 号文件名完全匹配（100 分），比频道里只有文字匹配的 1 号（50 分）优先。
 	if !strings.Contains(calls, "forward 30#[9]") || !strings.HasSuffix(calls, "delete [500]") {
 		t.Errorf("应转发讨论组的 9 号并删掉命令：\n%s", calls)
+	}
+}
+
+func TestSearchKeepsDiscussionResultWhenChannelSearchFails(t *testing.T) {
+	fake := newFake()
+	fake.failedSearchID = 10
+	post := &tg.Message{ID: 7, PeerID: &tg.PeerChannel{ChannelID: 30}, Message: "海贼王", Date: 1}
+	post.SetReplies(tg.MessageReplies{Replies: 1})
+	fake.messages[30] = []*tg.Message{post}
+	fake.comments[7] = []*tg.Message{video(30, 9, "", "海贼王.mp4", 90)}
+	h := newHarness(t, fake, config{SchemaVersion: 1, ChannelList: []channel{{Handle: "@first", LinkedGroup: "@talk"}}})
+	if err := h.run(t, "海贼王"); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(fake.calls, "forward 30#[9]") {
+		t.Fatalf("search discarded a discussion result: %v", fake.calls)
 	}
 }
 
