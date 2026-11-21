@@ -4,7 +4,7 @@ package ip
 import (
 	"context"
 	"encoding/json"
-	"net"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"strings"
@@ -37,21 +37,36 @@ type ipResult struct {
 const ipAPI = "http://ip-api.com/json/%s?lang=zh-CN&fields=status,message,country,regionName,city,isp,org,as,query,timezone,proxy,hosting"
 
 var (
-	ipv4Pattern  = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`)
-	ipv6Pattern  = regexp.MustCompile(`\b[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}\b`)
+	// IPv6 写在前面，避免把 ::ffff:8.8.8.8 里的 IPv4 尾部当成独立地址。
+	ipCandidate  = regexp.MustCompile(`(?i)(?:\b[a-f\d]{1,4}:|::)[a-f\d:.]*|\b(?:\d{1,3}\.){3}\d{1,3}\b`)
 	domainInText = regexp.MustCompile(`\b(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}\b`)
 )
 
 // findAddress 从一段文字里挑出要查的东西：有 IP 地址就用地址，没有就用域名，
 // 和 MiBox 的顺序一样；链接里的主机名也按域名认出来。都没有返回 ""。
 func findAddress(text string) string {
-	if match := ipv4Pattern.FindString(text); match != "" && net.ParseIP(match) != nil {
-		return match
-	}
-	for _, match := range ipv6Pattern.FindAllString(text, -1) {
-		if net.ParseIP(match) != nil {
+	const word = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_"
+	var ipv6 string
+	for _, span := range ipCandidate.FindAllStringIndex(text, -1) {
+		start, end := span[0], span[1]
+		if (start > 0 && strings.ContainsRune(word+".", rune(text[start-1]))) ||
+			(end < len(text) && strings.ContainsRune(word, rune(text[end]))) {
+			continue
+		}
+		match := strings.TrimRight(text[start:end], ".")
+		address, err := netip.ParseAddr(match)
+		if err != nil {
+			continue
+		}
+		if address.Is4() {
 			return match
 		}
+		if ipv6 == "" {
+			ipv6 = match
+		}
+	}
+	if ipv6 != "" {
+		return ipv6
 	}
 	return domainInText.FindString(text)
 }

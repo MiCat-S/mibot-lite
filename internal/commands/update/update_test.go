@@ -21,6 +21,31 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/store"
 )
 
+func TestReinstallBeforeRestartKeepsRollback(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "mibot-lite")
+	if err := os.WriteFile(binary, []byte("running"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	running, err := os.Stat(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(binary+".download", []byte("new"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := swapBinary(os.Rename, binary, binary+".download", binary+".previous"); err != nil {
+		t.Fatal(err)
+	}
+	u := updater{running: running}
+	err = u.install(t.Context(), nil, &release{}, binary, nil)
+	if msg, ok := kit.IsUserError(err); !ok || !strings.Contains(msg, "重启") {
+		t.Fatalf("repeat install did not request restart: %v", err)
+	}
+	if old, err := os.ReadFile(binary + ".previous"); err != nil || string(old) != "running" {
+		t.Fatalf("rollback = %q, %v", old, err)
+	}
+}
+
 func TestNewerVersion(t *testing.T) {
 	if !newer("", "v1.0.0") || !newer("dev", "v1.0.0") || !newer("0.1.0", "v0.2.0") {
 		t.Error("a new release should be detected")

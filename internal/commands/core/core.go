@@ -4,6 +4,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"os"
 	"regexp"
 	"runtime"
@@ -70,7 +71,7 @@ func Register(a *app.App) {
 			return inv.Edit(ctx, strings.Join(lines, "\n"))
 		}},
 		&command.Command{Name: "help", Aliases: []string{"h"}, Group: command.GroupSystem, Description: "查看命令列表或说明", Usage: "[命令|分组]", Help: helpHelp, Handle: func(ctx context.Context, inv *command.Invocation) error {
-			name := inv.Arg(0)
+			name := inv.Rest(0)
 			if name == "" {
 				return inv.EditRich(ctx, helpListRich(registry, inv.Prefix), renderHelpList(registry, inv.Prefix))
 			}
@@ -287,16 +288,11 @@ func lookupForHelp(registry *command.Registry, name string) (*command.Command, b
 			break
 		}
 	}
-	if cmd, ok := registry.Lookup(name); ok {
-		return cmd, true
-	}
-	if cmd, ok := registry.Lookup(strings.ToLower(name)); ok {
-		return cmd, true
-	}
-	if expansion, ok := registry.Aliases()[name]; ok {
-		if fields := strings.Fields(expansion); len(fields) > 0 {
-			return registry.Lookup(fields[0])
+	if route, ok := registry.Parse(registry.Prefix() + name); ok {
+		if cmd, ok := registry.Lookup(route.Command); ok {
+			return cmd, true
 		}
+		return registry.Lookup(strings.ToLower(route.Command))
 	}
 	return nil, false
 }
@@ -316,7 +312,11 @@ func probe(ctx context.Context, target string) string {
 		return "❌ 无效的目标：只能是域名或 IP"
 	}
 	started := time.Now()
-	response, err := httpx.Do(ctx, httpx.Request{Method: "HEAD", URL: "https://" + target, Timeout: 5 * time.Second, MaxBytes: 1})
+	host := target
+	if ip, err := netip.ParseAddr(target); err == nil && ip.Is6() {
+		host = "[" + target + "]"
+	}
+	response, err := httpx.Do(ctx, httpx.Request{Method: "HEAD", URL: "https://" + host, Timeout: 5 * time.Second, MaxBytes: 1})
 	if err != nil {
 		return "❌ 网络测试失败或目标不可达"
 	}

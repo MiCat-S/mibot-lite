@@ -576,10 +576,12 @@ func renderRate(p *ratePricer, source, target rateCurrency, amount, price, conve
 		case source.Fiat && target.Fiat:
 			b.WriteString("📊 汇率：" + command.Code(fmt.Sprintf("1 %s = %s %s", source.Symbol, formatAmount(price), target.Symbol)) + "\n")
 		case !source.Fiat && !target.Fiat:
-			first, _ := p.cryptoFiat(source.Symbol, "USD")
-			second, _ := p.cryptoFiat(target.Symbol, "USD")
+			first, firstErr := p.cryptoFiat(source.Symbol, "USD")
+			second, secondErr := p.cryptoFiat(target.Symbol, "USD")
 			b.WriteString("💎 兑换比率：" + command.Code(fmt.Sprintf("1 %s = %s %s", source.Symbol, formatAmount(price), target.Symbol)) + "\n")
-			b.WriteString("📊 基准价格：" + command.Code(fmt.Sprintf("%s $%s • %s $%s", source.Symbol, formatPrice(first), target.Symbol, formatPrice(second))) + "\n")
+			if firstErr == nil && secondErr == nil {
+				b.WriteString("📊 基准价格：" + command.Code(fmt.Sprintf("%s $%s • %s $%s", source.Symbol, formatPrice(first), target.Symbol, formatPrice(second))) + "\n")
+			}
 		default:
 			if source.Fiat {
 				b.WriteString("💎 当前汇率：" + command.Code(fmt.Sprintf("1 %s = %s %s", target.Symbol, formatPrice(1/price), source.Symbol)) + "\n")

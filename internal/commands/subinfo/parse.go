@@ -74,7 +74,7 @@ var (
 		}
 		return patterns
 	}()
-	clashStart = regexp.MustCompile(`(?m)^(?:proxies[\s\p{Z}\x{FEFF}]*:|\{)`)
+	clashStart = regexp.MustCompile(`(?m)^(?:(?:proxies|"proxies"|'proxies')[\s\p{Z}\x{FEFF}]*:|\{)`)
 	clashType  = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 )
 

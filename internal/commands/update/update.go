@@ -44,13 +44,18 @@ type updater struct {
 	repo      string
 	settings  *store.Store[autoConfig]
 	binary    string
+	running   os.FileInfo
 	located   error
 }
 
 // Register 注册 .update 和自动更新的后台任务。装好新版本或回滚之后，用 restarter 重启服务。
 func Register(a *app.App, restarter *restart.Restarter) {
 	binary, located := executablePath()
-	u := &updater{binary: binary, located: located, a: a, restarter: restarter, repo: a.Env.Get("MIBOT_UPDATE_REPO", "MiCat-S/mibot-lite"),
+	var running os.FileInfo
+	if located == nil {
+		running, located = os.Stat(binary)
+	}
+	u := &updater{binary: binary, running: running, located: located, a: a, restarter: restarter, repo: a.Env.Get("MIBOT_UPDATE_REPO", "MiCat-S/mibot-lite"),
 		settings: kit.NewStore(a, "update.json", autoDefaults)}
 	a.Registry.Register(&command.Command{Name: "update", Group: command.GroupSystem, Description: "检查并更新程序", Usage: "[check|run|rollback|auto]", Timeout: 10 * time.Minute,
 		Help: help, Handle: u.handle})
@@ -210,6 +215,14 @@ var busy sync.Mutex
 // 替换，原来的版本留作 .previous。不重启。progress 报告进度；返回的错误都是给用户看的一句话，
 // 写明当前运行的版本有没有改动。
 func (u *updater) install(ctx context.Context, logger *slog.Logger, latest *release, binary string, progress func(string) error) error {
+	installed, err := os.Stat(binary)
+	if err != nil {
+		return err
+	}
+	// 延期重启后手动或定时更新可能再次进入这里。再次换文件会覆盖唯一的回滚版本。
+	if !os.SameFile(installed, u.running) {
+		return kit.Fail("安装位置的程序已经更换，请先重启服务使其生效，再执行更新")
+	}
 	assetName := "mibot-lite-" + runtime.GOOS + "-" + runtime.GOARCH
 	var assetURL, sumsURL string
 	var assetSize int64
@@ -275,7 +288,6 @@ func (u *updater) install(ctx context.Context, logger *slog.Logger, latest *rele
 		return kit.FailWith("保存连接状态失败，没有替换程序", err)
 	}
 	previous := binary + ".previous"
-	os.Remove(previous)
 	if err := swapBinary(os.Rename, binary, candidate, previous); err != nil {
 		logger.Error("update.swap_failed", "error", err.Error())
 		os.Remove(candidate)

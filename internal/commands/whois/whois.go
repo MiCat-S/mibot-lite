@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -96,11 +97,11 @@ func whoisReport(domain, raw string) []string {
 	}
 	if expiry != "" {
 		if when, err := time.Parse(time.RFC3339, strings.TrimSpace(expiry)); err == nil {
-			days := int(time.Until(when).Hours() / 24)
-			if days < 0 {
+			remaining := time.Until(when)
+			if remaining < 0 {
 				lines = append(lines, "到期提醒：已过期")
-			} else if days < 90 {
-				lines = append(lines, "到期提醒："+strings.TrimSpace(itoa(days))+" 天后过期")
+			} else if remaining < 90*24*time.Hour {
+				lines = append(lines, "到期提醒："+strconv.Itoa(int(remaining/(24*time.Hour)))+" 天后过期")
 			}
 		}
 	}
@@ -126,35 +127,12 @@ func whoisReport(domain, raw string) []string {
 	return pages
 }
 
-func itoa(value int) string {
-	return strings.TrimSpace(strings.Map(func(r rune) rune { return r }, formatInt(value)))
-}
-
-func formatInt(value int) string {
-	if value == 0 {
-		return "0"
-	}
-	negative := value < 0
-	if negative {
-		value = -value
-	}
-	var digits []byte
-	for value > 0 {
-		digits = append([]byte{byte('0' + value%10)}, digits...)
-		value /= 10
-	}
-	if negative {
-		return "-" + string(digits)
-	}
-	return string(digits)
-}
-
 // Register 注册 .whois。查询历史和 24 小时的结果缓存存在 data/whois.json。
 func Register(a *app.App) {
 	data := kit.NewStore(a, "whois.json", func() whoisData { return whoisData{Cache: map[string]whoisItem{}} })
 	help := func(prefix string) string {
 		return "🔍 <b>WHOIS 域名查询</b>\n\n• " + command.Code(prefix+"whois example.com") + "\n• " + command.Code(prefix+"whois") + " 回复含域名的消息\n• " +
-			command.Code(prefix+"whois batch a.com b.com") + " 批量查询，最多 " + itoa(maxBatch) + " 个\n• " +
+			command.Code(prefix+"whois batch a.com b.com") + " 批量查询，最多 " + strconv.Itoa(maxBatch) + " 个\n• " +
 			command.Code(prefix+"whois history") + " 查看历史\n• " + command.Code(prefix+"whois clear") + " 清除历史\n查询结果缓存 24 小时。"
 	}
 	// 批量查询最多 10 个域名，每个最长 15 秒，所以总超时要放宽到能跑完一整批。
@@ -189,7 +167,7 @@ func Register(a *app.App) {
 					inv.Log.Warn("whois.clear_failed", "error", err.Error())
 					return kit.Fail("清除失败，历史和缓存都还在")
 				}
-				return inv.EditText(ctx, "已清除历史 "+itoa(counts[0])+" 条、缓存 "+itoa(counts[1])+" 个域名")
+				return inv.EditText(ctx, "已清除历史 "+strconv.Itoa(counts[0])+" 条、缓存 "+strconv.Itoa(counts[1])+" 个域名")
 			case "history":
 				current, err := data.Read()
 				if err != nil {
@@ -205,13 +183,13 @@ func Register(a *app.App) {
 					if len(stamp) >= 16 {
 						stamp = strings.Replace(stamp[5:16], "T", " ", 1)
 					}
-					rows = append(rows, itoa(index+1)+". "+command.Code(item.Domain)+" <i>"+command.Escape(stamp)+"</i>")
+					rows = append(rows, strconv.Itoa(index+1)+". "+command.Code(item.Domain)+" <i>"+command.Escape(stamp)+"</i>")
 				}
 				body := "暂无查询历史"
 				if len(rows) > 0 {
 					body = strings.Join(rows, "\n")
 				}
-				return inv.Edit(ctx, "🔍 <b>WHOIS 查询历史</b>\n\n"+body+"\n\n共 "+itoa(len(current.History))+" 条，缓存 "+itoa(len(current.Cache))+" 个")
+				return inv.Edit(ctx, "🔍 <b>WHOIS 查询历史</b>\n\n"+body+"\n\n共 "+strconv.Itoa(len(current.History))+" 条，缓存 "+strconv.Itoa(len(current.Cache))+" 个")
 			}
 			name, ok := normalizeDomain(raw)
 			if !ok {
@@ -241,9 +219,9 @@ func whoisBatch(ctx context.Context, inv *command.Invocation, data *store.Store[
 		return inv.Edit(ctx, help(inv.Prefix))
 	}
 	if len(inputs) > maxBatch {
-		return inv.EditText(ctx, "批量查询最多支持 "+itoa(maxBatch)+" 个域名")
+		return inv.EditText(ctx, "批量查询最多支持 "+strconv.Itoa(maxBatch)+" 个域名")
 	}
-	if err := inv.EditText(ctx, kit.Working("正在批量查询 "+itoa(len(inputs))+" 个域名")); err != nil {
+	if err := inv.EditText(ctx, kit.Working("正在批量查询 "+strconv.Itoa(len(inputs))+" 个域名")); err != nil {
 		return err
 	}
 	results := make([]string, 0, len(inputs))
@@ -269,6 +247,9 @@ func whoisBatch(ctx context.Context, inv *command.Invocation, data *store.Store[
 	return inv.Edit(ctx, "🔍 <b>WHOIS 批量查询</b>\n\n"+strings.Join(results, "\n"))
 }
 
+// whoisURL 是查询地址，测试时换成本地服务。
+var whoisURL = "https://namebeta.com/api/search/check"
+
 func whoisQuery(ctx context.Context, logger *slog.Logger, name string, data *store.Store[whoisData]) (string, error) {
 	current, err := data.Read()
 	if err != nil {
@@ -279,10 +260,13 @@ func whoisQuery(ctx context.Context, logger *slog.Logger, name string, data *sto
 			return cached.RawData, nil
 		}
 	}
-	response, err := httpx.Do(ctx, httpx.Request{URL: "https://namebeta.com/api/search/check?query=" + url.QueryEscape(name),
+	response, err := httpx.Do(ctx, httpx.Request{URL: whoisURL + "?query=" + url.QueryEscape(name),
 		Headers: map[string]string{"User-Agent": "Mi Box"}, Timeout: 15 * time.Second, MaxBytes: 4 << 20})
-	if err != nil || !response.OK() {
+	if err != nil {
 		return "", err
+	}
+	if !response.OK() {
+		return "", &httpx.StatusError{Status: response.Status}
 	}
 	result := extractWhois(string(response.Body))
 	if result == "" {

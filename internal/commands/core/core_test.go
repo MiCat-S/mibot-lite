@@ -17,9 +17,10 @@ import (
 func TestLookupForHelp(t *testing.T) {
 	registry := command.New([]string{".", "。"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	registry.Register(&command.Command{Name: "speedtest"}, &command.Command{Name: "ping"})
-	registry.SetAliases(map[string]string{"测速": "speedtest 12345"})
+	registry.SetAliases(map[string]string{"测速": "speedtest 12345", "网络 测速": "speedtest 12345"})
 	for name, want := range map[string]string{
 		"ping": "ping", ".ping": "ping", "。ping": "ping", "PING": "ping", "测速": "speedtest",
+		".网络 测速": "speedtest",
 	} {
 		cmd, ok := lookupForHelp(registry, name)
 		if !ok || cmd.Name != want {

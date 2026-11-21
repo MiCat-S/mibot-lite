@@ -79,6 +79,15 @@ func TestParseClashJSON(t *testing.T) {
 	}
 }
 
+func TestParseClashQuotedProxiesKey(t *testing.T) {
+	for _, key := range []string{`"proxies"`, `'proxies'`} {
+		result := mustParse(t, "port: 7890\n"+key+":\n  - {name: US-West, type: vmess}\n")
+		if !slices.Equal(result.names, []string{"US-West"}) || !slices.Equal(result.protocols.lines(), []string{"vmess：1"}) {
+			t.Errorf("%s: %+v", key, result)
+		}
+	}
+}
+
 // Base64 编码的节点链接：名字取 #、VMess 的 ps、SSR 的 remarks，都没有写「协议 序号」。
 func TestParseLinks(t *testing.T) {
 	vmess := "vmess://" + base64.StdEncoding.EncodeToString([]byte(`{"v":"2","ps":"新加坡 SG 01","add":"a"}`))
