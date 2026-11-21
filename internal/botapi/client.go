@@ -176,7 +176,7 @@ func (c *Client) SendHTML(ctx context.Context, endpoint, token, chat, text strin
 			return delivery.Unknown(failure)
 		}
 		var envelope struct {
-			OK          bool   `json:"ok"`
+			OK          *bool  `json:"ok"`
 			Code        int    `json:"error_code"`
 			Description string `json:"description"`
 			Parameters  struct {
@@ -191,8 +191,13 @@ func (c *Client) SendHTML(ctx context.Context, endpoint, token, chat, text strin
 			}
 			return apiErr
 		}
-		if response.OK() && envelope.OK {
-			return nil
+		if response.OK() {
+			if envelope.OK == nil {
+				return delivery.Unknown(&APIError{Code: response.Status, Description: "响应缺少 ok 字段"})
+			}
+			if *envelope.OK {
+				return nil
+			}
 		}
 		code := envelope.Code
 		if code == 0 {

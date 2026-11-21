@@ -54,7 +54,9 @@ func (c *Client) EachDialog(ctx context.Context, pages DialogPages, visit func(*
 		case *tg.MessagesDialogsSlice:
 			c.peers.RememberUsers(value.Users)
 			c.peers.RememberChats(value.Chats)
-			dialogs, messages, last = value.Dialogs, value.Messages, len(value.Dialogs) < 100
+			dialogs, messages, last = value.Dialogs, value.Messages, false
+		default:
+			return fmt.Errorf("unexpected dialog response %T", result)
 		}
 		for _, entry := range dialogs {
 			if dialog, ok := entry.(*tg.Dialog); ok {
@@ -65,25 +67,28 @@ func (c *Client) EachDialog(ctx context.Context, pages DialogPages, visit func(*
 			return nil
 		}
 		// 下一页从这一页最后一个对话接着翻：它的 peer、最后一条消息的编号和时间。
-		tail, ok := dialogs[len(dialogs)-1].(*tg.Dialog)
+		tail, ok := dialogs[len(dialogs)-1].(interface {
+			GetPeer() tg.PeerClass
+			GetTopMessage() int
+		})
 		if !ok {
-			return nil
+			return fmt.Errorf("dialog cursor unavailable for %T", dialogs[len(dialogs)-1])
 		}
-		next, ok := c.peers.InputPeer(tail.Peer)
+		next, ok := c.peers.InputPeer(tail.GetPeer())
 		if !ok {
-			return nil
+			return fmt.Errorf("dialog cursor: %w: %s", ErrUnaddressablePeer, PeerID(tail.GetPeer()))
 		}
-		offsetPeer, offsetID = next, tail.TopMessage
+		offsetPeer, offsetID = next, tail.GetTopMessage()
 		found := false
 		for _, item := range messages {
-			if message, ok := item.(tg.NotEmptyMessage); ok && message.GetID() == tail.TopMessage && PeerID(message.GetPeerID()) == PeerID(tail.Peer) {
+			if message, ok := item.(tg.NotEmptyMessage); ok && message.GetID() == tail.GetTopMessage() && PeerID(message.GetPeerID()) == PeerID(tail.GetPeer()) {
 				offsetDate = message.GetDate()
 				found = true
 				break
 			}
 		}
 		if !found {
-			return fmt.Errorf("dialog cursor message %s/%d missing", PeerID(tail.Peer), tail.TopMessage)
+			return fmt.Errorf("dialog cursor message %s/%d missing", PeerID(tail.GetPeer()), tail.GetTopMessage())
 		}
 	}
 	return nil

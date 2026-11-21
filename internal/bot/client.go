@@ -378,11 +378,30 @@ func (c *Client) GetMessages(ctx context.Context, peer tg.InputPeerClass, ids []
 	messages, _ := c.Unpack(result)
 	var found []*tg.Message
 	for _, candidate := range messages {
-		if message, ok := candidate.(*tg.Message); ok {
+		if message, ok := candidate.(*tg.Message); ok && c.inDialog(peer, message.PeerID) {
 			found = append(found, message)
 		}
 	}
 	return found, nil
+}
+
+// messages.getMessages 只接收账号内的消息 ID，同一批结果可能来自不同私聊和普通群。
+func (c *Client) inDialog(target tg.InputPeerClass, peer tg.PeerClass) bool {
+	switch actual := peer.(type) {
+	case *tg.PeerUser:
+		if _, self := target.(*tg.InputPeerSelf); self {
+			return actual.UserID == c.SelfID()
+		}
+		user, ok := target.(interface{ GetUserID() int64 })
+		return ok && user.GetUserID() == actual.UserID
+	case *tg.PeerChat:
+		chat, ok := target.(*tg.InputPeerChat)
+		return ok && chat.ChatID == actual.ChatID
+	case *tg.PeerChannel:
+		channel, ok := target.(interface{ GetChannelID() int64 })
+		return ok && channel.GetChannelID() == actual.ChannelID
+	}
+	return false
 }
 
 // Unpack 读取一个消息列表类的回复，记下其中的实体，返回消息和回复里的

@@ -54,6 +54,15 @@ func TestSentRecorder(t *testing.T) {
 			},
 			want: []mark{{"-1009", 30}},
 		},
+		"普通群里发媒体只返回编号": {
+			reply: &tg.UpdateShortSentMessage{ID: 32},
+			call: func(api *tg.Client) error {
+				_, err := api.MessagesSendMedia(context.Background(), &tg.MessagesSendMediaRequest{
+					Peer: &tg.InputPeerChat{ChatID: 9}, Media: &tg.InputMediaEmpty{}})
+				return err
+			},
+			want: []mark{{"-9", 32}},
+		},
 	} {
 		marks = nil
 		api := tg.NewClient(invokerFunc(recorder.Handle(replying{c.reply})))

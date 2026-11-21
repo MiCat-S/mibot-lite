@@ -40,13 +40,13 @@ type Case struct {
 	// Wait 覆盖默认的单个用例超时时间。
 	Wait time.Duration
 	// Reply 表示命令会删掉自己、另发一条消息作为回答（如 .status 的图片卡片）：
-	// 这时到命令之后的新消息里找 Expect，找到的那条跑完也删掉。
+	// 根据这条命令实际发出的消息 ID 检查并清理回复。
 	Reply bool
 }
 
 // Cases 是默认的用例集：所有不改动任何东西就能给出回复的命令。
 var Cases = []Case{
-	{Command: "ping", Expect: "Pong"},
+	{Command: "ping", Expect: "消息编辑"},
 	{Command: "version", Expect: "MiBot Lite"},
 	{Command: "memory", Expect: "RSS"},
 	{Command: "status", Expect: "运行时间", Reply: true},
@@ -55,12 +55,12 @@ var Cases = []Case{
 	{Command: "help calc", Expect: "计算器"},
 	{Command: "calc 2+2*5", Expect: "12"},
 	{Command: "calc (10-3)*4", Expect: "28"},
-	{Command: "update", Expect: "更新状态"},
+	{Command: "update", Expect: "程序更新"},
 	{Command: "acn status", Expect: "自动更新"},
 	{Command: "yvlu config", Expect: "贴纸包"},
 	{Command: "ai config list", Expect: "AI"},
 	{Command: "sum config list", Expect: "配置"},
-	{Command: "aban", Expect: "封禁管理"},
+	{Command: "aban", Expect: "群组管理"},
 	{Command: "log debug", Expect: "当前日志级别"},
 	{Command: "help log", Expect: "运行日志"},
 	{Command: "help bf", Expect: "配置备份"},
@@ -77,8 +77,8 @@ var Cases = []Case{
 	{Command: "dc", Expect: "数据中心"},
 	{Command: "ip 8.8.8.8", Expect: "Google", Network: true, Wait: 30 * time.Second},
 	{Command: "ping example.com", Expect: "HTTP", Network: true, Wait: 30 * time.Second},
-	{Command: "eatgif list", Expect: "头像动图", Network: true, Wait: 60 * time.Second},
-	{Command: "eat", Expect: "头像表情包", Network: true, Wait: 60 * time.Second},
+	{Command: "eatgif list", Expect: "头像动画贴纸", Network: true, Wait: 60 * time.Second},
+	{Command: "eat", Expect: "头像表情贴纸", Network: true, Wait: 60 * time.Second},
 	{Command: "whois example.com", Expect: "example.com", Network: true, Wait: 60 * time.Second},
 	{Command: "rate BTC", Expect: "数据更新", Network: true, Wait: 90 * time.Second},
 }
@@ -135,36 +135,6 @@ func Run(ctx context.Context, client *bot.Client, prefix string, out io.Writer, 
 	return failed, nil
 }
 
-// awaitReply 等命令之后出现一条含有 expect 的新消息（正文或图片说明），找到后删掉它。
-// 返回看到的最后一条新消息和是否匹配。
-func awaitReply(ctx context.Context, client *bot.Client, peer tg.InputPeerClass, after int, expect string, deadline time.Time) (string, bool) {
-	answer := ""
-	for time.Now().Before(deadline) {
-		if err := sleep(ctx, 700*time.Millisecond); err != nil {
-			return answer, false
-		}
-		result, err := client.API().MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{Peer: peer, Limit: 5})
-		if err != nil {
-			continue
-		}
-		messages, _ := client.Unpack(result)
-		for _, item := range messages {
-			message, ok := item.(*tg.Message)
-			if !ok || message.ID <= after {
-				continue
-			}
-			answer = message.Message
-			if strings.Contains(message.Message, expect) {
-				removeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
-				_ = client.Delete(removeCtx, peer, []int{message.ID})
-				cancel()
-				return answer, true
-			}
-		}
-	}
-	return answer, false
-}
-
 // run 发送一个命令，等处理函数把它改写。
 func run(ctx context.Context, client *bot.Client, peer tg.InputPeerClass, prefix string, item Case, dispatch Dispatch) Result {
 	wait := item.Wait
@@ -179,11 +149,7 @@ func run(ctx context.Context, client *bot.Client, peer tg.InputPeerClass, prefix
 		return Result{Case: item, Detail: "send failed: " + err.Error(), Took: time.Since(started)}
 	}
 	// 无论结果如何都删掉这条消息，这样验证跑完后，收藏夹和跑之前一样。
-	defer func() {
-		removeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
-		defer cancel()
-		_ = client.Delete(removeCtx, peer, []int{id})
-	}()
+	defer removeMessage(ctx, client, peer, id)
 
 	// 把消息完整地读回来：发送返回的结果没法拿去分发；这也顺便初步检查了
 	// 账号能不能看到自己刚写的内容。
@@ -191,27 +157,40 @@ func run(ctx context.Context, client *bot.Client, peer tg.InputPeerClass, prefix
 	if err != nil || len(sent) == 0 {
 		return Result{Case: item, Detail: "could not read the sent message back", Took: time.Since(started)}
 	}
-	if !dispatch(ctx, sent[0]) {
+	pollCtx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	commandCtx := pollCtx
+	var replies chan int
+	if item.Reply {
+		replies = make(chan int, 1)
+		commandCtx = bot.ObserveSent(pollCtx, func(peer tg.PeerClass, id int) {
+			if user, ok := peer.(*tg.PeerUser); ok && user.UserID == client.SelfID() {
+				select {
+				case replies <- id:
+				default:
+				}
+			}
+		})
+	}
+	if !dispatch(commandCtx, sent[0]) {
 		return Result{Case: item, Detail: "no command matched " + text, Took: time.Since(started)}
 	}
 
-	// 要等的是答案，而不只是消息有变化：好几个命令会先改一次，说明正在
-	// 处理，再改一次给出结果。如果取第一次编辑，就会在进度提示上误判通过；
-	// 更糟的是，命令还在往这条消息里写，消息却已经被删掉了。
-	deadline := time.Now().Add(wait)
+	// 图片卡片可能退回编辑原命令。两条路径都只读这次命令已知的消息编号。
 	answer, matched := "", false
-	if item.Reply {
-		answer, matched = awaitReply(ctx, client, peer, id, item.Expect, deadline)
-	}
-	for !item.Reply && time.Now().Before(deadline) {
-		if err := sleep(ctx, 700*time.Millisecond); err != nil {
-			return Result{Case: item, Detail: "cancelled", Took: time.Since(started)}
+	resultID := id
+	for sleep(pollCtx, 700*time.Millisecond) == nil {
+		select {
+		case replyID := <-replies:
+			resultID = replyID
+			defer removeMessage(ctx, client, peer, replyID)
+		default:
 		}
-		found, err := client.GetMessages(ctx, peer, []int{id})
+		found, err := client.GetMessages(pollCtx, peer, []int{resultID})
 		if err != nil || len(found) == 0 {
 			continue
 		}
-		current := found[0].Message
+		current := bot.MessageText(found[0])
 		if current == text || strings.TrimSpace(current) == "" {
 			continue
 		}
@@ -234,6 +213,12 @@ func run(ctx context.Context, client *bot.Client, peer tg.InputPeerClass, prefix
 		return Result{Case: item, Skipped: true, Detail: "third party: " + snippet, Took: took}
 	}
 	return Result{Case: item, Detail: fmt.Sprintf("expected %q, got %q", item.Expect, snippet), Took: took}
+}
+
+func removeMessage(ctx context.Context, client *bot.Client, peer tg.InputPeerClass, id int) {
+	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancel()
+	_ = client.Delete(cleanup, peer, []int{id})
 }
 
 func firstLine(text string) string {

@@ -21,19 +21,33 @@ type SentRecorder struct {
 	Mark func(peer tg.PeerClass, id int)
 }
 
+type sentObserverKey struct{}
+
+// ObserveSent 把这个命令发出的新消息 ID 也交给调用方。在线自检据此读取和清理自己的回复。
+func ObserveSent(ctx context.Context, mark func(tg.PeerClass, int)) context.Context {
+	return context.WithValue(ctx, sentObserverKey{}, mark)
+}
+
 // Handle 实现 telegram.Middleware。
 func (r SentRecorder) Handle(next tg.Invoker) telegram.InvokeFunc {
 	return func(ctx context.Context, input bin.Encoder, output bin.Decoder) error {
 		err := next.Invoke(ctx, input, output)
 		if err == nil && r.Mark != nil {
-			r.record(input, output)
+			recorder := r
+			if observe, ok := ctx.Value(sentObserverKey{}).(func(tg.PeerClass, int)); ok {
+				recorder.Mark = func(peer tg.PeerClass, id int) {
+					r.Mark(peer, id)
+					observe(peer, id)
+				}
+			}
+			recorder.record(input, output)
 		}
 		return err
 	}
 }
 
 // record 从应答里找出新发出的消息。发消息、发媒体、转发、编辑的应答都装在 UpdatesBox 里；
-// 私聊和基础群里发文字只回一个 updateShortSentMessage，没有对话，对话要从请求里取。
+// 私聊和基础群里发送也可能只回一个 updateShortSentMessage，没有对话，对话要从请求里取。
 func (r SentRecorder) record(input bin.Encoder, output bin.Decoder) {
 	box, ok := output.(*tg.UpdatesBox)
 	if !ok {
@@ -41,10 +55,15 @@ func (r SentRecorder) record(input bin.Encoder, output bin.Decoder) {
 	}
 	switch updates := box.Updates.(type) {
 	case *tg.UpdateShortSentMessage:
-		if request, ok := input.(*tg.MessagesSendMessageRequest); ok {
-			if peer, ok := r.peerOf(request.Peer); ok {
-				r.Mark(peer, updates.ID)
-			}
+		var target tg.InputPeerClass
+		switch request := input.(type) {
+		case *tg.MessagesSendMessageRequest:
+			target = request.Peer
+		case *tg.MessagesSendMediaRequest:
+			target = request.Peer
+		}
+		if peer, ok := r.peerOf(target); ok {
+			r.Mark(peer, updates.ID)
 		}
 	case *tg.Updates:
 		r.markNew(updates.Updates)

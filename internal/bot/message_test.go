@@ -1,10 +1,35 @@
 package bot
 
 import (
+	"context"
 	"testing"
 
+	"github.com/gotd/td/bin"
 	"github.com/gotd/td/tg"
 )
+
+func TestGetMessagesReturnsOnlyRequestedDialog(t *testing.T) {
+	result := &tg.MessagesMessages{Messages: []tg.MessageClass{
+		&tg.Message{ID: 1, PeerID: &tg.PeerUser{UserID: 7}},
+		&tg.Message{ID: 2, PeerID: &tg.PeerUser{UserID: 42}},
+		&tg.Message{ID: 3, PeerID: &tg.PeerChat{ChatID: 42}},
+		&tg.Message{ID: 4, PeerID: &tg.PeerChannel{ChannelID: 42}},
+	}}
+	api := tg.NewClient(invokerFunc(func(_ context.Context, _ bin.Encoder, out bin.Decoder) error {
+		out.(*tg.MessagesMessagesBox).Messages = result
+		return nil
+	}))
+	client := FromAPI(api, NewPeerCache(), &tg.User{ID: 7}, nil)
+	for i, target := range []tg.InputPeerClass{
+		&tg.InputPeerSelf{}, &tg.InputPeerUser{UserID: 42},
+		&tg.InputPeerChat{ChatID: 42}, &tg.InputPeerChannel{ChannelID: 42},
+	} {
+		messages, err := client.GetMessages(context.Background(), target, []int{1, 2, 3, 4})
+		if err != nil || len(messages) != 1 || messages[0].ID != i+1 {
+			t.Errorf("peer %T returned %v, error %v", target, messages, err)
+		}
+	}
+}
 
 func TestPeerIDRoundTrip(t *testing.T) {
 	cases := map[string]tg.PeerClass{

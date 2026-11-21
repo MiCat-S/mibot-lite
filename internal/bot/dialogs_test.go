@@ -25,7 +25,7 @@ func dialogPage(from, to int64) *tg.MessagesDialogsSlice {
 // 每个对话都访问到，群的 access hash 都记下来。
 func TestEachDialog(t *testing.T) {
 	var requests []*tg.MessagesGetDialogsRequest
-	replies := []any{dialogPage(1, 100), tgerr.New(420, "FLOOD_WAIT_0"), dialogPage(101, 130)}
+	replies := []any{dialogPage(1, 60), tgerr.New(420, "FLOOD_WAIT_0"), dialogPage(61, 130), &tg.MessagesDialogs{}}
 	api := tg.NewClient(invokerFunc(func(ctx context.Context, input bin.Encoder, output bin.Decoder) error {
 		request, ok := input.(*tg.MessagesGetDialogsRequest)
 		if !ok {
@@ -48,7 +48,7 @@ func TestEachDialog(t *testing.T) {
 	if err := client.EachDialog(context.Background(), DialogPages{Folder: 1}, func(*tg.Dialog) { visited++ }); err != nil {
 		t.Fatal(err)
 	}
-	if visited != 130 || len(requests) != 3 {
+	if visited != 130 || len(requests) != 4 {
 		t.Fatalf("访问了 %d 个对话、发了 %d 个请求", visited, len(requests))
 	}
 	if folder, ok := requests[0].GetFolderID(); !ok || folder != 1 {
@@ -56,7 +56,7 @@ func TestEachDialog(t *testing.T) {
 	}
 	second := requests[2]
 	offset, ok := second.OffsetPeer.(*tg.InputPeerChannel)
-	if !ok || offset.ChannelID != 100 || second.OffsetID != 100 || second.OffsetDate != 1100 {
+	if !ok || offset.ChannelID != 60 || second.OffsetID != 60 || second.OffsetDate != 1060 {
 		t.Errorf("第二页的起点不对：%+v", second)
 	}
 	if _, ok := client.Peers().Channel(130); !ok {

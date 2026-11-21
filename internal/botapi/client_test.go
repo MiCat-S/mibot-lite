@@ -115,14 +115,19 @@ func Test429ExhaustionAndLongWait(t *testing.T) {
 }
 
 func TestDoesNotReplayAmbiguousSend(t *testing.T) {
-	c, _ := virtualClient()
-	calls := 0
-	c.post = func(context.Context, string, map[string]string, any, time.Duration, int64) (httpx.Response, error) {
-		calls++
-		return httpx.Response{Status: 500, Body: []byte(`{"ok":false,"error_code":500}`)}, nil
-	}
-	if err := c.SendHTML(context.Background(), "https://example.test", "T", "1", "x"); !delivery.Uncertain(err) || calls != 1 {
-		t.Fatalf("ambiguous send retried or not marked uncertain: calls=%d err=%v", calls, err)
+	for _, response := range []httpx.Response{
+		{Status: 500, Body: []byte(`{"ok":false,"error_code":500}`)},
+		{Status: 200, Body: []byte(`{}`)},
+	} {
+		c, _ := virtualClient()
+		calls := 0
+		c.post = func(context.Context, string, map[string]string, any, time.Duration, int64) (httpx.Response, error) {
+			calls++
+			return response, nil
+		}
+		if err := c.SendHTML(context.Background(), "https://example.test", "T", "1", "x"); !delivery.Uncertain(err) || calls != 1 {
+			t.Fatalf("ambiguous send retried or not marked uncertain: calls=%d err=%v", calls, err)
+		}
 	}
 }
 
