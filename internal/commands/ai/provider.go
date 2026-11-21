@@ -57,78 +57,94 @@ type aiRequest struct {
 	Provider  aiProvider
 }
 
+// EndpointProtocol 识别网关完整接口的协议。只有基址时交给服务商配置判断。
+func EndpointProtocol(path string) string {
+	path = strings.TrimRight(path, "/")
+	switch {
+	case strings.HasSuffix(path, "/chat/completions"), strings.HasSuffix(path, "/openai"):
+		return shapeChat
+	case strings.HasSuffix(path, "/responses"):
+		return shapeResponses
+	case strings.HasSuffix(path, "/messages"):
+		return formatAnthropic
+	case strings.HasSuffix(path, ":generateContent"), strings.HasSuffix(path, ":streamGenerateContent"):
+		return formatGemini
+	}
+	return ""
+}
+
 func resolveProviderType(provider aiProvider) string {
 	explicit := strings.ToLower(strings.TrimSpace(provider.Type))
 	if slices.Contains(aiProviderTypes, explicit) {
 		return explicit
 	}
 	if parsed, err := url.Parse(provider.URL); err == nil {
-		if kind, ok := aiHostTypes[parsed.Hostname()]; ok {
+		kind := aiHostTypes[strings.ToLower(parsed.Hostname())]
+		switch protocol := EndpointProtocol(parsed.Path); protocol {
+		case formatAnthropic, formatGemini:
+			return protocol
+		case shapeChat, shapeResponses:
+			if kind == formatGemini || kind == formatAnthropic {
+				return "openai-compatible"
+			}
+		}
+		if kind == formatGemini && strings.Contains(parsed.Path, "/openai/") {
+			return "openai-compatible"
+		}
+		if kind != "" {
 			return kind
 		}
 	}
-	return "openai"
+	return "openai-compatible"
 }
 
-// providerURL 是实际使用的接口地址。与 MiBox 读取配置时的处理一致：openai、
-// openai-compatible、moonshot 类型只填了域名（路径为空或 /）时补上 /v1。
-func providerURL(provider aiProvider) string {
-	parsed, err := url.Parse(provider.URL)
-	if err != nil || parsed.Host == "" {
-		return provider.URL
+// ProviderEndpoint 从服务商给出的基址或完整接口地址派生同一 API 下的端点。
+// 网关的路由前缀和查询参数属于配置；只有裸域名才补该协议的默认版本。
+func ProviderEndpoint(base, kind, endpoint string) (string, error) {
+	u, err := url.Parse(base)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return "", kit.Fail("API 地址无效")
 	}
-	switch resolveProviderType(provider) {
-	case "openai", "openai-compatible", "moonshot":
-		if parsed.Path == "" || parsed.Path == "/" {
-			return normalizeOpenAIBaseURL(provider.URL)
+	path := strings.TrimRight(u.EscapedPath(), "/")
+	switch {
+	case path == "":
+		switch kind {
+		case "gemini":
+			path = "/v1beta"
+		case "doubao":
+			path = "/api/v3"
+		default:
+			path = "/v1"
 		}
-	}
-	return provider.URL
-}
-
-func normalizeOpenAIBaseURL(raw string) string {
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		return raw
-	}
-	if strings.Contains(parsed.Hostname(), "gateway.ai.cloudflare.com") {
-		if index := strings.Index(parsed.Path, "/openai"); index >= 0 {
-			parsed.Path = parsed.Path[:index+len("/openai")]
+	case strings.HasSuffix(path, ":generateContent"), strings.HasSuffix(path, ":streamGenerateContent"):
+		if i := strings.LastIndex(path, "/models/"); i >= 0 {
+			path = path[:i]
 		}
-	} else {
-		for _, suffix := range []string{"/chat/completions", "/completions", "/responses", "/messages", "/images/generations"} {
-			if strings.HasSuffix(parsed.Path, suffix) {
-				parsed.Path = strings.TrimSuffix(parsed.Path, suffix)
+	default:
+		for _, suffix := range []string{"/chat/completions", "/completions", "/responses", "/messages", "/images/generations", "/models"} {
+			if strings.HasSuffix(path, suffix) {
+				path = strings.TrimSuffix(path, suffix)
 				break
 			}
 		}
-		prefix := "/v1"
-		if strings.Contains(parsed.Path, "/api/v1") {
-			prefix = "/api/v1"
-		}
-		if index := strings.Index(parsed.Path, prefix); index >= 0 {
-			parsed.Path = parsed.Path[:index+len(prefix)]
-		} else {
-			parsed.Path = "/v1"
-		}
 	}
-	parsed.RawQuery = ""
-	return parsed.String()
+	u.RawPath = path + "/" + endpoint
+	u.Path, err = url.PathUnescape(u.RawPath)
+	if err != nil {
+		return "", err
+	}
+	u.Fragment = ""
+	return u.String(), nil
 }
 
-func aiEndpoint(base, path string) string {
-	if !strings.HasSuffix(base, "/") {
-		base += "/"
+var modernChatModel = regexp.MustCompile(`^(?:openai/)?(?:gpt-(?:[5-9]|[1-9][0-9]+)|o[1-9])`)
+
+// ChatTokenLimitField 为 GPT-5 及后续模型和 o 系列使用现行字段，老模型和兼容网关沿用 max_tokens。
+func ChatTokenLimitField(model string) string {
+	if modernChatModel.MatchString(strings.ToLower(model)) {
+		return "max_completion_tokens"
 	}
-	parsedBase, err := url.Parse(base)
-	if err != nil {
-		return base + path
-	}
-	reference, err := url.Parse(path)
-	if err != nil {
-		return base + path
-	}
-	return parsedBase.ResolveReference(reference).String()
+	return "max_tokens"
 }
 
 // AssertAllowedModel 拒绝项目策略禁止的模型。
@@ -153,23 +169,38 @@ func buildChatRequest(cfg aiConfig, sel aiSelection, text, systemPrompt string, 
 	if err := checkChatInput(sel.Model, options); err != nil {
 		return nil, err
 	}
-	address := providerURL(provider)
-	parsed, err := url.Parse(address)
-	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") {
-		return nil, kit.Fail("API 地址无效")
-	}
 	kind := resolveProviderType(provider)
-	if kind == "codex" {
-		return nil, kit.Fail("codex 类型的 API 不支持对话")
-	}
-	format := formatOpenAI
+	format, endpoint := formatOpenAI, "chat/completions"
 	switch kind {
+	case "codex":
+		return nil, kit.Fail("codex 类型的 API 不支持对话")
 	case "gemini":
 		format = formatGemini
+		method := ":generateContent"
+		if provider.Stream {
+			method = ":streamGenerateContent"
+		}
+		endpoint = "models/" + url.PathEscape(strings.TrimPrefix(sel.Model, "models/")) + method
 	case "anthropic":
-		format = formatAnthropic
+		format, endpoint = formatAnthropic, "messages"
+	default:
+		if provider.Responses {
+			endpoint = "responses"
+		}
 	}
-	target, headers := chatAuth(kind, format, provider.Key, chatTarget(kind, format, provider.Responses, address, parsed, sel.Model))
+	target, err := ProviderEndpoint(provider.URL, kind, endpoint)
+	if err != nil {
+		return nil, err
+	}
+	target, headers, secret := ProviderAuth(kind, provider.Key, target)
+	provider.Key = secret
+	if format == formatGemini && provider.Stream {
+		u, _ := url.Parse(target)
+		q := u.Query()
+		q.Set("alt", "sse")
+		u.RawQuery = q.Encode()
+		target = u.String()
+	}
 	shape := format
 	if format == formatOpenAI {
 		shape = shapeChat
@@ -208,56 +239,31 @@ func checkChatInput(model string, options chatOptions) error {
 	return nil
 }
 
-// chatTarget 是对话请求的接口地址。doubao 的 chat 接口在 api/v3 下，local-cliproxy
-// 的地址要先规整；Responses 接口一律挂在规整后的 /v1 下。
-func chatTarget(kind, format string, responses bool, address string, parsed *url.URL, model string) string {
-	base := address
-	switch kind {
-	case "doubao":
-		base = parsed.Scheme + "://" + parsed.Host
-	case "local-cliproxy":
-		base = normalizeOpenAIBaseURL(address)
-	}
-	chatEndpoint := "chat/completions"
-	if kind == "doubao" {
-		chatEndpoint = "api/v3/chat/completions"
-	}
-	switch {
-	case format == formatGemini:
-		return aiEndpoint(base, "models/"+model+":generateContent")
-	case format == formatAnthropic:
-		return aiEndpoint(normalizeOpenAIBaseURL(base), "messages")
-	case responses && kind == "doubao":
-		return aiEndpoint(normalizeOpenAIBaseURL(aiEndpoint(base, chatEndpoint)), "responses")
-	case responses:
-		return aiEndpoint(normalizeOpenAIBaseURL(base), "responses")
-	}
-	return aiEndpoint(base, chatEndpoint)
-}
-
-// chatAuth 按服务商的认证方式放 Key：Gemini 和 local-cliproxy 放在查询参数 key 里
-// （地址里已经带了就不覆盖），Anthropic 放在 x-api-key，其余用 Bearer。返回改过的地址和请求头。
-func chatAuth(kind, format, key, target string) (string, map[string]string) {
+// ProviderAuth 按服务商的认证方式放 Key：Gemini 和 local-cliproxy 放在查询参数 key 里
+// （地址里已经带了就不覆盖），Anthropic 放在 x-api-key，其余用 Bearer。返回改过的地址、请求头，以及错误提示需要打码的实际 Key。
+func ProviderAuth(kind, key, target string) (string, map[string]string, string) {
 	headers := map[string]string{"Content-Type": "application/json"}
-	if format == formatOpenAI {
+	if kind != formatGemini && kind != formatAnthropic {
 		headers["User-Agent"] = CodexUserAgent
 	}
 	switch {
-	case format == formatGemini || kind == "local-cliproxy":
+	case kind == formatGemini || kind == "local-cliproxy":
 		authenticated, _ := url.Parse(target)
 		query := authenticated.Query()
-		if !query.Has("key") {
+		if query.Has("key") {
+			key = query.Get("key")
+		} else {
 			query.Set("key", key)
 		}
 		authenticated.RawQuery = query.Encode()
 		target = authenticated.String()
-	case format == formatAnthropic:
+	case kind == formatAnthropic:
 		headers["x-api-key"] = key
 		headers["anthropic-version"] = "2023-06-01"
 	default:
 		headers["Authorization"] = "Bearer " + key
 	}
-	return target, headers
+	return target, headers, key
 }
 
 // OpenAI 兼容接口的两种请求体形状，和 formatGemini、formatAnthropic 一起做 chatBodies 的键。
@@ -297,7 +303,7 @@ func geminiBody(in chatInput) map[string]any {
 	}
 	body["contents"] = []any{map[string]any{"role": "user", "parts": parts}}
 	if in.system != "" {
-		body["systemInstruction"] = map[string]any{"role": "system", "parts": []any{map[string]any{"text": in.system}}}
+		body["systemInstruction"] = map[string]any{"parts": []any{map[string]any{"text": in.system}}}
 	}
 	if in.options.maxOutputTokens > 0 {
 		body["generationConfig"] = map[string]any{"maxOutputTokens": in.options.maxOutputTokens}
@@ -319,6 +325,9 @@ func anthropicBody(in chatInput) map[string]any {
 	}
 	body := map[string]any{"model": in.sel.Model, "max_tokens": maxTokens,
 		"messages": []any{map[string]any{"role": "user", "content": content}}}
+	if in.stream {
+		body["stream"] = true
+	}
 	if in.system != "" {
 		body["system"] = in.system
 	}
@@ -379,7 +388,7 @@ func chatCompletionsBody(in chatInput) map[string]any {
 		body["reasoning_effort"] = in.sel.Reasoning
 	}
 	if in.options.maxOutputTokens > 0 {
-		body["max_tokens"] = in.options.maxOutputTokens
+		body[ChatTokenLimitField(in.sel.Model)] = in.options.maxOutputTokens
 	}
 	return body
 }
@@ -509,226 +518,6 @@ func errorMessageOf(value any) string {
 	return ""
 }
 
-// Payloads 把响应体拆成若干 JSON 负载：有 SSE 的 data 行就按行拆，
-// 没有就把整个响应体当作一个。
-func Payloads(raw []byte) ([]map[string]any, error) {
-	var payloads []map[string]any
-	text := string(raw)
-	var lines []string
-	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "data:") {
-			line = strings.TrimSpace(line[5:])
-			if line != "" && line != "[DONE]" {
-				lines = append(lines, line)
-			}
-		}
-	}
-	if len(lines) == 0 {
-		lines = []string{text}
-	}
-	for _, line := range lines {
-		var payload map[string]any
-		if err := json.Unmarshal([]byte(line), &payload); err != nil {
-			return nil, kit.Fail("AI 返回无效 JSON")
-		}
-		payloads = append(payloads, payload)
-	}
-	return payloads, nil
-}
-
-// ObjectOf 把 JSON 值当作对象读取，不是对象时返回空对象。
-func ObjectOf(value any) map[string]any {
-	object, _ := value.(map[string]any)
-	if object == nil {
-		return map[string]any{}
-	}
-	return object
-}
-
-// ListOf 把 JSON 值当作数组读取。
-func ListOf(value any) []any {
-	list, _ := value.([]any)
-	return list
-}
-
-// StringOf 把 JSON 值当作字符串读取。
-func StringOf(value any) string {
-	text, _ := value.(string)
-	return text
-}
-
-// FirstOf 返回数组的第一个元素，空数组返回 nil。
-func FirstOf(list []any) any {
-	if len(list) == 0 {
-		return nil
-	}
-	return list[0]
-}
-
-func aiProviderFailed(payload map[string]any) bool {
-	response := ObjectOf(payload["response"])
-	return payload["error"] != nil || response["error"] != nil || payload["type"] == "error" || payload["type"] == "response.failed" || payload["status"] == "failed" || response["status"] == "failed"
-}
-
-// providerFailure 是 2xx 响应里带着错误时给用户看的说明。
-func providerFailure(payload map[string]any, secret string) error {
-	detail := strings.TrimSpace(whitespaceRun.ReplaceAllString(maskSecret(errorMessageOf(payload), secret), " "))
-	if runes := []rune(detail); len(runes) > errorDetailLimit {
-		detail = string(runes[:errorDetailLimit]) + "…"
-	}
-	if detail == "" {
-		return kit.Fail("AI 提供商返回错误")
-	}
-	return kit.Fail("AI 提供商返回错误：" + detail)
-}
-
-func aiContentText(content any) string {
-	if text, ok := content.(string); ok {
-		if text == "AI 回复为空" {
-			return ""
-		}
-		return text
-	}
-	var parts []string
-	items := ListOf(content)
-	if items == nil && content != nil {
-		items = []any{content}
-	}
-	for _, item := range items {
-		part := ObjectOf(item)
-		if (part["type"] == "text" || part["type"] == "output_text") && StringOf(part["text"]) != "" {
-			parts = append(parts, StringOf(part["text"]))
-		}
-	}
-	return strings.TrimSpace(strings.Join(parts, "\n"))
-}
-
-func geminiRoot(payload map[string]any) map[string]any {
-	if response := ObjectOf(payload["response"]); len(response) > 0 {
-		return response
-	}
-	if data := ObjectOf(payload["data"]); len(data) > 0 {
-		return data
-	}
-	return payload
-}
-
-func parseChatText(raw []byte, format, secret string) (string, error) {
-	if strings.TrimSpace(string(raw)) == "" {
-		return "", kit.Fail("AI 返回内容为空")
-	}
-	payloads, err := Payloads(raw)
-	if err != nil {
-		return "", err
-	}
-	var text string
-	switch format {
-	case formatGemini:
-		payload := payloads[0]
-		if aiProviderFailed(payload) {
-			return "", providerFailure(payload, secret)
-		}
-		candidate := ObjectOf(FirstOf(ListOf(geminiRoot(payload)["candidates"])))
-		var parts []string
-		for _, part := range ListOf(ObjectOf(candidate["content"])["parts"]) {
-			parts = append(parts, StringOf(ObjectOf(part)["text"]))
-		}
-		text = strings.Join(parts, "")
-	case formatAnthropic:
-		payload := payloads[0]
-		if aiProviderFailed(payload) {
-			return "", providerFailure(payload, secret)
-		}
-		var parts []string
-		for _, item := range ListOf(payload["content"]) {
-			if part := ObjectOf(item); part["type"] == "text" {
-				parts = append(parts, StringOf(part["text"]))
-			}
-		}
-		text = strings.Join(parts, "\n")
-	default:
-		responses := false
-		for _, payload := range payloads {
-			if payload["object"] == "response" || ObjectOf(payload["response"])["object"] == "response" || strings.HasPrefix(StringOf(payload["type"]), "response.") {
-				responses = true
-			}
-		}
-		var deltas []string
-		fallback := ""
-		for _, payload := range payloads {
-			if aiProviderFailed(payload) {
-				return "", providerFailure(payload, secret)
-			}
-			if responses {
-				if payload["type"] == "response.output_text.delta" && StringOf(payload["delta"]) != "" {
-					deltas = append(deltas, StringOf(payload["delta"]))
-				}
-				if payload["type"] == "response.output_text.done" && StringOf(payload["text"]) != "" && len(deltas) == 0 {
-					fallback = strings.TrimSpace(StringOf(payload["text"]))
-				}
-				response := map[string]any{}
-				if ObjectOf(payload["response"])["object"] == "response" {
-					response = ObjectOf(payload["response"])
-				} else if payload["object"] == "response" {
-					response = payload
-				}
-				items := append([]any{payload["item"]}, ListOf(response["output"])...)
-				for _, item := range items {
-					message := ObjectOf(item)
-					if message["type"] != "message" {
-						continue
-					}
-					var parts []string
-					for _, part := range ListOf(message["content"]) {
-						content := ObjectOf(part)
-						if content["type"] == "output_text" && StringOf(content["text"]) != "" {
-							parts = append(parts, StringOf(content["text"]))
-						}
-					}
-					if value := strings.TrimSpace(strings.Join(parts, "\n")); value != "" {
-						fallback = value
-					}
-				}
-				continue
-			}
-			choice := ObjectOf(FirstOf(ListOf(payload["choices"])))
-			if delta := aiContentText(ObjectOf(choice["delta"])["content"]); delta != "" {
-				deltas = append(deltas, delta)
-			}
-			content := ObjectOf(choice["message"])["content"]
-			if content == nil {
-				content = choice["content"]
-			}
-			if content == nil {
-				content = payload["content"]
-			}
-			switch {
-			case content != nil:
-				if value := aiContentText(content); value != "" {
-					fallback = value
-				}
-			case strings.TrimSpace(StringOf(choice["text"])) != "":
-				fallback = strings.TrimSpace(StringOf(choice["text"]))
-			case strings.TrimSpace(StringOf(payload["text"])) != "":
-				fallback = strings.TrimSpace(StringOf(payload["text"]))
-			}
-		}
-		if len(deltas) > 0 {
-			text = strings.Join(deltas, "")
-		} else {
-			text = fallback
-		}
-	}
-	if kit.UTF16Len(text) > aiOutputLimit {
-		return "", kit.Fail("AI 输出超出长度限制")
-	}
-	if strings.TrimSpace(text) == "" {
-		return "", kit.Fail("AI 返回内容为空")
-	}
-	return strings.TrimSpace(text), nil
-}
-
 func chatText(ctx context.Context, cfg aiConfig, sel aiSelection, text, systemPrompt string, options chatOptions) (string, error) {
 	request, err := buildChatRequest(cfg, sel, text, systemPrompt, options)
 	if err != nil {
@@ -739,6 +528,6 @@ func chatText(ctx context.Context, cfg aiConfig, sel aiSelection, text, systemPr
 	if err != nil {
 		return "", err
 	}
-	answer, err := parseChatText(raw, request.Format, request.Provider.Key)
+	answer, err := ParseText(raw, request.Format, request.Provider.Key)
 	return answer, request.info().Failure(err, started, request.Provider.Key)
 }

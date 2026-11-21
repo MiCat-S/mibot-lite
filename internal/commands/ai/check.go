@@ -158,7 +158,7 @@ func transportFailure(err error) string {
 }
 
 // Models 列出服务商接口返回的模型，去重后按名字排序。与 MiBox 的 listProviderModels 一致：
-// doubao 走 api/v3/models，gemini 走 v1beta/models，其余走规整后的 /v1/models。
+// 使用与聊天相同的 API 基址和认证方式。
 func (s *Service) Models(ctx context.Context, tag string) ([]string, error) {
 	if s == nil {
 		return nil, kit.Fail("ai 命令没有启用")
@@ -179,72 +179,70 @@ func providerModels(ctx context.Context, cfg aiConfig, tag string) ([]string, er
 	if kind == "codex" {
 		return nil, kit.Fail("codex 类型的 API 不支持模型列表")
 	}
-	parsed, err := url.Parse(provider.URL)
-	if err != nil || parsed.Host == "" || (parsed.Scheme != "https" && parsed.Scheme != "http") {
-		return nil, kit.Fail("API 地址无效")
-	}
-	base, endpoint := normalizeOpenAIBaseURL(provider.URL), "models"
-	switch kind {
-	case "doubao":
-		base, endpoint = parsed.Scheme+"://"+parsed.Host, "api/v3/models"
-	case "gemini":
-		root := *parsed
-		root.Path, root.RawPath, root.RawQuery, root.Fragment = "/v1beta", "", "", ""
-		base = root.String()
-	}
-	target := aiEndpoint(base, endpoint)
-	headers := map[string]string{"User-Agent": CodexUserAgent}
-	switch kind {
-	case "gemini", "local-cliproxy":
-		authenticated, _ := url.Parse(target)
-		query := authenticated.Query()
-		if !query.Has("key") {
-			query.Set("key", provider.Key)
-		}
-		authenticated.RawQuery = query.Encode()
-		target = authenticated.String()
-	case "anthropic":
-		headers["x-api-key"] = provider.Key
-		headers["anthropic-version"] = "2023-06-01"
-	default:
-		headers["Authorization"] = "Bearer " + provider.Key
-	}
-	response, err := checkDo(ctx, http.MethodGet, target, headers, nil, min(time.Duration(cfg.Timeout)*time.Second, checkTimeout), checkLimit)
+	target, err := ProviderEndpoint(provider.URL, kind, "models")
 	if err != nil {
-		return nil, kit.Fail("获取模型列表失败：" + transportFailure(err))
+		return nil, err
 	}
-	if !response.ok() {
-		return nil, &httpStatusError{Status: response.status, err: kit.Fail(HTTPFailure(response.status, response.body, provider.Key))}
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(response.body, &payload); err != nil {
-		return nil, kit.Fail("AI 返回无效 JSON")
-	}
-	if aiProviderFailed(payload) {
-		return nil, providerFailure(payload, provider.Key)
-	}
-	rows := ListOf(payload["data"])
-	if rows == nil {
-		rows = ListOf(payload["models"])
-	}
+	target, headers, secret := ProviderAuth(kind, provider.Key, target)
+	timeout := min(time.Duration(cfg.Timeout)*time.Second, checkTimeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	remaining := int64(checkLimit)
 	seen := map[string]bool{}
 	var names []string
-	for _, row := range rows {
-		item := ObjectOf(row)
-		name := StringOf(item["id"])
-		if name == "" {
-			name = StringOf(item["name"])
+	for {
+		response, err := checkDo(ctx, http.MethodGet, target, headers, nil, timeout, remaining)
+		if err != nil {
+			return nil, kit.Fail("获取模型列表失败：" + transportFailure(err))
 		}
-		if name != "" && !seen[name] {
-			seen[name] = true
-			names = append(names, name)
+		if !response.ok() {
+			return nil, &httpStatusError{Status: response.status, err: kit.Fail(HTTPFailure(response.status, response.body, secret))}
 		}
+		remaining -= int64(len(response.body))
+		var payload map[string]any
+		if err := json.Unmarshal(response.body, &payload); err != nil {
+			return nil, kit.Fail("AI 返回无效 JSON")
+		}
+		if aiProviderFailed(payload) {
+			return nil, providerFailure(payload, secret)
+		}
+		rows := ListOf(payload["data"])
+		if rows == nil {
+			rows = ListOf(payload["models"])
+		}
+		for _, row := range rows {
+			item := ObjectOf(row)
+			name := StringOf(item["id"])
+			if name == "" {
+				name = StringOf(item["name"])
+			}
+			if name != "" && !seen[name] {
+				seen[name] = true
+				names = append(names, name)
+			}
+		}
+		var param, cursor string
+		switch {
+		case kind == formatGemini && StringOf(payload["nextPageToken"]) != "":
+			param, cursor = "pageToken", StringOf(payload["nextPageToken"])
+		case kind == formatAnthropic && payload["has_more"] == true:
+			param, cursor = "after_id", StringOf(payload["last_id"])
+		default:
+			sort.Strings(names)
+			if len(names) == 0 {
+				return nil, kit.Fail("接口没有返回任何模型")
+			}
+			return names, nil
+		}
+		u, _ := url.Parse(target)
+		q := u.Query()
+		if cursor == "" || q.Get(param) == cursor {
+			return nil, kit.Fail("模型列表的分页游标无效")
+		}
+		q.Set(param, cursor)
+		u.RawQuery = q.Encode()
+		target = u.String()
 	}
-	if len(names) == 0 {
-		return nil, kit.Fail("接口没有返回任何模型")
-	}
-	sort.Strings(names)
-	return names, nil
 }
 
 // TokenUsage 是一次对话消耗的 token。
@@ -318,7 +316,7 @@ func usageOf(payloads []map[string]any) (*TokenUsage, string) {
 		}
 		prompt := pick("prompt_tokens", "input_tokens", "promptTokenCount")
 		completion := pick("completion_tokens", "output_tokens", "candidatesTokenCount")
-		total := jsonInt(usage["total_tokens"])
+		total := pick("total_tokens", "totalTokenCount")
 		if total == 0 {
 			total = prompt + completion
 		}
@@ -362,21 +360,19 @@ func probeModel(ctx context.Context, cfg aiConfig, tag, model string, maxTokens 
 		return result
 	}
 	if !response.ok() {
-		result.Error = HTTPFailure(response.status, response.body, provider.Key)
+		result.Error = HTTPFailure(response.status, response.body, request.Provider.Key)
 		return result
 	}
-	text, err := parseChatText(response.body, request.Format, provider.Key)
+	text, events, err := decodeReply(response.body, request.Format, request.Provider.Key)
 	if err != nil {
 		result.Error = checkFailure(err)
 		return result
 	}
 	result.OK, result.Text = true, text
-	if payloads, err := Payloads(response.body); err == nil {
-		usage, name := usageOf(payloads)
-		result.Usage = usage
-		if name != "" {
-			result.Model = name
-		}
+	usage, name := usageOf(events)
+	result.Usage = usage
+	if name != "" {
+		result.Model = name
 	}
 	return result
 }
@@ -631,20 +627,24 @@ func providerBalance(ctx context.Context, provider aiProvider, kind, model strin
 	case "openai":
 		return openAIBalance(ctx, provider)
 	case "anthropic":
-		return anthropicBalance(ctx, provider, origin, model)
+		return anthropicBalance(ctx, provider, model)
 	}
 	var target string
+	headers := balanceAuth(provider, kind)
 	switch kind {
 	case "openrouter":
 		target = origin + "/api/v1/auth/key"
 	case "deepseek":
 		target = origin + "/user/balance"
-	case "gemini":
-		target = origin + "/v1beta/models?key=" + url.QueryEscape(provider.Key)
 	default:
-		target = strings.TrimSuffix(normalizeOpenAIBaseURL(provider.URL), "/") + "/models"
+		protocol := resolveProviderType(provider)
+		models, err := ProviderEndpoint(provider.URL, protocol, "models")
+		if err != nil {
+			return Balance{Status: "error"}
+		}
+		target, headers, _ = ProviderAuth(protocol, provider.Key, models)
 	}
-	reply := balanceGet(ctx, http.MethodGet, target, balanceAuth(provider, kind), nil, 10*time.Second)
+	reply := balanceGet(ctx, http.MethodGet, target, headers, nil, 10*time.Second)
 	if !reply.ok {
 		if reply.status == 401 || reply.status == 403 {
 			return Balance{Status: "invalid"}
@@ -695,13 +695,23 @@ func providerBalance(ctx context.Context, provider aiProvider, kind, model strin
 // openAIBalance 同时查 OpenAI 的订阅、近 90 天用量和模型（看组织和等级）。
 // 新版 platform Key 没有账单接口，查不到时如实说明，不算失败。
 func openAIBalance(ctx context.Context, provider aiProvider) Balance {
-	root := strings.TrimSuffix(normalizeOpenAIBaseURL(provider.URL), "/") + "/"
 	headers := balanceAuth(provider, "openai")
 	now := time.Now().Unix()
-	targets := []string{
-		aiEndpoint(root, "dashboard/billing/subscription"),
-		aiEndpoint(root, fmt.Sprintf("dashboard/billing/usage?start_date=%d&end_date=%d", now-90*86400, now)),
-		aiEndpoint(root, "models"),
+	var targets []string
+	for _, path := range []string{"dashboard/billing/subscription", "dashboard/billing/usage", "models"} {
+		target, err := ProviderEndpoint(provider.URL, "openai", path)
+		if err != nil {
+			return Balance{Status: "error"}
+		}
+		if path == "dashboard/billing/usage" {
+			u, _ := url.Parse(target)
+			q := u.Query()
+			q.Set("start_date", strconv.FormatInt(now-90*86400, 10))
+			q.Set("end_date", strconv.FormatInt(now, 10))
+			u.RawQuery = q.Encode()
+			target = u.String()
+		}
+		targets = append(targets, target)
 	}
 	replies := make([]balanceReply, len(targets))
 	var wait sync.WaitGroup
@@ -714,8 +724,11 @@ func openAIBalance(ctx context.Context, provider aiProvider) Balance {
 	}
 	wait.Wait()
 	subscription, usage, models := replies[0], replies[1], replies[2]
-	if !subscription.ok && (subscription.status == 401 || subscription.status == 403) {
-		return Balance{Status: "invalid"}
+	if !models.ok && !subscription.ok && !usage.ok {
+		if models.status == http.StatusUnauthorized {
+			return Balance{Status: "invalid"}
+		}
+		return Balance{Status: "error"}
 	}
 	data := subscription.data
 	var fields []BalanceField
@@ -767,12 +780,16 @@ func openAIBalance(ctx context.Context, provider aiProvider) Balance {
 }
 
 // anthropicBalance 用聊天模型发一个 1 token 的请求看 Key 是否有效；Anthropic 没有余额接口。
-func anthropicBalance(ctx context.Context, provider aiProvider, origin, model string) Balance {
+func anthropicBalance(ctx context.Context, provider aiProvider, model string) Balance {
 	if model == "" {
 		return Balance{Status: "unsupported", Fields: []BalanceField{{"余额", "请到官网查看"}}}
 	}
 	body := map[string]any{"model": model, "max_tokens": 1, "messages": []any{map[string]any{"role": "user", "content": "hi"}}}
-	reply := balanceGet(ctx, http.MethodPost, origin+"/v1/messages", balanceAuth(provider, "anthropic"), body, 15*time.Second)
+	target, err := ProviderEndpoint(provider.URL, "anthropic", "messages")
+	if err != nil {
+		return Balance{Status: "error"}
+	}
+	reply := balanceGet(ctx, http.MethodPost, target, balanceAuth(provider, "anthropic"), body, 15*time.Second)
 	if reply.ok || reply.status == 429 {
 		state := "正常"
 		if reply.status == 429 {

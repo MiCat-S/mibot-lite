@@ -118,7 +118,8 @@ func TestIdentify(t *testing.T) {
 		"https://api.deepseek.com":                   {Type: "deepseek", DisplayName: "DeepSeek"},
 		"https://api.x.ai/v1":                        {Type: "xai", DisplayName: "xAI (Grok)"},
 		"https://generativelanguage.googleapis.com/": {Type: "gemini", DisplayName: "Google Gemini"},
-		"https://relay.example.com/v1":               {Type: "openai", DisplayName: "OpenAI"},
+		"https://relay.example.com/v1":               {Type: "openai-compatible", DisplayName: "OpenAI 兼容 API"},
+		"https://api.openai.com/v1":                  {Type: "openai", DisplayName: "OpenAI"},
 	}
 	for address, want := range cases {
 		got := identifyProvider("t", aiProvider{URL: address})
@@ -267,5 +268,28 @@ func TestProbeTimeoutCapped(t *testing.T) {
 	_, probes, err := s.Benchmark(context.Background(), "slow")
 	if err != nil || len(probes) != 1 || probes[0].OK || !strings.Contains(probes[0].Error, "超时") || time.Since(started) > 300*time.Millisecond {
 		t.Errorf("%+v %v %v", probes, err, time.Since(started))
+	}
+}
+
+func TestOpenAIBillingPermissionIndependentOfModelAccess(t *testing.T) {
+	for _, tc := range []struct {
+		models int
+		want   string
+	}{
+		{200, "ok"}, {401, "invalid"}, {503, "error"},
+	} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				w.WriteHeader(tc.models)
+				_, _ = w.Write([]byte(`{"data":[]}`))
+			} else {
+				w.WriteHeader(http.StatusForbidden)
+			}
+		}))
+		got := openAIBalance(t.Context(), aiProvider{URL: server.URL, Key: "test"})
+		server.Close()
+		if got.Status != tc.want {
+			t.Errorf("models %d, billing 403: %s, want %s", tc.models, got.Status, tc.want)
+		}
 	}
 }

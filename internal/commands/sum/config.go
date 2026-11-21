@@ -2,7 +2,6 @@ package sum
 
 import (
 	"context"
-	"net/url"
 	"slices"
 	"sort"
 	"strconv"
@@ -13,7 +12,7 @@ import (
 	"github.com/MiCat-S/mibot-lite/internal/commands/kit"
 )
 
-// sumTypes 是服务商接口类型的可选值；auto 表示按模型名自动判断。
+// sumTypes 是服务商接口类型的可选值；auto 优先识别完整端点，其次按模型名判断。
 var sumTypes = []string{"auto", "chat", "responses", "gemini", "anthropic"}
 
 func sumProviderView(provider sumProvider) string {
@@ -46,7 +45,7 @@ func (s *sumService) config(ctx context.Context, inv *command.Invocation) error 
 	case "add":
 		err = s.configAdd(inv, name, property, rest)
 	case "del", "rm":
-		replied, err = s.configDelete(ctx, inv, db, name)
+		replied, err = s.configDelete(ctx, inv, name)
 	case "set":
 		replied, err = s.configSet(ctx, inv, db, name, property, rest)
 	default:
@@ -114,7 +113,7 @@ func (s *sumService) configAdd(inv *command.Invocation, name, base string, rest 
 	if name == "" || base == "" || key == "" || model == "" {
 		return kit.Usage(inv.Prefix, "sum config add 名称 BaseURL API Key 模型 [类型]")
 	}
-	if parsed, err := url.Parse(base); err != nil || parsed.Host == "" {
+	if _, err := ai.ProviderEndpoint(base, "openai", "models"); err != nil {
 		return kit.Fail("BaseURL 无效")
 	}
 	if err := ai.AssertAllowedModel(model); err != nil {
@@ -134,12 +133,15 @@ func (s *sumService) configAdd(inv *command.Invocation, name, base string, rest 
 
 // configDelete 删掉一个服务商；删的正好是默认的话，默认清空；用它的任务改回全局默认，
 // 免得这些任务以后每次都因为找不到配置而失败。
-func (s *sumService) configDelete(ctx context.Context, inv *command.Invocation, db sumDB, name string) (bool, error) {
-	if _, ok := db.AIConfig.Providers[name]; name == "" || !ok {
-		return false, kit.Fail("AI 配置不存在")
-	}
+func (s *sumService) configDelete(ctx context.Context, inv *command.Invocation, name string) (bool, error) {
 	var reset []string
-	if err := s.update(func(db *sumDB) error { reset = removeProvider(db, name); return nil }); err != nil {
+	if err := s.update(func(db *sumDB) error {
+		if _, ok := db.AIConfig.Providers[name]; !ok {
+			return kit.Fail("AI 配置不存在")
+		}
+		reset = removeProvider(db, name)
+		return nil
+	}); err != nil {
 		return false, err
 	}
 	if len(reset) == 0 {
@@ -170,10 +172,13 @@ func removeProvider(db *sumDB, name string) []string {
 func (s *sumService) configSet(ctx context.Context, inv *command.Invocation, db sumDB, name, property string, rest []string) (bool, error) {
 	switch name {
 	case "default":
-		if _, ok := db.AIConfig.Providers[property]; !ok {
-			return false, kit.Fail("AI 配置不存在")
-		}
-		return false, s.update(func(db *sumDB) error { db.AIConfig.DefaultProvider = property; return nil })
+		return false, s.update(func(db *sumDB) error {
+			if _, ok := db.AIConfig.Providers[property]; !ok {
+				return kit.Fail("AI 配置不存在")
+			}
+			db.AIConfig.DefaultProvider = property
+			return nil
+		})
 	case "preview", "spoiler", "reply":
 		enabled, err := kit.OnOff(property)
 		if err != nil {
@@ -227,7 +232,7 @@ func (s *sumService) configSet(ctx context.Context, inv *command.Invocation, db 
 	case "prompt":
 		return s.configPrompt(ctx, inv, db, property, rest)
 	}
-	return false, s.configProvider(inv, db, name, property, strings.TrimSpace(strings.Join(rest, " ")))
+	return false, s.configProvider(inv, name, property, strings.TrimSpace(strings.Join(rest, " ")))
 }
 
 // configPrompt 查看、修改或还原摘要提示词。
@@ -250,32 +255,38 @@ func (s *sumService) configPrompt(ctx context.Context, inv *command.Invocation, 
 }
 
 // configProvider 改某个服务商的一个字段：model、url、key、type。改 key 同样只允许在收藏夹里。
-func (s *sumService) configProvider(inv *command.Invocation, db sumDB, name, property, value string) error {
-	provider, ok := db.AIConfig.Providers[name]
-	if !ok || !slices.Contains([]string{"model", "url", "key", "type"}, property) || value == "" {
+func (s *sumService) configProvider(inv *command.Invocation, name, property, value string) error {
+	if !slices.Contains([]string{"model", "url", "key", "type"}, property) || value == "" {
 		return kit.Usage(inv.Prefix, "sum config set 名称 model|url|key|type 值")
 	}
-	if property == "key" && !inv.Message.Saved {
-		return kit.Fail("涉及 API Key 的配置命令只能在收藏夹使用")
+	if (property == "key" || property == "url") && !inv.Message.Saved {
+		return kit.Fail("API 地址和 Key 只能在收藏夹中修改")
 	}
-	switch property {
-	case "model":
-		if err := ai.AssertAllowedModel(value); err != nil {
-			return err
+	return s.update(func(db *sumDB) error {
+		provider, ok := db.AIConfig.Providers[name]
+		if !ok {
+			return kit.Fail("AI 配置不存在")
 		}
-		provider.Model = value
-	case "url":
-		if parsed, err := url.Parse(value); err != nil || parsed.Host == "" {
-			return kit.Fail("BaseURL 无效")
+		switch property {
+		case "model":
+			if err := ai.AssertAllowedModel(value); err != nil {
+				return err
+			}
+			provider.Model = value
+		case "url":
+			if _, err := ai.ProviderEndpoint(value, "openai", "models"); err != nil {
+				return kit.Fail("BaseURL 无效")
+			}
+			provider.BaseURL = value
+		case "key":
+			provider.APIKey = value
+		default:
+			if !slices.Contains(sumTypes, value) {
+				return kit.Fail("无效接口类型")
+			}
+			provider.Type = value
 		}
-		provider.BaseURL = value
-	case "key":
-		provider.APIKey = value
-	default:
-		if !slices.Contains(sumTypes, value) {
-			return kit.Fail("无效接口类型")
-		}
-		provider.Type = value
-	}
-	return s.update(func(db *sumDB) error { db.AIConfig.Providers[name] = provider; return nil })
+		db.AIConfig.Providers[name] = provider
+		return nil
+	})
 }

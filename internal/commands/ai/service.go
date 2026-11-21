@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"net/url"
 	"strings"
 	"time"
 
@@ -97,20 +98,16 @@ func (s *Service) Chat(ctx context.Context, request ChatRequest) (string, error)
 	}
 	options := chatOptions{maxOutputTokens: request.MaxOutputTokens}
 	text, err := chatText(ctx, cfg, sel, request.Text, system, options)
-	if err == nil || !request.FallbackToChat || !cfg.Configs[tag].Responses {
+	provider := cfg.Configs[tag]
+	kind := resolveProviderType(provider)
+	if err == nil || !request.FallbackToChat || !provider.Responses || kind == formatGemini || kind == formatAnthropic {
 		return text, err
 	}
 	if status := statusOf(err); status != 400 && status != 404 {
 		return "", err
 	}
-	provider := cfg.Configs[tag]
 	provider.Responses = false
-	configs := make(map[string]aiProvider, len(cfg.Configs))
-	for key, value := range cfg.Configs {
-		configs[key] = value
-	}
-	configs[tag] = provider
-	cfg.Configs = configs
+	cfg.Configs[tag] = provider // read 已返回独立副本。
 	return chatText(ctx, cfg, sel, request.Text, system, options)
 }
 
@@ -118,7 +115,8 @@ func (s *Service) Chat(ctx context.Context, request ChatRequest) (string, error)
 //
 // MiBox 读取配置时会补上文件里没写的两类值，这里把它们写进文件，Lite 读到的就和
 // MiBox 用的一样：服务商没写 responses 时，openai、openai-compatible、local-cliproxy
-// 类型按开启处理；文件里没有搜索选择时沿用聊天选择。其余字段原样保留。
+// 类型按开启处理。明确的 Chat Completions 地址和 Google Gemini 网关使用 Chat。
+// 文件里没有搜索选择时沿用聊天选择。其余字段原样保留。
 func ConvertMiBox(raw []byte) ([]byte, error) {
 	var document map[string]any
 	if err := json.Unmarshal(raw, &document); err != nil {
@@ -134,8 +132,15 @@ func ConvertMiBox(raw []byte) ([]byte, error) {
 				continue
 			}
 			if _, set := provider["responses"].(bool); !set {
-				kind := resolveProviderType(aiProvider{URL: StringOf(provider["url"]), Type: StringOf(provider["type"])})
-				provider["responses"] = kind == "openai" || kind == "openai-compatible" || kind == "local-cliproxy"
+				address := StringOf(provider["url"])
+				kind := resolveProviderType(aiProvider{URL: address, Type: StringOf(provider["type"])})
+				responses := kind == "openai" || kind == "openai-compatible" || kind == "local-cliproxy"
+				if u, err := url.Parse(address); err == nil {
+					if EndpointProtocol(u.Path) == shapeChat || aiHostTypes[strings.ToLower(u.Hostname())] == "gemini" {
+						responses = false
+					}
+				}
+				provider["responses"] = responses
 			}
 			if _, set := provider["stream"].(bool); !set {
 				provider["stream"] = false

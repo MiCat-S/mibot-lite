@@ -352,9 +352,7 @@ func (s *sumService) add(ctx context.Context, inv *command.Invocation) error {
 		spoiler = *options.spoiler
 	}
 	var task sumTask
-	var previous json.Number
 	if err := s.update(func(db *sumDB) error {
-		previous = db.Seq
 		last, _ := strconv.ParseInt(string(db.Seq), 10, 64)
 		id := strconv.FormatInt(last+1, 10)
 		task = sumTask{ID: id, Cron: spec, ChatID: chatID, ChatDisplay: display, Interval: interval, MessageCount: options.count,
@@ -370,7 +368,6 @@ func (s *sumService) add(ctx context.Context, inv *command.Invocation) error {
 		// 定时注册失败，把刚存下的任务撤掉；撤不掉的话配置里会留一个不会运行的任务。
 		kit.Warn(s.a, "sum.rollback_task_failed", s.update(func(db *sumDB) error {
 			db.Tasks = slicesDeleteTask(db.Tasks, task.ID)
-			db.Seq = previous
 			return nil
 		}))
 		return err
@@ -599,39 +596,34 @@ func (s *sumService) runNow(ctx context.Context, inv *command.Invocation) error 
 // toggle 处理 del、disable、enable。
 func (s *sumService) toggle(ctx context.Context, inv *command.Invocation, sub string) error {
 	id := inv.Arg(1)
-	db, err := s.read()
-	if err != nil {
-		return err
-	}
-	index := sumTaskIndex(db, id)
-	if index < 0 {
-		return kit.Fail("摘要任务不存在")
-	}
-	task := db.Tasks[index]
-	if sub != "enable" {
-		s.unregister(id)
-	}
+	var task sumTask
 	if err := s.update(func(db *sumDB) error {
-		for index := range db.Tasks {
-			if db.Tasks[index].ID != id {
-				continue
+		index := sumTaskIndex(*db, id)
+		if index < 0 {
+			return kit.Fail("摘要任务不存在")
+		}
+		if sub == "del" || sub == "rm" {
+			db.Tasks = append(db.Tasks[:index], db.Tasks[index+1:]...)
+		} else {
+			task = db.Tasks[index]
+			task.Disabled = sub == "disable"
+			if !task.Disabled {
+				if _, err := sumCronParser.Parse(task.Cron); err != nil {
+					return kit.Fail("定时表达式无效")
+				}
 			}
-			if sub == "del" || sub == "rm" {
-				db.Tasks = append(db.Tasks[:index], db.Tasks[index+1:]...)
-			} else {
-				db.Tasks[index].Disabled = sub == "disable"
-			}
-			break
+			db.Tasks[index] = task
 		}
 		return nil
 	}); err != nil {
 		return err
 	}
 	if sub == "enable" {
-		task.Disabled = false
 		if err := s.register(task); err != nil {
 			return err
 		}
+	} else {
+		s.unregister(id)
 	}
 	return inv.EditText(ctx, "✅ 摘要任务已更新")
 }
@@ -698,22 +690,15 @@ func (s *sumService) edit(ctx context.Context, inv *command.Invocation) error {
 
 // reorder 按任务当前的顺序重新编号为 1..n，并重新挂到调度器上。
 func (s *sumService) reorder(ctx context.Context, inv *command.Invocation) error {
-	db, err := s.read()
-	if err != nil {
-		return err
-	}
-	if len(db.Tasks) == 0 {
-		return kit.Fail("暂无任务需要重排序")
-	}
-	for _, task := range db.Tasks {
-		s.unregister(task.ID)
-	}
-	var mapping []string
+	var mapping, previous []string
 	var tasks []sumTask
 	if err := s.update(func(db *sumDB) error {
-		mapping = mapping[:0]
+		if len(db.Tasks) == 0 {
+			return kit.Fail("暂无任务需要重排序")
+		}
 		for index := range db.Tasks {
 			next := strconv.Itoa(index + 1)
+			previous = append(previous, db.Tasks[index].ID)
 			mapping = append(mapping, command.Escape(db.Tasks[index].ID)+" → "+next)
 			db.Tasks[index].ID = next
 		}
@@ -722,6 +707,9 @@ func (s *sumService) reorder(ctx context.Context, inv *command.Invocation) error
 		return nil
 	}); err != nil {
 		return err
+	}
+	for _, id := range previous {
+		s.unregister(id)
 	}
 	for _, task := range tasks {
 		if err := s.register(task); err != nil {

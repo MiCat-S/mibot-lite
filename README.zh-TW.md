@@ -96,6 +96,17 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 | `.sum [數量]` | 群組訊息摘要，也能設定排程 | 部分 |
 | `.checkapi [check\|speed\|compare] 標籤` | 檢測 AI 指令裡設定的 API：模型、測試提問、測速與比較 | |
 
+在 Telegram 收藏夾裡設定 OpenAI 或相容閘道。把下列網址、Key 和模型 ID 換成服務商提供的值，每行分開傳送。
+
+```text
+.ai config add main https://api.openai.com/v1 你的APIKey openai-compatible
+.checkapi models main
+.ai model chat main 模型ID
+.ai 你好
+```
+
+新設定預設使用 Chat Completions。傳送 `.ai config set main responses on` 可切換到 Responses，新增完整的 `/responses` 網址時會自動開啟。閘道網址可包含路徑前綴與查詢參數。完整的 Anthropic `/messages` 或 Gemini `:generateContent` 端點也能自動辨識。若只有閘道基底網址，可指定 `anthropic` 或 `gemini`。`.ai config set main stream on` 開啟串流傳輸，Telegram 會在收到完整回答後顯示結果。連網搜尋需要所選模型和閘道支援該協定的搜尋功能。
+
 **訊息與貼圖**
 
 | 指令 | 作用 | 可借 |

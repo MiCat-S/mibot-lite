@@ -200,12 +200,13 @@ func aiHelp(prefix string) string {
 	}
 	return "🤖 <b>AI 助手</b>\n\n" +
 		item(" 问题", "向 AI 提问；回复一条消息时，那条消息作为上下文，其中的图片一并发送") +
-		item(" search 问题", "联网搜索并回答") +
+		item(" search 问题", "使用所选模型的联网搜索能力，回答附带来源") +
 		"\n<blockquote expandable><b>API 配置</b>\n" +
 		item(" config add 标签 URL Key [类型]", "添加一个配置；标签已存在时换掉它的地址和 Key") +
 		item(" config set 标签 url|key 新值", "只改地址或 Key") +
 		item(" config set 标签 type openai-compatible|openai|gemini|anthropic|doubao|moonshot|local-cliproxy", "设置接口类型") +
-		item(" config set 标签 stream|responses on|off", "流式传输、Responses 模式") +
+		item(" config set 标签 stream on|off", "从接口流式接收回答，收齐后发到 Telegram") +
+		item(" config set 标签 responses on|off", "OpenAI 协议选择 Responses（on）或 Chat Completions（off）") +
 		item(" config del 标签", "删除配置") +
 		item(" config list", "查看配置") +
 		"\n<b>模型</b>\n" +
@@ -672,8 +673,13 @@ func (s *Service) configure(ctx context.Context, inv *command.Invocation) error 
 			// 只想改一项时用 config set。
 			previous, ok := cfg.Configs[tag]
 			replaced = ok
+			responses := previous.Responses
+			if !ok {
+				u, _ := url.Parse(link)
+				responses = EndpointProtocol(u.Path) == shapeResponses
+			}
 			cfg.Configs[tag] = aiProvider{Tag: tag, URL: link, Key: key, Type: kind, Stream: previous.Stream,
-				Responses: previous.Responses, Models: previous.Models}
+				Responses: responses, Models: previous.Models}
 			return nil
 		}); err != nil {
 			return err

@@ -13,7 +13,9 @@ import (
 	"time"
 
 	"github.com/gotd/td/bin"
+	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/tg"
+	"github.com/robfig/cron/v3"
 
 	"github.com/MiCat-S/mibot-lite/internal/bot"
 	"github.com/MiCat-S/mibot-lite/internal/command"
@@ -232,6 +234,138 @@ func TestRemoveProvider(t *testing.T) {
 	}
 }
 
+func TestSumOwnProviderProtocols(t *testing.T) {
+	const secret = "test+summary/key"
+	tests := []struct {
+		kind, model, address, path, authHeader, authValue, tokens, response string
+	}{
+		{"chat", "relay-model", "/tenant/v1/chat/completions/?project=group", "/tenant/v1/chat/completions", "Authorization", "Bearer " + secret, "max_tokens",
+			`{"choices":[{"message":{"content":[{"type":"text","text":"摘要"}]}}]}`},
+		{"auto", "gateway-alias", "/tenant/v1/responses?project=group", "/tenant/v1/responses", "Authorization", "Bearer " + secret, "max_output_tokens",
+			`{"output_text":"摘要"}`},
+		{"auto", "gemini-relay", "/v1beta/openai?project=group", "/v1beta/openai/chat/completions", "Authorization", "Bearer " + secret, "max_tokens",
+			`{"choices":[{"message":{"content":"摘要"}}]}`},
+		{"responses", "gpt-5", "/tenant/v3/responses?project=group", "/tenant/v3/responses", "Authorization", "Bearer " + secret, "max_output_tokens",
+			`{"output_text":"摘要"}`},
+		{"auto", "models/gemini-2.5-flash", "/tenant/v1/models/gemini-2.5-flash:generateContent?project=group", "/tenant/v1/models/gemini-2.5-flash:generateContent", "", "", "",
+			`{"candidates":[{"content":{"parts":[{"text":"推理","thought":true},{"text":"摘要"}]}}]}`},
+		{"anthropic", "claude-sonnet", "/tenant?project=group", "/tenant/v1/messages", "X-Api-Key", secret, "max_tokens",
+			`{"content":[{"type":"thinking","thinking":"推理"},{"type":"text","text":"摘要"}]}`},
+	}
+	for _, test := range tests {
+		t.Run(test.kind, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost || r.URL.Path != test.path || r.URL.Query().Get("project") != "group" {
+					t.Errorf("请求地址不对：%s %s", r.Method, r.URL)
+				}
+				if test.authHeader == "" {
+					if r.URL.Query().Get("key") != secret || r.Header.Get("Authorization") != "" {
+						t.Error("Gemini 请求认证方式不对")
+					}
+				} else if r.Header.Get(test.authHeader) != test.authValue || r.URL.Query().Has("key") {
+					t.Error("请求认证方式不对")
+				}
+				if test.kind == "anthropic" && r.Header.Get("Anthropic-Version") != "2023-06-01" {
+					t.Error("Anthropic 缺少版本请求头")
+				}
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				if test.tokens != "" && body[test.tokens] != float64(2000) {
+					t.Errorf("缺少输出上限：%v", body)
+				}
+				if test.kind == "responses" && body["store"] != false {
+					t.Errorf("Responses 请求应关闭存储：%v", body)
+				}
+				_, _ = w.Write([]byte(test.response))
+			}))
+			defer server.Close()
+			db := sumDefaults()
+			db.AIConfig.Providers["own"] = sumProvider{BaseURL: server.URL + test.address, APIKey: secret, Model: test.model, Type: test.kind}
+			db.AIConfig.DefaultProvider = "own"
+			backend, err := sumResolveBackend(db, "", false, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if output, err := backend.call(context.Background(), db, "消息", "提示"); err != nil || output != "摘要" {
+				t.Fatalf("摘要结果不对：%q，%v", output, err)
+			}
+		})
+	}
+}
+
+func TestSumAutoResponsesFallbackUsesChatCompletionLimit(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/responses":
+			w.WriteHeader(http.StatusNotFound)
+		case "/v1/chat/completions":
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Error(err)
+			}
+			if body["max_completion_tokens"] != float64(2000) || body["max_tokens"] != nil {
+				t.Errorf("o 系列模型的 Chat Completions 输出上限参数不对：%v", body)
+			}
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"摘要"}}]}`))
+		default:
+			t.Errorf("错误的回退地址：%s", r.URL)
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+	provider := sumProvider{BaseURL: server.URL + "/v1/responses", APIKey: "key", Model: "o3-mini", Type: "auto"}
+	if output, err := sumCallAI(context.Background(), "own", provider, "消息", "提示", "auto", "auto", time.Second); err != nil || output != "摘要" {
+		t.Fatalf("回退失败：%q，%v", output, err)
+	}
+}
+
+func TestSumAutoGeminiFallbackUsesLegacyChatPath(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/relay/v1beta/models/gemini-2.5-flash:generateContent":
+			w.WriteHeader(http.StatusNotFound)
+		case "/relay/v1/chat/completions":
+			if r.URL.Query().Has("key") || r.Header.Get("Authorization") != "Bearer key" {
+				t.Error("回退后应使用 OpenAI 认证方式")
+			}
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"摘要"}}]}`))
+		default:
+			t.Errorf("错误的回退地址：%s", r.URL)
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+	for _, base := range []string{"/relay/v1", "/relay/v1beta"} {
+		provider := sumProvider{BaseURL: server.URL + base, APIKey: "key", Model: "gemini-2.5-flash", Type: "auto"}
+		if output, err := sumCallAI(context.Background(), "own", provider, "消息", "提示", "auto", "auto", time.Second); err != nil || output != "摘要" {
+			t.Fatalf("%s 回退失败：%q，%v", base, output, err)
+		}
+	}
+}
+
+func TestSumSuccessfulStatusWithProviderError(t *testing.T) {
+	const secret = "secret-123"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"error":{"message":"request rejected for secret-123"}}`))
+	}))
+	defer server.Close()
+	for _, kind := range []string{"chat", "gemini"} {
+		t.Run(kind, func(t *testing.T) {
+			provider := sumProvider{BaseURL: server.URL, APIKey: secret, Model: "model", Type: kind}
+			_, err := sumCallAI(context.Background(), "own", provider, "消息", "提示", "auto", "auto", time.Second)
+			message, ok := kit.IsUserError(err)
+			if !ok || !strings.Contains(message, "request rejected for ***") {
+				t.Fatalf("未显示服务商错误：%q，%v", message, err)
+			}
+			if strings.Contains(err.Error(), secret) || strings.Contains(message, secret) {
+				t.Fatalf("错误泄露密钥：%q，%v", message, err)
+			}
+		})
+	}
+}
+
 // TestSumCallAIErrorDetail 检查服务商的错误说明会显示出来，密钥打码。
 func TestSumCallAIErrorDetail(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -372,5 +506,119 @@ func TestSumResultRich(t *testing.T) {
 	var buffer bin.Buffer
 	if err := (&tg.InputRichMessage{Blocks: folded}).Encode(&buffer); err != nil {
 		t.Fatalf("编码失败：%v", err)
+	}
+}
+
+func TestSumGeminiURLKeyOnChatFallback(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("tenant") != "abc" {
+			t.Error("missing tenant")
+		}
+		switch r.URL.Path {
+		case "/v1beta/models/gemini-relay:generateContent":
+			if r.URL.Query().Get("key") != "url-secret" {
+				t.Error("wrong Gemini key")
+			}
+			w.WriteHeader(404)
+		case "/v1/chat/completions":
+			if r.URL.Query().Has("key") || r.Header.Get("Authorization") != "Bearer other-key" {
+				t.Error("wrong Chat credentials")
+			}
+			w.WriteHeader(401)
+			_, _ = w.Write([]byte(`{"error":{"message":"invalid other-key"}}`))
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	p := sumProvider{BaseURL: server.URL + "/v1?key=url-secret&tenant=abc", APIKey: "other-key", Model: "gemini-relay", Type: "auto"}
+	_, err := sumCallAI(t.Context(), "own", p, "消息", "提示", "auto", "auto", time.Second)
+	message, ok := kit.IsUserError(err)
+	if !ok || !strings.Contains(message, "invalid ***") || strings.Contains(err.Error(), "url-secret") {
+		t.Fatalf("error: %v", err)
+	}
+}
+
+func TestSumHistoryAdvancesPastServiceMessages(t *testing.T) {
+	calls := 0
+	rpc := telegram.InvokeFunc(func(_ context.Context, in bin.Encoder, out bin.Decoder) error {
+		req := in.(*tg.MessagesGetHistoryRequest)
+		var batch []tg.MessageClass
+		switch calls {
+		case 0:
+			for i := 200; i > 100; i-- {
+				batch = append(batch, &tg.MessageService{ID: i})
+			}
+		case 1:
+			if req.OffsetID != 101 {
+				t.Fatalf("second page offset = %d", req.OffsetID)
+			}
+			batch = []tg.MessageClass{&tg.Message{ID: 100, Message: "older text", Date: 1}}
+		default:
+			t.Fatalf("unexpected page %d", calls)
+		}
+		calls++
+		out.(*tg.MessagesMessagesBox).Messages = &tg.MessagesMessages{Messages: batch}
+		return nil
+	})
+	client := bot.FromAPI(tg.NewClient(rpc), bot.NewPeerCache(), &tg.User{ID: 1}, nil)
+	rows, _, err := (&sumService{}).readMessages(context.Background(), client, "me", 0, 100, 0)
+	if err != nil || len(rows) != 1 || rows[0].Content != "older text" || rows[0].Link != "" {
+		t.Fatalf("rows = %+v, err = %v", rows, err)
+	}
+}
+
+func TestSumSourceLinks(t *testing.T) {
+	channel := &tg.PeerChannel{ChannelID: 42}
+	for _, tc := range []struct {
+		peer           tg.PeerClass
+		username, want string
+	}{
+		{channel, "public", "https://t.me/public/7"},
+		{channel, "", "https://t.me/c/42/7"},
+		{&tg.PeerChat{ChatID: 42}, "", ""},
+		{&tg.PeerUser{UserID: 42}, "", ""},
+	} {
+		link := sumMessageLink(tc.peer, 7, tc.username)
+		if link != tc.want {
+			t.Errorf("link for %T = %q, want %q", tc.peer, link, tc.want)
+		}
+		text := sumFormatMessages([]sumMessage{{Text: "hello", Link: link, URLs: []string{"https://example.com"}, FileName: "a.txt"}})
+		if !strings.Contains(text, "a.txt") || !strings.Contains(text, "https://example.com") || strings.Contains(text, "]()") || (link != "" && strings.Count(text, link) != 3) {
+			t.Fatal(text)
+		}
+	}
+}
+
+func TestSumFailedConfigWriteKeepsSchedule(t *testing.T) {
+	for _, action := range []string{"disable", "del", "reorder"} {
+		t.Run(action, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "sum.json")
+			s := &sumService{store: store.New(path, sumDefaults), cron: cron.New(cron.WithParser(sumCronParser)), entries: map[string]cron.EntryID{}}
+			task := sumTask{ID: "7", Cron: "0 * * * *"}
+			if err := s.update(func(db *sumDB) error { db.Tasks = []sumTask{task}; return nil }); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.register(task); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(path, 0700); err != nil {
+				t.Fatal(err)
+			}
+			inv := &command.Invocation{Args: []string{action, "7"}}
+			var err error
+			if action == "reorder" {
+				err = s.reorder(context.Background(), inv)
+			} else {
+				err = s.toggle(context.Background(), inv, action)
+			}
+			if err == nil || len(s.cron.Entries()) != 1 || s.entries["7"] == 0 {
+				t.Fatalf("schedule = %+v after failed %s: %v", s.entries, action, err)
+			}
+		})
 	}
 }

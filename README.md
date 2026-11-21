@@ -96,6 +96,17 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 | `.sum [数量]` | 群消息摘要，也能设定时任务 | 部分 |
 | `.checkapi [check\|speed\|compare] 标签` | 检测 AI 命令里配置的 API：模型、测试提问、测速与对比 | |
 
+在 Telegram 收藏夹里配置 OpenAI 或兼容网关。把下面的地址、Key 和模型 ID 换成服务商提供的值，每行单独发送。
+
+```text
+.ai config add main https://api.openai.com/v1 你的APIKey openai-compatible
+.checkapi models main
+.ai model chat main 模型ID
+.ai 你好
+```
+
+新配置默认使用 Chat Completions。使用 Responses 时发送 `.ai config set main responses on`，新添加的完整 `/responses` 地址会自动开启此模式。网关基址可以带路径前缀和查询参数。完整的 Anthropic `/messages` 或 Gemini `:generateContent` 端点也能自动识别。只有网关基址时，可以显式选择 `anthropic` 或 `gemini`。`.ai config set main stream on` 开启接口流式传输，Telegram 在收齐回答后显示结果。联网搜索需要所选模型和网关支持相应协议的搜索功能。
+
 **消息与贴纸**
 
 | 命令 | 作用 | 可借 |

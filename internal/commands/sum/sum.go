@@ -96,11 +96,11 @@ func (db *sumDB) normalize() {
 		db.Seq = "0"
 	}
 	// 内置提示词改成了 Markdown 版，存着旧的内置提示词就换成新的，自定义的不动。
-	if db.AIConfig.DefaultPrompt == sumLegacyPrompt {
+	if db.AIConfig.DefaultPrompt == sumLegacyPrompt || db.AIConfig.DefaultPrompt == sumMarkdownPrompt {
 		db.AIConfig.DefaultPrompt = sumDefaultPrompt
 	}
 	for index := range db.Tasks {
-		if db.Tasks[index].AIPrompt == sumLegacyPrompt {
+		if db.Tasks[index].AIPrompt == sumLegacyPrompt || db.Tasks[index].AIPrompt == sumMarkdownPrompt {
 			db.Tasks[index].AIPrompt = ""
 		}
 	}
@@ -127,11 +127,15 @@ type sumMessage struct {
 	FileName string
 }
 
-func sumMessageLink(chatID string, messageID int, username string) string {
+func sumMessageLink(peer tg.PeerClass, messageID int, username string) string {
+	channel, ok := peer.(*tg.PeerChannel)
+	if !ok {
+		return ""
+	}
 	if username != "" {
 		return fmt.Sprintf("https://t.me/%s/%d", username, messageID)
 	}
-	return fmt.Sprintf("https://t.me/c/%s/%d", strings.TrimPrefix(chatID, "-100"), messageID)
+	return fmt.Sprintf("https://t.me/c/%d/%d", channel.ChannelID, messageID)
 }
 
 func sumFileName(media tg.MessageMediaClass) string {
@@ -199,7 +203,11 @@ var sumURLPattern = regexp.MustCompile(`https?://[^\s\]）】>]+`)
 func sumFormatMessages(rows []sumMessage) string {
 	var lines []string
 	for _, row := range rows {
-		lines = append(lines, row.Text+" [来源]("+row.Link+")")
+		line := row.Text
+		if row.Link != "" {
+			line += " [来源](" + row.Link + ")"
+		}
+		lines = append(lines, line)
 	}
 	type mapping struct{ url, link string }
 	var urls []mapping
@@ -217,79 +225,48 @@ func sumFormatMessages(rows []sumMessage) string {
 		}
 	}
 	result := strings.Join(lines, "\n")
-	if len(urls) > 0 {
-		result += "\n\n--- 消息中包含的外部链接（资源URL - 来源消息链接）---\n"
-		for _, item := range urls {
-			result += item.url + " - [查看原消息](" + item.link + ")\n"
+	appendMappings := func(title string, items []mapping) {
+		if len(items) == 0 {
+			return
+		}
+		result += "\n\n--- " + title + " ---\n"
+		for _, item := range items {
+			result += item.url
+			if item.link != "" {
+				result += " - [查看原消息](" + item.link + ")"
+			}
+			result += "\n"
 		}
 	}
-	if len(files) > 0 {
-		result += "\n\n--- 消息中包含的附件（文件名 - 来源消息链接）---\n"
-		for _, item := range files {
-			result += item.url + " - [查看原消息](" + item.link + ")\n"
-		}
-	}
+	appendMappings("消息中包含的外部链接", urls)
+	appendMappings("消息中包含的附件", files)
 	return result
 }
 
-func sumNormalizedBase(raw string) string {
-	trimmed := strings.TrimRight(raw, "/")
-	return regexp.MustCompile(`(?i)/v1(?:beta)?$`).ReplaceAllString(trimmed, "")
-}
+var sumResponsesModel = regexp.MustCompile(`^(gpt-[5-9]|o[1-9])`)
+var sumUnsupportedEndpoint = regexp.MustCompile(`(?i)unsupported_upstream|endpoint|not supported`)
+var sumAPIVersion = regexp.MustCompile(`(?i)/v[0-9]+(?:(?:alpha|beta)[0-9]*)?$`)
 
-func sumDetectProtocol(provider sumProvider) string {
+func sumDetectProtocol(provider sumProvider) (protocol string, auto bool) {
 	if provider.Type != "" && provider.Type != "auto" && provider.Type != "openai" {
-		return provider.Type
+		return provider.Type, false
+	}
+	// 完整端点明确了网关接受的请求体。兼容网关的模型名可以是任意别名。
+	if u, err := url.Parse(provider.BaseURL); err == nil {
+		if protocol := ai.EndpointProtocol(u.Path); protocol != "" {
+			return protocol, true
+		}
 	}
 	model := strings.ToLower(provider.Model)
 	switch {
-	case strings.HasPrefix(model, "gemini"):
-		return "gemini"
+	case strings.HasPrefix(strings.TrimPrefix(model, "models/"), "gemini"):
+		return "gemini", true
 	case strings.HasPrefix(model, "claude"):
-		return "anthropic"
-	case regexp.MustCompile(`^(gpt-[5-9]|o[1-9])`).MatchString(model):
-		return "responses"
+		return "anthropic", true
+	case sumResponsesModel.MatchString(model):
+		return "responses", true
 	}
-	return "chat"
-}
-
-func sumParseText(raw []byte, gemini bool) (string, error) {
-	payloads, err := ai.Payloads(raw)
-	if err != nil {
-		return "", err
-	}
-	var parts []string
-	for _, payload := range payloads {
-		if gemini {
-			root := payload
-			if response := ai.ObjectOf(payload["response"]); len(response) > 0 {
-				root = response
-			} else if data := ai.ObjectOf(payload["data"]); len(data) > 0 {
-				root = data
-			}
-			for _, part := range ai.ListOf(ai.ObjectOf(ai.ObjectOf(ai.FirstOf(ai.ListOf(root["candidates"])))["content"])["parts"]) {
-				parts = append(parts, ai.StringOf(ai.ObjectOf(part)["text"]))
-			}
-			continue
-		}
-		choice := ai.ObjectOf(ai.FirstOf(ai.ListOf(payload["choices"])))
-		text := ai.StringOf(ai.ObjectOf(choice["delta"])["content"])
-		if text == "" {
-			text = ai.StringOf(ai.ObjectOf(choice["message"])["content"])
-		}
-		if text == "" {
-			text = ai.StringOf(choice["text"])
-		}
-		if text == "" {
-			text = ai.StringOf(payload["text"])
-		}
-		parts = append(parts, text)
-	}
-	text := strings.TrimSpace(strings.Join(parts, ""))
-	if text == "" {
-		return "", kit.Fail("AI 返回内容为空")
-	}
-	return text, nil
+	return "chat", true
 }
 
 // sumHTTPFailure 是 sum 自己的服务商返回非 2xx 时的说明：带上接口的错误说明，密钥打码。
@@ -297,39 +274,71 @@ func sumHTTPFailure(status int, body []byte, key string) error {
 	return kit.Fail("AI 调用失败：" + ai.HTTPFailure(status, body, key))
 }
 
+func sumProviderEndpoint(raw, format, endpoint string) (string, error) {
+	target, err := ai.ProviderEndpoint(raw, format, endpoint)
+	if err != nil {
+		return "", err
+	}
+	base, _ := url.Parse(raw)
+	address, _ := url.Parse(target)
+	configuredPath := strings.TrimRight(base.EscapedPath(), "/")
+	prefix := strings.TrimSuffix(address.EscapedPath(), "/"+endpoint)
+	version := "/v1"
+	if format == "gemini" {
+		version = "/v1beta"
+	}
+	switch {
+	case prefix == configuredPath && (strings.HasSuffix(prefix, "/v1") || strings.HasSuffix(prefix, "/v1beta")):
+		// 旧版把这两个基址都视作同一网关，版本由选中的协议决定。
+		prefix = prefix[:strings.LastIndexByte(prefix, '/')] + version
+	case prefix == configuredPath && !sumAPIVersion.MatchString(prefix) && !strings.HasSuffix(prefix, "/openai"):
+		// 旧配置把不带版本的路径当作网关前缀，调用时再补版本。
+		prefix += version
+	case format == "openai" && strings.HasSuffix(prefix, "/v1beta") &&
+		strings.HasPrefix(configuredPath, prefix+"/models/"):
+		// Gemini 的自动回退要切换到网关的 OpenAI 版本路径。
+		prefix = strings.TrimSuffix(prefix, "/v1beta") + version
+	}
+	address.RawPath = prefix + "/" + endpoint
+	address.Path, _ = url.PathUnescape(address.RawPath)
+	return address.String(), nil
+}
+
 func sumCallAI(ctx context.Context, tag string, provider sumProvider, messages, prompt, reasoning, tier string, timeout time.Duration) (output string, err error) {
 	if err := ai.AssertAllowedModel(provider.Model); err != nil {
 		return "", kit.Fail("配置模型被项目策略禁止，请更换模型")
 	}
 	input := prompt + "\n\n" + messages
-	base := sumNormalizedBase(provider.BaseURL)
 	started := time.Now()
 	info := ai.RequestInfo{Tag: tag, Model: provider.Model, Timeout: timeout, Stage: "request"}
-	defer func() { err = info.Failure(err, started, provider.APIKey) }()
+	secret := provider.APIKey
+	defer func() { err = info.Failure(err, started, secret) }()
+	var format string
 	request := func(protocol string) (httpx.Response, error) {
 		info.Responses = protocol == "responses"
-		headers := map[string]string{}
-		var target string
+		var endpoint string
 		var data map[string]any
 		switch protocol {
 		case "gemini":
-			target = base + "/v1beta/models/" + url.PathEscape(provider.Model) + ":generateContent?key=" + url.QueryEscape(provider.APIKey)
+			format = "gemini"
+			endpoint = "models/" + url.PathEscape(strings.TrimPrefix(provider.Model, "models/")) + ":generateContent"
 			data = map[string]any{"contents": []any{map[string]any{"role": "user", "parts": []any{map[string]any{"text": input}}}}}
 		case "anthropic":
-			target = base + "/v1/messages"
-			headers["x-api-key"], headers["anthropic-version"] = provider.APIKey, "2023-06-01"
+			format = "anthropic"
+			endpoint = "messages"
 			data = map[string]any{"model": provider.Model, "max_tokens": 2000, "messages": []any{map[string]any{"role": "user", "content": input}}}
 		default:
-			headers["Authorization"], headers["User-Agent"] = "Bearer "+provider.APIKey, ai.CodexUserAgent
+			format = "openai"
 			if protocol == "responses" {
-				target = base + "/v1/responses"
+				endpoint = "responses"
 				data = map[string]any{"model": provider.Model, "input": []any{map[string]any{"role": "user", "content": []any{map[string]any{"type": "input_text", "text": input}}}}, "max_output_tokens": 2000, "store": false}
 				if reasoning != "auto" {
 					data["reasoning"] = map[string]any{"effort": reasoning}
 				}
 			} else {
-				target = base + "/v1/chat/completions"
-				data = map[string]any{"model": provider.Model, "messages": []any{map[string]any{"role": "user", "content": input}}, "max_tokens": 2000}
+				endpoint = "chat/completions"
+				tokenLimit := ai.ChatTokenLimitField(provider.Model)
+				data = map[string]any{"model": provider.Model, "messages": []any{map[string]any{"role": "user", "content": input}}, tokenLimit: 2000}
 				if reasoning != "auto" {
 					data["reasoning_effort"] = reasoning
 				}
@@ -338,63 +347,40 @@ func sumCallAI(ctx context.Context, tag string, provider sumProvider, messages, 
 				data["service_tier"] = tier
 			}
 		}
+		target, err := sumProviderEndpoint(provider.BaseURL, format, endpoint)
+		if err != nil {
+			return httpx.Response{}, err
+		}
+		target, headers, actual := ai.ProviderAuth(format, provider.APIKey, target)
+		secret = actual
 		return httpx.PostJSON(ctx, httpx.Request{URL: target, Headers: headers, Timeout: timeout,
 			MaxBytes: ai.ResponseLimit, WaitForHeaders: true}, data)
 	}
-	protocol := sumDetectProtocol(provider)
+	protocol, auto := sumDetectProtocol(provider)
 	result, err := request(protocol)
 	if err != nil {
 		return "", err
 	}
-	auto := provider.Type == "" || provider.Type == "auto" || provider.Type == "openai"
-	if !result.OK() && auto && protocol != "chat" && (result.Status == 404 || result.Status == 400 && regexp.MustCompile(`(?i)unsupported_upstream|endpoint|not supported`).Match(result.Body)) {
-		protocol = "chat"
-		result, err = request(protocol)
+	if auto && protocol != "chat" && (result.Status == 404 || result.Status == 400 && sumUnsupportedEndpoint.Match(result.Body)) {
+		if protocol == "gemini" {
+			// 回退使用配置的 Bearer Key，移除仅用于 Gemini 的 URL 凭证。
+			u, _ := url.Parse(provider.BaseURL)
+			q := u.Query()
+			q.Del("key")
+			u.RawQuery = q.Encode()
+			provider.BaseURL = u.String()
+		}
+		result, err = request("chat")
 		if err != nil {
 			return "", err
 		}
 	}
 	info.Stage = "response"
 	if !result.OK() {
-		return "", sumHTTPFailure(result.Status, result.Body, provider.APIKey)
+		return "", sumHTTPFailure(result.Status, result.Body, secret)
 	}
 	info.Stage = "decode"
-	if protocol == "anthropic" || protocol == "responses" {
-		var data map[string]any
-		if err := json.Unmarshal(result.Body, &data); err != nil {
-			return "", kit.Fail("AI 返回无效 JSON")
-		}
-		if data["error"] != nil || data["status"] == "failed" {
-			if detail := ai.ErrorDetail(result.Body, provider.APIKey); detail != "" {
-				return "", kit.Fail("AI 提供商返回错误：" + detail)
-			}
-			return "", kit.Fail("AI 提供商返回错误")
-		}
-		var parts []string
-		if protocol == "anthropic" {
-			for _, item := range ai.ListOf(data["content"]) {
-				if ai.ObjectOf(item)["type"] == "text" {
-					parts = append(parts, ai.StringOf(ai.ObjectOf(item)["text"]))
-				}
-			}
-		} else if text := ai.StringOf(data["output_text"]); text != "" {
-			parts = append(parts, text)
-		} else {
-			for _, item := range ai.ListOf(data["output"]) {
-				for _, part := range ai.ListOf(ai.ObjectOf(item)["content"]) {
-					if ai.ObjectOf(part)["type"] == "output_text" {
-						parts = append(parts, ai.StringOf(ai.ObjectOf(part)["text"]))
-					}
-				}
-			}
-		}
-		content := strings.TrimSpace(strings.Join(parts, "\n"))
-		if content == "" {
-			return "", kit.Fail("AI 返回内容为空")
-		}
-		return content, nil
-	}
-	return sumParseText(result.Body, protocol == "gemini")
+	return ai.ParseText(result.Body, format, secret)
 }
 
 // sumBackend 是一次摘要实际用的模型：sum 自己的服务商，或 ai 统一配置里的某个标签
@@ -525,7 +511,6 @@ func (s *sumService) readMessages(ctx context.Context, client *bot.Client, chatI
 	if title == "" {
 		title = chatID
 	}
-	linkID := bot.PeerID(peer)
 	var cutoff int
 	if timeRange > 0 {
 		cutoff = int(time.Now().Unix()) - timeRange*3600
@@ -547,12 +532,13 @@ func (s *sumService) readMessages(ctx context.Context, client *bot.Client, chatI
 		}
 		for _, item := range messages {
 			scanned++
+			id := kit.MessageID(item)
+			if id > 0 && (offset == 0 || id < offset) {
+				offset = id
+			}
 			message, ok := item.(*tg.Message)
 			if !ok {
 				continue
-			}
-			if message.ID < offset || offset == 0 {
-				offset = message.ID
 			}
 			if beforeID > 0 && message.ID >= beforeID {
 				continue
@@ -573,7 +559,7 @@ func (s *sumService) readMessages(ctx context.Context, client *bot.Client, chatI
 				sender = title
 			}
 			rows = append(rows, sumMessage{Text: sumMessageText(message.Date, sender, content, fileName), Content: content,
-				Link: sumMessageLink(linkID, message.ID, username), URLs: sumEntityURLs(message), FileName: fileName})
+				Link: sumMessageLink(peer, message.ID, username), URLs: sumEntityURLs(message), FileName: fileName})
 			if len(rows) >= count {
 				break
 			}
@@ -679,8 +665,10 @@ func (s *sumService) summarize(ctx context.Context, client *bot.Client, job sumJ
 		return sumResult{}, err
 	}
 	output = strings.TrimSpace(sumThinkPattern.ReplaceAllString(output, ""))
-	if limit := db.AIConfig.MaxOutputLength; limit > 0 && kit.UTF16Len(output) > limit {
-		output = kit.TruncateRunes(output, limit) + "\n\n内容已按配置长度截断。"
+	if limit := db.AIConfig.MaxOutputLength; limit > 0 {
+		if truncated := kit.TruncateRunes(output, limit); truncated != output {
+			output = truncated + "\n\n内容已按配置长度截断。"
+		}
 	}
 	return sumResult{title: title, at: time.Now(), output: output, spoiler: job.spoiler}, nil
 }

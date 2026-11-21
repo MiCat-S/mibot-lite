@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/url"
 	"strings"
 	"time"
@@ -207,19 +208,20 @@ func searchText(ctx context.Context, cfg aiConfig, text string, options chatOpti
 		return "", nil, "", kit.Failf("当前 %s 提供商不支持 search 模式", kind)
 	}
 	if kind == "local-cliproxy" && strings.Contains(sel.Model, "gemini") {
-		if parsed, err := url.Parse(provider.URL); err == nil {
-			if !strings.HasPrefix(parsed.Path, "/v1beta") {
-				parsed.Path = "/v1beta"
-			}
-			parsed.RawQuery, parsed.Fragment = "", ""
-			provider.Type, provider.URL = "gemini", parsed.String()
-			configs := make(map[string]aiProvider, len(cfg.Configs))
-			for tag, other := range cfg.Configs {
-				configs[tag] = other
-			}
-			configs[sel.Tag] = provider
-			cfg.Configs = configs
+		models, err := ProviderEndpoint(provider.URL, kind, "models")
+		if err != nil {
+			return "", nil, "", err
 		}
+		u, _ := url.Parse(models)
+		prefix := strings.TrimSuffix(u.EscapedPath(), "/models")
+		if !strings.HasSuffix(prefix, "/v1beta") {
+			prefix = strings.TrimSuffix(prefix, "/v1") + "/v1beta"
+		}
+		u.RawPath = prefix
+		u.Path, _ = url.PathUnescape(prefix)
+		provider.Type, provider.URL = "gemini", u.String()
+		cfg.Configs = maps.Clone(cfg.Configs)
+		cfg.Configs[sel.Tag] = provider
 	}
 	request, err := buildChatRequest(cfg, sel, text, cfg.Prompt, options)
 	if err != nil {
@@ -228,11 +230,12 @@ func searchText(ctx context.Context, cfg aiConfig, text string, options chatOpti
 	switch {
 	case request.Format == formatGemini:
 		request.Body["tools"] = []any{map[string]any{"googleSearch": map[string]any{}}}
+	case request.Format == formatAnthropic:
+		request.Body["tools"] = []any{map[string]any{"type": "web_search_20250305", "name": "web_search"}}
 	case request.Responses:
 		request.Body["tools"] = []any{map[string]any{"type": "web_search"}}
 		request.Body["include"] = []any{"web_search_call.action.sources"}
 	default:
-		request.Body["tools"] = []any{map[string]any{"type": "web_search", "web_search": map[string]any{"searchContextSize": "high"}}}
 		request.Body["web_search_options"] = map[string]any{"search_context_size": "high"}
 	}
 	started := time.Now()
@@ -240,9 +243,9 @@ func searchText(ctx context.Context, cfg aiConfig, text string, options chatOpti
 	if err != nil {
 		return "", nil, "", err
 	}
-	output, err := parseChatText(raw, request.Format, provider.Key)
+	output, payloads, err := decodeReply(raw, request.Format, request.Provider.Key)
 	if err != nil {
-		return "", nil, "", request.info().Failure(err, started, provider.Key)
+		return "", nil, "", request.info().Failure(err, started, request.Provider.Key)
 	}
 	var sources []aiSource
 	seen := map[string]bool{}
@@ -254,10 +257,7 @@ func searchText(ctx context.Context, cfg aiConfig, text string, options chatOpti
 		seen[text] = true
 		sources = append(sources, aiSource{URL: text, Title: StringOf(title)})
 	}
-	payloads, err := Payloads(raw)
-	if err != nil {
-		return output, nil, sel.Model, nil
-	}
+
 	for _, payload := range payloads {
 		if request.Format == formatGemini {
 			candidate := ObjectOf(FirstOf(ListOf(geminiRoot(payload)["candidates"])))
@@ -278,9 +278,32 @@ func searchText(ctx context.Context, cfg aiConfig, text string, options chatOpti
 			}
 			continue
 		}
+		if request.Format == formatAnthropic {
+			for _, value := range append(ListOf(payload["content"]), payload["content_block"]) {
+				block := ObjectOf(value)
+				for _, value := range ListOf(block["citations"]) {
+					citation := ObjectOf(value)
+					add(citation["url"], citation["title"])
+				}
+				if result := ObjectOf(block["content"]); result["type"] == "web_search_tool_result_error" {
+					return "", nil, "", kit.Failf("AI 搜索失败（%s）", StringOf(result["error_code"]))
+				}
+			}
+			citation := ObjectOf(ObjectOf(payload["delta"])["citation"])
+			add(citation["url"], citation["title"])
+			continue
+		}
+		if payload["type"] == "response.output_text.annotation.added" {
+			annotation := ObjectOf(payload["annotation"])
+			add(annotation["url"], annotation["title"])
+		}
 		choice := ObjectOf(FirstOf(ListOf(payload["choices"])))
 		for _, object := range []map[string]any{payload, choice, ObjectOf(choice["message"]), ObjectOf(choice["delta"])} {
 			for _, entry := range append(ListOf(object["citations"]), ListOf(object["annotations"])...) {
+				if link, ok := entry.(string); ok {
+					add(link, "")
+					continue
+				}
 				citation := ObjectOf(ObjectOf(entry)["url_citation"])
 				if len(citation) == 0 {
 					citation = ObjectOf(entry)

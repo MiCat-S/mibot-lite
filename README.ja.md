@@ -102,6 +102,17 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 | `.sum [件数]` | グループのメッセージの要約、定期実行も可能 | 一部 |
 | `.checkapi [check\|speed\|compare] タグ` | AI コマンドで設定した API を検査（モデル一覧・テスト質問・速度・比較） | |
 
+Telegram の「保存したメッセージ」で OpenAI または互換ゲートウェイを設定します。URL、API キー、モデル ID をプロバイダーの値に置き換え、各行を個別に送信してください。
+
+```text
+.ai config add main https://api.openai.com/v1 APIキー openai-compatible
+.checkapi models main
+.ai model chat main モデルID
+.ai こんにちは
+```
+
+新しい設定では Chat Completions を使用します。`.ai config set main responses on` で Responses に切り替えられます。`/responses` で終わる URL を新規登録すると自動で有効になります。ゲートウェイの URL にはパスの接頭辞やクエリパラメーターを含められます。Anthropic の `/messages` と Gemini の `:generateContent` で終わる URL は自動判別されます。ゲートウェイのベース URL を使う場合は、種別を `anthropic` または `gemini` に指定できます。`.ai config set main stream on` を有効にすると、ストリームを受信し終えた時点で回答が Telegram に届きます。ウェブ検索には、選択したモデルとゲートウェイが対応している必要があります。
+
 **メッセージとスタンプ**
 
 | コマンド | 内容 | 貸出 |

@@ -95,7 +95,7 @@ func TestBuildChatRequestImages(t *testing.T) {
 		{"responses", aiProvider{URL: "https://api.example.com/v1", Key: "k", Responses: true}, "https://api.example.com/v1/responses",
 			`{"input":[{"content":[{"text":"看图","type":"input_text"},{"image_url":"data:image/png;base64,` + encoded + `","type":"input_image"}],"role":"user"}],"instructions":"sys","max_output_tokens":100,"model":"m","stream":false}`},
 		{"gemini", aiProvider{URL: "https://generativelanguage.googleapis.com/v1beta", Key: "k"}, "https://generativelanguage.googleapis.com/v1beta/models/m:generateContent?key=k",
-			`{"contents":[{"parts":[{"text":"看图"},{"inlineData":{"data":"` + encoded + `","mimeType":"image/png"}}],"role":"user"}],"generationConfig":{"maxOutputTokens":100},"systemInstruction":{"parts":[{"text":"sys"}],"role":"system"}}`},
+			`{"contents":[{"parts":[{"text":"看图"},{"inlineData":{"data":"` + encoded + `","mimeType":"image/png"}}],"role":"user"}],"generationConfig":{"maxOutputTokens":100},"systemInstruction":{"parts":[{"text":"sys"}]}}`},
 		{"anthropic", aiProvider{URL: "https://api.anthropic.com", Key: "k"}, "https://api.anthropic.com/v1/messages",
 			`{"max_tokens":100,"messages":[{"content":[{"text":"看图","type":"text"},{"source":{"data":"` + encoded + `","media_type":"image/png","type":"base64"},"type":"image"}],"role":"user"}],"model":"m","system":"sys"}`},
 	}
@@ -128,11 +128,11 @@ func TestBuildChatRequestImages(t *testing.T) {
 
 // TestParseAnthropic 检查 Anthropic 响应和 2xx 里带错误时的说明。
 func TestParseAnthropic(t *testing.T) {
-	text, err := parseChatText([]byte(`{"content":[{"type":"text","text":"你好"},{"type":"tool_use"},{"type":"text","text":"世界"}]}`), formatAnthropic, "")
+	text, err := ParseText([]byte(`{"content":[{"type":"text","text":"你好"},{"type":"tool_use"},{"type":"text","text":"世界"}]}`), formatAnthropic, "")
 	if err != nil || text != "你好\n世界" {
 		t.Fatalf("got %q %v", text, err)
 	}
-	_, err = parseChatText([]byte(`{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`), formatAnthropic, "")
+	_, err = ParseText([]byte(`{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`), formatAnthropic, "")
 	if message, _ := kit.IsUserError(err); message != "AI 提供商返回错误：Overloaded" {
 		t.Fatalf("got %q", message)
 	}

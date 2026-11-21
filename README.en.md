@@ -103,6 +103,17 @@ owner; blank means owner only.
 | `.sum [count]` | Group chat summaries, also on a schedule | partly |
 | `.checkapi [check\|speed\|compare] <tag>` | Test the APIs configured for the AI command: models, test prompt, speed, comparison | |
 
+Configure OpenAI or a compatible gateway in Telegram Saved Messages. Replace the URL, key and model ID with your provider’s values and send each line separately.
+
+```text
+.ai config add main https://api.openai.com/v1 YOUR_API_KEY openai-compatible
+.checkapi models main
+.ai model chat main MODEL_ID
+.ai Hello
+```
+
+New configurations use Chat Completions by default. Send `.ai config set main responses on` to use Responses. Adding a full `/responses` URL enables it automatically. Gateway URLs can include path prefixes and query parameters. Full Anthropic `/messages` and Gemini `:generateContent` endpoints are recognized automatically. For a gateway base URL, you can set the type to `anthropic` or `gemini`. With `.ai config set main stream on`, the bot receives a stream and posts the completed answer to Telegram. Web search requires support from the selected model and gateway.
+
 **Messages and stickers**
 
 | Command | What it does | Lend |

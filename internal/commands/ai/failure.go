@@ -48,5 +48,8 @@ func (e requestFailure) UserMessage() string {
 
 func (r *aiRequest) info() RequestInfo {
 	stream, _ := r.Body["stream"].(bool)
+	if r.Format == formatGemini {
+		stream = r.Provider.Stream
+	}
 	return RequestInfo{Tag: r.Provider.Tag, Model: r.Model, Stream: stream, Responses: r.Responses, Timeout: r.Timeout, Stage: "decode"}
 }
