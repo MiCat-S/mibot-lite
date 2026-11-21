@@ -289,7 +289,9 @@ func (s *Service) handle(ctx context.Context, inv *command.Invocation) error {
 	sub := strings.ToLower(inv.Arg(0))
 	switch sub {
 	case "help", "?", "h":
-		return inv.Edit(ctx, aiHelp(inv.Prefix))
+		if len(inv.Args) == 1 {
+			return inv.Edit(ctx, aiHelp(inv.Prefix))
+		}
 	case "config":
 		return s.configure(ctx, inv)
 	case "model":

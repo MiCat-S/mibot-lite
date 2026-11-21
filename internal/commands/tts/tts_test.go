@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MiCat-S/mibot-lite/internal/bot"
+	"github.com/MiCat-S/mibot-lite/internal/command"
 	"github.com/MiCat-S/mibot-lite/internal/commands/kit"
 )
 
@@ -135,5 +137,13 @@ func TestHelpMentionsEverySubcommand(t *testing.T) {
 		if !strings.Contains(text, part) {
 			t.Errorf("帮助里没有 %s", part)
 		}
+	}
+}
+
+func TestRefusesKeyOutsideSavedMessages(t *testing.T) {
+	inv := &command.Invocation{Message: &bot.Message{Saved: false}, Args: []string{"test-key"}}
+	err := (&service{}).key(t.Context(), inv)
+	if message, ok := kit.IsUserError(err); !ok || !strings.Contains(message, "收藏夹") {
+		t.Fatalf("unexpected result: %v", err)
 	}
 }

@@ -241,7 +241,7 @@ func help(prefix string) string {
 		"• <code>" + p + "t fm 封面链接</code> 给当前角色设封面\n" +
 		"• <code>" + p + "ts [页码]</code> 看角色列表，<code>" + p + "ts 角色名</code> 切换，" +
 		"<code>" + p + "ts 角色名 模型 ID</code> 新增并切换\n" +
-		"• <code>" + p + "tk API密钥</code> 设 API Key（发出后命令消息会被改掉，密钥不留在聊天里）\n" +
+		"• <code>" + p + "tk API密钥</code> 在收藏夹设置 API Key\n" +
 		"• <code>" + p + "t model [名称]</code> 看或设 fish.audio 的模型，如 s1、s2-pro、s2.1-pro；" +
 		"<code>" + p + "t model default</code> 交给接口决定\n\n" +
 		"API Key 在 https://fish.audio/ 申请，更多角色见 https://fish.audio/zh-CN/app/discovery/ 。" +
@@ -273,7 +273,9 @@ func Register(a *app.App) {
 func (s *service) speak(ctx context.Context, inv *command.Invocation) error {
 	switch strings.ToLower(inv.Arg(0)) {
 	case "help", "h":
-		return inv.Edit(ctx, help(inv.Prefix))
+		if len(inv.Args) == 1 {
+			return inv.Edit(ctx, help(inv.Prefix))
+		}
 	case "fm":
 		return s.setCover(ctx, inv, inv.Arg(1))
 	case "model":
@@ -410,11 +412,14 @@ func (s *service) roles(ctx context.Context, inv *command.Invocation) error {
 	return inv.Edit(ctx, "✅ 已切换到角色 "+command.Escape(name))
 }
 
-// key 是 .tk：设 API Key。命令消息立刻改掉，密钥不留在聊天记录里。
+// key 是 .tk：在收藏夹设置 API Key。
 func (s *service) key(ctx context.Context, inv *command.Invocation) error {
 	value := strings.TrimSpace(inv.Arg(0))
 	if value == "" {
 		return kit.Usage(inv.Prefix, "tk API Key（在 https://fish.audio/ 申请）")
+	}
+	if !inv.Message.Saved {
+		return kit.Fail("API Key 只能在收藏夹中配置")
 	}
 	if err := inv.EditText(ctx, kit.Working("正在保存")); err != nil {
 		return err

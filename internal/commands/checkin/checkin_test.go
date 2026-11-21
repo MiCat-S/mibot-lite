@@ -95,6 +95,30 @@ func TestButtonData(t *testing.T) {
 	}
 }
 
+func TestReplyTimeoutBoundsHistoryRPC(t *testing.T) {
+	oldWait, oldPoll := replyWait, pollEvery
+	replyWait, pollEvery = 50*time.Millisecond, time.Millisecond
+	defer func() { replyWait, pollEvery = oldWait, oldPoll }()
+	calls := 0
+	fake := telegram.InvokeFunc(func(rpcCtx context.Context, in bin.Encoder, _ bin.Decoder) error {
+		calls++
+		if _, ok := in.(*tg.MessagesGetHistoryRequest); !ok {
+			t.Fatalf("unexpected RPC %T", in)
+		}
+		deadline, ok := rpcCtx.Deadline()
+		if !ok || time.Until(deadline) > replyWait {
+			t.Fatal("history RPC did not inherit reply deadline")
+		}
+		<-rpcCtx.Done()
+		return rpcCtx.Err()
+	})
+	client := bot.FromAPI(tg.NewClient(fake), bot.NewPeerCache(), &tg.User{ID: 1}, slog.New(slog.DiscardHandler))
+	reply, err := awaitMessage(context.Background(), client, &tg.InputPeerSelf{}, func(*tg.Message) bool { return true })
+	if calls != 1 || reply != nil || err != nil {
+		t.Fatalf("timeout produced %d calls, reply %v, error %v", calls, reply, err)
+	}
+}
+
 // fakeBot 冒充 Telegram 和对话里的签到机器人 @sign_bot（ID 42）：收到签到命令就回一条
 // 消息，reply 决定回什么；有人点回调按钮时用 answer 答复。
 type fakeBot struct {
@@ -420,5 +444,13 @@ func TestDeliverDoesNotReplayUncertainMTProtoSend(t *testing.T) {
 	}
 	if len(texts) != 2 || texts[1] == texts[0] || !strings.Contains(texts[1], "不确定是否送达") {
 		t.Fatalf("收藏夹收到：%q", texts)
+	}
+}
+
+func TestRefusesKeyOutsideSavedMessages(t *testing.T) {
+	inv := &command.Invocation{Message: &bot.Message{Saved: false}, Args: []string{"set", "bot", "test-key", "123"}}
+	err := (&service{}).set(t.Context(), inv)
+	if message, ok := kit.IsUserError(err); !ok || !strings.Contains(message, "收藏夹") {
+		t.Fatalf("unexpected result: %v", err)
 	}
 }

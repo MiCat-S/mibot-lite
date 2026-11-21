@@ -194,7 +194,7 @@ func Register(a *app.App) {
 
 func runTranslate(ctx context.Context, inv *command.Invocation, settings *store.Store[translateConfig]) error {
 	first := strings.ToLower(inv.Arg(0))
-	if first == "help" || first == "h" {
+	if len(inv.Args) == 1 && (first == "help" || first == "h") {
 		return inv.Edit(ctx, translateHelp(inv.Prefix))
 	}
 	config, err := settings.Read()

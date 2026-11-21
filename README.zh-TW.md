@@ -115,7 +115,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 | `.eatgif 名稱` | 用雙方大頭貼合成動態貼圖 | 部分 |
 | `.eat` `.eat2` | 用大頭貼或圖片產生梗圖貼圖 | 部分 |
 | `.sticker` | 把貼圖存進自己的貼圖包 | |
-| `.t 文字` `.ts` `.tk` | 文字轉語音（`.ts` 選角色，`.tk` 設定 API Key） | |
+| `.t 文字` `.ts` `.tk` | 文字轉語音（`.ts` 選角色，`.tk` 在收藏夾設定 API Key） | |
 | `.re [訊息數] [次數]` | 複讀回覆的訊息 | ✓ |
 | `.so 關鍵字` `.search` | 在已加入的頻道搜尋影片並傳到目前對話 | |
 | `.aff [序號]` | 儲存並一鍵送出機場 Aff 推廣文字 | |

@@ -135,17 +135,17 @@ func click(ctx context.Context, client *bot.Client, peer tg.InputPeerClass, mess
 // awaitMessage 每隔 pollEvery 读一次对话最近的 8 条，直到有 match 认可的消息或者等满 replyWait。
 // 有几条都认可时取最早的那条：它才是对签到命令的回复。等满了没有返回 nil。
 func awaitMessage(ctx context.Context, client *bot.Client, peer tg.InputPeerClass, match func(*tg.Message) bool) (*tg.Message, error) {
-	deadline := time.Now().Add(replyWait)
-	for time.Now().Before(deadline) {
-		if err := kit.Sleep(ctx, pollEvery); err != nil {
-			return nil, err
+	waitCtx, cancel := context.WithTimeout(ctx, replyWait)
+	defer cancel()
+	for waitCtx.Err() == nil {
+		if err := kit.Sleep(waitCtx, pollEvery); err != nil {
+			break
 		}
-		result, err := client.API().MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{Peer: peer, Limit: 8})
+		result, err := client.API().MessagesGetHistory(waitCtx, &tg.MessagesGetHistoryRequest{Peer: peer, Limit: 8})
 		if err != nil {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
+			if waitCtx.Err() == nil {
+				client.Logger().Debug("checkin.poll_failed", "error", err.Error())
 			}
-			client.Logger().Debug("checkin.poll_failed", "error", err.Error())
 			continue
 		}
 		messages, _ := client.Unpack(result)
@@ -159,7 +159,7 @@ func awaitMessage(ctx context.Context, client *bot.Client, peer tg.InputPeerClas
 			return found, nil
 		}
 	}
-	return nil, nil
+	return nil, ctx.Err()
 }
 
 // runAll 依次签到 targets，每两个之间停 gap，返回汇总（HTML）。source 是「手动」或「定时」。

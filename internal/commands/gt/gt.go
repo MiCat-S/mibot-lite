@@ -24,7 +24,7 @@ func Register(a *app.App, models *ai.Service) {
 		Handle: func(ctx context.Context, inv *command.Invocation) error {
 			text := strings.TrimLeftFunc(inv.RawAfter(0), unicode.IsSpace)
 			first := strings.ToLower(inv.Arg(0))
-			if first == "help" || first == "h" {
+			if len(inv.Args) == 1 && (first == "help" || first == "h") {
 				return inv.Edit(ctx, help(inv.Prefix))
 			}
 			target := "zh-CN"

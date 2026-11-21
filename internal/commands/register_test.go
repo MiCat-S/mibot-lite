@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -10,10 +11,67 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gotd/td/bin"
+	"github.com/gotd/td/telegram"
+	"github.com/gotd/td/tg"
+
 	"github.com/MiCat-S/mibot-lite/internal/app"
+	"github.com/MiCat-S/mibot-lite/internal/bot"
 	"github.com/MiCat-S/mibot-lite/internal/command"
 	"github.com/MiCat-S/mibot-lite/internal/commands/sudo"
 )
+
+func TestTextCommandsOnlyShowHelpForStandaloneHelp(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+	a := &app.App{Root: t.TempDir(), Registry: command.New([]string{"."}, logger)}
+	t.Cleanup(a.Registry.Abort)
+	RegisterAll(a)
+	peers := bot.NewPeerCache()
+	peers.SetSelf(1)
+	var edited string
+	client := bot.FromAPI(tg.NewClient(telegram.InvokeFunc(func(_ context.Context, input bin.Encoder, output bin.Decoder) error {
+		request := input.(*tg.MessagesEditMessageRequest)
+		edited = request.Message
+		output.(*tg.UpdatesBox).Updates = &tg.Updates{}
+		return nil
+	})), peers, &tg.User{ID: 1}, logger)
+	for _, tt := range []struct {
+		command, help, text, status, errorText string
+	}{
+		{"ai", "AI 助手", "help me", "AI 思考中", "选择模型"},
+		{"gt", "AI 翻译", "help me", "正在翻译", "选择模型"},
+		{"tr", "翻译", "h " + strings.Repeat("字", 5000), "", "文本过长"},
+		{"t", "文字转语音", "help me", "还没设 API Key", ""},
+	} {
+		t.Run(tt.command, func(t *testing.T) {
+			run := func(args string) error {
+				t.Helper()
+				edited = ""
+				route, ok := a.Registry.Parse("." + tt.command + " " + args)
+				if !ok {
+					t.Fatal("命令无法解析")
+				}
+				cmd, ok := a.Registry.Lookup(route.Command)
+				if !ok {
+					t.Fatal("命令没有注册")
+				}
+				return cmd.Handle(context.Background(), &command.Invocation{Prefix: route.Prefix, Command: route.Command, Args: route.Args, Text: route.Text,
+					Client: client, Log: logger, Message: &bot.Message{ID: 7, Peer: &tg.PeerUser{UserID: 1}, ChatID: "1", Out: true, Saved: true}})
+			}
+			if err := run("help"); err != nil || !strings.Contains(edited, tt.help) {
+				t.Fatalf("帮助：%q，%v", edited, err)
+			}
+			err := run(tt.text)
+			var errText string
+			if err != nil {
+				errText = err.Error()
+			}
+			if !strings.Contains(edited, tt.status) || (tt.errorText == "") != (errText == "") || !strings.Contains(errText, tt.errorText) {
+				t.Fatalf("正文：%q，%v", edited, err)
+			}
+		})
+	}
+}
 
 // 表里写的命令都得真的存在；拼错了就等于悄悄少借出去一个。
 func TestDelegableNamesExist(t *testing.T) {

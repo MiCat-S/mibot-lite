@@ -122,7 +122,7 @@ New configurations use Chat Completions by default. Send `.ai config set main re
 | `.eatgif <name>` | Animated sticker made from both people's avatars | partly |
 | `.eat` `.eat2` | Meme sticker made from an avatar or a picture | partly |
 | `.sticker` | Save a sticker into your own sticker pack | |
-| `.t <text>` `.ts` `.tk` | Text to speech (`.ts` picks a voice, `.tk` sets the API key) | |
+| `.t <text>` `.ts` `.tk` | Text to speech (`.ts` picks a voice, `.tk` sets the API key in Saved Messages) | |
 | `.re [messages] [times]` | Repeat the replied-to message | ✓ |
 | `.so <keyword>` `.search` | Search videos in your channel sources and send one here | |
 | `.aff [number]` | Save affiliate texts and send them with one command | |

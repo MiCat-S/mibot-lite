@@ -115,7 +115,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/MiCat-S/mibot-lite/main/scri
 | `.eatgif 名称` | 双方头像合成动画贴纸 | 部分 |
 | `.eat` `.eat2` | 用头像或图片生成表情包 | 部分 |
 | `.sticker` | 把贴纸存进自己的贴纸包 | |
-| `.t 文本` `.ts` `.tk` | 文字转语音（`.ts` 选角色，`.tk` 设 API Key） | |
+| `.t 文本` `.ts` `.tk` | 文字转语音（`.ts` 选角色，`.tk` 在收藏夹设 API Key） | |
 | `.re [消息数] [次数]` | 复读回复的消息 | ✓ |
 | `.so 关键词` `.search` | 在添加的频道里搜视频并发到当前对话 | |
 | `.aff [序号]` | 保存并一键发出机场 Aff 推广文字 | |

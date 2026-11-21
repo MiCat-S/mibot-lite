@@ -398,7 +398,9 @@ func (s *service) set(ctx context.Context, inv *command.Invocation) error {
 		if value == "" || chat == "" {
 			return kit.Usage(inv.Prefix, "checkin set bot Token 对话 ID|off")
 		}
-		// 命令消息会被改成下面这句，Token 不会留在对话里。
+		if !inv.Message.Saved {
+			return kit.Fail("Bot Token 只能在收藏夹中配置")
+		}
 		return s.update(ctx, inv, func(cfg *config) { cfg.BotToken, cfg.PushChatID = value, chat }, "机器人推送已设置：Token "+mask(value)+"，发到 "+chat)
 	case "log", "l":
 		if value == "" {
