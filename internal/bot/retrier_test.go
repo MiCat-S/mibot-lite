@@ -77,6 +77,23 @@ func TestRetrier(t *testing.T) {
 	}
 }
 
+func TestRetrierDoesNotTurnTemporaryRestrictionPermanent(t *testing.T) {
+	now := time.Unix(1800000000, 0)
+	until := int(now.Unix()) + 60
+	r := Retrier{Attempts: 1, MaxWait: time.Minute, now: func() time.Time { return now },
+		sleep: func(_ context.Context, d time.Duration) error { now = now.Add(d); return nil }}
+	rpc := &flaky{failures: 1, seconds: 40}
+	invoke := r.Handle(rpc)
+	req := &tg.ChannelsEditBannedRequest{BannedRights: tg.ChatBannedRights{SendMessages: true, UntilDate: until}}
+	if err := invoke(context.Background(), req, nil); err == nil || rpc.calls != 1 {
+		t.Fatalf("expired restriction: calls=%d error=%v", rpc.calls, err)
+	}
+	req.BannedRights.UntilDate = 0
+	if err := invoke(context.Background(), req, nil); err != nil || rpc.calls != 2 {
+		t.Fatalf("permanent restriction: calls=%d error=%v", rpc.calls, err)
+	}
+}
+
 func TestRetrierStopsWhenCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

@@ -111,7 +111,8 @@ func banRights(until int) tg.ChatBannedRights {
 // muteRights 让目标无法发言，但不把人移出。
 func muteRights(until int) tg.ChatBannedRights {
 	return tg.ChatBannedRights{UntilDate: until, SendMessages: true, SendMedia: true, SendStickers: true,
-		SendGifs: true, SendGames: true, SendInline: true, EmbedLinks: true}
+		SendGifs: true, SendGames: true, SendInline: true, EmbedLinks: true, SendPolls: true,
+		SendPhotos: true, SendVideos: true, SendRoundvideos: true, SendAudios: true, SendVoices: true, SendDocs: true, SendPlain: true}
 }
 
 // clearRights 解除所有限制。
@@ -183,6 +184,22 @@ func untilDate(d time.Duration) int {
 		return 0
 	}
 	return int(time.Now().Add(d).Unix())
+}
+
+func muteDuration(args []string) (time.Duration, error) {
+	if len(args) < 2 {
+		return 0, nil
+	}
+	switch strings.ToLower(args[1]) {
+	case "0", "forever", "permanent", "永久":
+		return 0, nil
+	}
+	d := parseDuration(args[1])
+	// Telegram 把超出范围的时长视为永久禁言。
+	if d < 30*time.Second || d > 366*24*time.Hour {
+		return 0, kit.Fail("禁言时长要在 30 秒到 366 天之间，例如 60s、5m、1d；省略时长表示永久")
+	}
+	return d, nil
 }
 
 // isMetaFlag 识别那些用来确认、而不是指定目标的参数。
@@ -467,6 +484,14 @@ func Register(a *app.App) {
 // basic 执行作用于当前会话的 .kick .ban .unban .mute .unmute。和原版一样不限会话类型：
 // 频道里照常执行，私聊里由 Telegram 或 applyRights 报错。
 func (s *abanService) basic(ctx context.Context, inv *command.Invocation, action, label string) error {
+	var duration time.Duration
+	if action == "mute" {
+		var err error
+		duration, err = muteDuration(targetArgs(inv.Args))
+		if err != nil {
+			return s.fail(ctx, inv, err)
+		}
+	}
 	chat, err := inv.Client.InputPeer(inv.Message.Peer)
 	if err != nil {
 		return err
@@ -486,7 +511,8 @@ func (s *abanService) basic(ctx context.Context, inv *command.Invocation, action
 	var result string
 	switch action {
 	case "kick":
-		if err := applyRights(ctx, inv.Client, chat, who.peer, banRights(0), true); err != nil {
+		// 解封失败时，临时封禁也会自行到期。
+		if err := applyRights(ctx, inv.Client, chat, who.peer, banRights(untilDate(time.Minute)), true); err != nil {
 			return s.actionFailed(ctx, inv, label, err)
 		}
 		if isChannel {
@@ -521,11 +547,6 @@ func (s *abanService) basic(ctx context.Context, inv *command.Invocation, action
 			result = "✅ 已解除禁言 " + command.Escape(who.display)
 		}
 	case "mute":
-		// 时长是目标后面的那个参数（原版取 args[1]）；回复消息时没有目标参数，就是永久。
-		var duration time.Duration
-		if args := targetArgs(inv.Args); len(args) > 1 {
-			duration = parseDuration(args[1])
-		}
 		if err := applyRights(ctx, inv.Client, chat, who.peer, muteRights(untilDate(duration)), false); err != nil {
 			return s.actionFailed(ctx, inv, label, err)
 		}

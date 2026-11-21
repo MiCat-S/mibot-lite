@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"math/rand/v2"
 	"sync"
@@ -112,6 +113,12 @@ func (f Retrier) Handle(next tg.Invoker) telegram.InvokeFunc {
 				}
 				if err := sleep(ctx, wait); err != nil {
 					return err
+				}
+			}
+			// Telegram 会把离到期不足 30 秒的限制当成永久。共享冷却或重试会消耗原定时长。
+			if edit, ok := input.(*tg.ChannelsEditBannedRequest); ok {
+				if until := edit.BannedRights.UntilDate; until != 0 && int64(until)-now().Unix() < 30 {
+					return errors.New("临时限制剩余不足 30 秒，已停止发送，请重新设置时长")
 				}
 			}
 			err := next.Invoke(ctx, input, output)

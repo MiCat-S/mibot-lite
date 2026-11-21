@@ -15,6 +15,7 @@ import (
 	"github.com/gotd/td/tgerr"
 
 	"github.com/MiCat-S/mibot-lite/internal/bot"
+	"github.com/MiCat-S/mibot-lite/internal/commands/kit"
 	"github.com/MiCat-S/mibot-lite/internal/store"
 )
 
@@ -327,6 +328,9 @@ func (s *service) moderate(ctx context.Context, client *bot.Client, chat tg.Inpu
 	}
 	if seconds <= 0 || message.Sender == nil || bot.PeerID(message.Sender) == message.ChatID {
 		return nil
+	}
+	if !validModerationSeconds(seconds) {
+		return kit.Fail("封禁或禁言时长超出 30 秒到 366 天，Telegram 会当成永久")
 	}
 	if user, ok := message.Sender.(*tg.PeerUser); ok && user.UserID == client.SelfID() {
 		return nil

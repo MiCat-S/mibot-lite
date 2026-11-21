@@ -378,7 +378,14 @@ func actionSeconds(action, name string) (float64, error) {
 	if err != nil || !kit.IsDigits(digits) || seconds <= 0 {
 		return 0, kit.Failf("%s 后面要紧跟秒数，如 %s3600", name, name)
 	}
+	if !validModerationSeconds(float64(seconds)) {
+		return 0, kit.Fail("封禁或禁言时长要在 30 秒到 366 天之间")
+	}
 	return float64(seconds), nil
+}
+
+func validModerationSeconds(seconds float64) bool {
+	return seconds >= 30 && seconds <= maxDelay.Seconds()
 }
 
 // matches 照 v2 判断一条消息是否命中：正则按 JS 语法匹配；否则不区分大小写时两边都转小写，

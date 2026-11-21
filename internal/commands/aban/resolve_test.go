@@ -513,6 +513,35 @@ func TestMuteInBroadcastChannel(t *testing.T) {
 	}
 }
 
+func TestMuteRejectsInvalidTemporaryDuration(t *testing.T) {
+	for _, duration := range []string{"15s", "367d", "ten"} {
+		t.Run(duration, func(t *testing.T) {
+			f := newFixture(t, nil)
+			inv := f.invocation(herePeer, 0, "42", duration)
+			if err := f.service.basic(context.Background(), inv, "mute", "禁言"); err != nil {
+				t.Fatal(err)
+			}
+			calls := f.fake.log()
+			if len(calls) != 1 || !strings.Contains(calls[0], "30 秒到 366 天") {
+				t.Fatalf("invalid mute should only show usage, got %v", calls)
+			}
+		})
+	}
+}
+
+func TestKickUsesTemporaryBanBeforeUnbanning(t *testing.T) {
+	f := newFixture(t, nil)
+	f.client.Peers().RememberUsers([]tg.UserClass{withHash})
+	inv := f.invocation(herePeer, 0, "42")
+	if err := f.service.basic(context.Background(), inv, "kick", "踢出"); err != nil {
+		t.Fatal(err)
+	}
+	if f.fake.count("channels.editBanned 10 user42#4242 view=true send=true timed=true") != 1 ||
+		f.fake.count("channels.editBanned 10 user42#4242 view=false send=false timed=false") != 1 {
+		t.Fatalf("kick did not use a temporary ban followed by unban: %v", f.fake.log())
+	}
+}
+
 // TestBatchBanDoesNotRetry 检查 .sb 对每个群只请求一次，失败原因按次数排序，结果 30 秒后删除。
 func TestBatchBanDoesNotRetry(t *testing.T) {
 	f := newFixture(t, func(input bin.Encoder) (bin.Encoder, error) {

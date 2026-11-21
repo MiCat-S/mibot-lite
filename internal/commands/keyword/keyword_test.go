@@ -53,6 +53,8 @@ func TestParseTask(t *testing.T) {
 		"词\n+++\n回\n+++\n\n+++\nkick":                      "不认识的动作 kick",
 		"词\n+++\n回\n+++\n\n+++\nban":                       "ban 后面要紧跟秒数",
 		"词\n+++\n回\n+++\n\n+++\nban0":                      "ban 后面要紧跟秒数",
+		"词\n+++\n回\n+++\n\n+++\nban15":                     "封禁或禁言时长要在 30 秒到 366 天之间",
+		"词\n+++\n回\n+++\n\n+++\nrestrict31622401":          "封禁或禁言时长要在 30 秒到 366 天之间",
 		"词\n+++\n回\n+++\n\n+++\nrestrict":                  "restrict 后面要紧跟秒数",
 		"词\n+++\n回\n+++\n\n+++\n\n+++\n-1":                 "第 5 段要写不小于 0 的秒数",
 		"词\n+++\n回\n+++\n\n+++\n\n+++\n\n+++\nabc":         "第 6 段要写不小于 0 的秒数",
@@ -330,6 +332,16 @@ func TestOfferContinuesAfterSendFailure(t *testing.T) {
 	want := []string{`send "no" reply=7 topic=7`, "edit-banned user=42 view=false send=true media=true until=1060", "delete [60]"}
 	if got := fake.take(); !slices.Equal(got, want) {
 		t.Errorf("请求：\n%s\n应为\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestOfferSkipsUnsafeImportedRestriction(t *testing.T) {
+	s, fake, client, _ := newFixture(t)
+	s.seed(t, document{NextID: 2, Tasks: []task{{ID: 1, ChatID: "-1001001", Key: "spam", Include: true,
+		DeleteSource: true, RestrictSeconds: 15}}})
+	s.offer(context.Background(), client, groupMessage(channelID, 60, "spam"))
+	if got := fake.take(); !slices.Equal(got, []string{"delete [60]"}) {
+		t.Fatalf("unsafe imported restriction produced unexpected RPCs: %v", got)
 	}
 }
 
